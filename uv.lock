@@ -274,6 +274,58 @@ wheels = [
 ]
 
 [[package]]
+name = "glean"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "boto3" },
+    { name = "boto3-stubs", extra = ["s3", "textract"] },
+    { name = "botocore-stubs" },
+    { name = "lancedb" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pymupdf" },
+    { name = "rich" },
+    { name = "sentence-transformers" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.40.0" },
+    { name = "boto3-stubs", extras = ["textract", "s3"], specifier = ">=1.40.0" },
+    { name = "botocore-stubs", specifier = ">=1.40.0" },
+    { name = "lancedb", specifier = ">=0.17.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
+    { name = "numpy", specifier = ">=1.26.0" },
+    { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pyarrow", specifier = ">=18.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", specifier = ">=2.0.0" },
+    { name = "pymupdf", specifier = ">=1.25.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "typer", specifier = ">=0.15.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -887,58 +939,6 @@ source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/eb/86626c1bbc2edb86323022371c39aa48df6fd8b0a1647bc274577f72e90b/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5b17e2001cc0d751a5bc2c6ec6d26ad95913324a4adb86788c944f8ce9ba441f", size = 89954, upload-time = "2025-03-07T01:42:44.131Z" },
 ]
-
-[[package]]
-name = "ocr"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "boto3" },
-    { name = "boto3-stubs", extra = ["s3", "textract"] },
-    { name = "botocore-stubs" },
-    { name = "lancedb" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pymupdf" },
-    { name = "rich" },
-    { name = "sentence-transformers" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.40.0" },
-    { name = "boto3-stubs", extras = ["textract", "s3"], specifier = ">=1.40.0" },
-    { name = "botocore-stubs", specifier = ">=1.40.0" },
-    { name = "lancedb", specifier = ">=0.17.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.1" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
-    { name = "pyarrow", specifier = ">=18.0.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pydantic-settings", specifier = ">=2.0.0" },
-    { name = "pymupdf", specifier = ">=1.25.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.0" },
-    { name = "sentence-transformers", specifier = ">=3.0.0" },
-    { name = "typer", specifier = ">=0.15.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"

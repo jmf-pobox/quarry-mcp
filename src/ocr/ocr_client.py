@@ -33,8 +33,8 @@ def ocr_pdf_pages(
     Returns:
         List of PageContent for each requested page.
     """
-    s3: S3Client = boto3.client("s3")  # type: ignore[assignment]
-    textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
+    s3: S3Client = boto3.client("s3")
+    textract: TextractClient = boto3.client("textract")
 
     s3_key = f"textract-jobs/{pdf_path.stem}/{pdf_path.name}"
 

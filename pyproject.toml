@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ocr"
+name = "glean"
 version = "0.1.0"
-description = "OCR pipeline with vector search, exposed via MCP"
+description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.scripts]
-ocr = "ocr.__main__:app"
+glean = "ocr.__main__:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ocr"]

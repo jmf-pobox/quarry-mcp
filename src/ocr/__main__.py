@@ -14,11 +14,11 @@ from ocr.database import get_db, list_documents, search
 from ocr.embeddings import embed_query
 from ocr.pipeline import ingest_document
 
-app = typer.Typer(help="OCR pipeline with vector search")
+app = typer.Typer(help="glean: extract searchable knowledge from any document")
 console = Console()
 
 
-@app.command()
+@app.command()  # type: ignore[misc]
 def ingest(
     file_path: Annotated[Path, typer.Argument(help="Path to PDF file")],
     overwrite: Annotated[
@@ -48,7 +48,7 @@ def ingest(
     console.print(json.dumps(result, indent=2))
 
 
-@app.command(name="search")
+@app.command(name="search")  # type: ignore[misc]
 def search_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
@@ -69,7 +69,7 @@ def search_cmd(
         print(text[:300])
 
 
-@app.command(name="list")
+@app.command(name="list")  # type: ignore[misc]
 def list_cmd() -> None:
     """List all indexed documents."""
     settings = get_settings()
@@ -88,7 +88,7 @@ def list_cmd() -> None:
         )
 
 
-@app.command()
+@app.command()  # type: ignore[misc]
 def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from ocr.mcp_server import main as mcp_main  # noqa: PLC0415
