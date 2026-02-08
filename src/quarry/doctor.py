@@ -170,7 +170,10 @@ def _configure_claude_code() -> CheckResult:
 
 
 def _configure_claude_desktop() -> CheckResult:
-    """Add quarry MCP server to Claude Desktop config."""
+    """Add quarry MCP server to Claude Desktop config.
+
+    Uses absolute path for the command since Desktop has a limited PATH.
+    """
     config_path = _DESKTOP_CONFIG_PATH
     if not config_path.parent.exists():
         return CheckResult(
@@ -180,7 +183,9 @@ def _configure_claude_desktop() -> CheckResult:
             required=False,
         )
 
-    server_entry = {"command": _MCP_COMMAND, "args": _MCP_ARGS}
+    uvx_path = shutil.which(_MCP_COMMAND)
+    command = uvx_path if uvx_path else _MCP_COMMAND
+    server_entry = {"command": command, "args": _MCP_ARGS}
 
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
 
