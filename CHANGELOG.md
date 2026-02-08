@@ -8,11 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Text document ingestion: `.txt`, `.md`, `.tex`, `.docx` files via `ingest` tool and CLI
+- Raw text ingestion via `ingest_text` MCP tool (auto-detects markdown/LaTeX/plain)
+- Section-aware splitting: markdown headings, LaTeX `\section`/`\subsection`, blank-line paragraphs, DOCX Heading styles
 - `delete_document` MCP tool and `quarry delete` CLI command to remove indexed documents
 - `status` MCP tool reporting document/chunk counts, database size, and embedding model info
 - `count_chunks` database function for O(1) chunk counting
+- Text processor tests (`test_text_processor.py`)
 - MCP server tests (`test_mcp_server.py`)
 - CHANGELOG.md
+
+### Changed
+- `ingest` MCP tool and CLI now accept all supported formats (was PDF-only)
+- Pipeline refactored: `ingest_document` dispatches by format, shared `_chunk_embed_store` eliminates duplication
 
 ## [0.1.0] - 2026-02-08
 

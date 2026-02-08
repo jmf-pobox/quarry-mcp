@@ -234,3 +234,126 @@ class TestIngestDocument:
 
         assert len(messages) > 0
         assert any("Analyzing" in m for m in messages)
+
+    def test_dispatches_text_file(self, monkeypatch, tmp_path: Path):
+        txt_file = tmp_path / "notes.txt"
+        txt_file.write_text("Hello.\n\nWorld.")
+
+        chunks = [
+            Chunk(
+                document_name="notes.txt",
+                document_path=str(txt_file),
+                page_number=1,
+                total_pages=2,
+                chunk_index=0,
+                text="Hello.",
+                page_raw_text="Hello.",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
+        vectors = np.zeros((1, 768), dtype=np.float32)
+
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars: chunks,
+        )
+        monkeypatch.setattr(
+            "quarry.pipeline.embed_texts",
+            lambda _texts, model_name: vectors,
+        )
+        monkeypatch.setattr(
+            "quarry.pipeline.insert_chunks",
+            lambda _db, _chunks, _vectors: 1,
+        )
+
+        from quarry.pipeline import ingest_document
+
+        db = MagicMock()
+        result = ingest_document(txt_file, db, _settings())
+
+        assert result["document_name"] == "notes.txt"
+        assert result["chunks"] == 1
+        assert result["sections"] == 2
+
+    def test_unsupported_format_raises(self, tmp_path: Path):
+        csv_file = tmp_path / "data.csv"
+        csv_file.write_text("a,b,c")
+
+        from quarry.pipeline import ingest_document
+
+        db = MagicMock()
+        with pytest.raises(ValueError, match="Unsupported file format"):
+            ingest_document(csv_file, db, _settings())
+
+
+class TestIngestText:
+    def test_ingests_raw_text(self, monkeypatch):
+        chunks = [
+            Chunk(
+                document_name="clip.txt",
+                document_path="<string>",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="Hello world",
+                page_raw_text="Hello world",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
+        vectors = np.zeros((1, 768), dtype=np.float32)
+
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars: chunks,
+        )
+        monkeypatch.setattr(
+            "quarry.pipeline.embed_texts",
+            lambda _texts, model_name: vectors,
+        )
+        monkeypatch.setattr(
+            "quarry.pipeline.insert_chunks",
+            lambda _db, _chunks, _vectors: 1,
+        )
+
+        from quarry.pipeline import ingest_text
+
+        db = MagicMock()
+        result = ingest_text("Hello world", "clip.txt", db, _settings())
+
+        assert result["document_name"] == "clip.txt"
+        assert result["chunks"] == 1
+        assert result["sections"] == 1
+
+    def test_overwrite_deletes_existing(self, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars: [],
+        )
+
+        delete_called: list[str] = []
+
+        def _mock_delete(_db: object, name: str) -> int:
+            delete_called.append(name)
+            return 0
+
+        monkeypatch.setattr("quarry.pipeline.delete_document", _mock_delete)
+
+        from quarry.pipeline import ingest_text
+
+        db = MagicMock()
+        ingest_text("text", "doc.txt", db, _settings(), overwrite=True)
+
+        assert delete_called == ["doc.txt"]
+
+    def test_empty_text_returns_zero_chunks(self, monkeypatch):
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars: [],
+        )
+
+        from quarry.pipeline import ingest_text
+
+        db = MagicMock()
+        result = ingest_text("", "empty.txt", db, _settings())
+
+        assert result["chunks"] == 0
