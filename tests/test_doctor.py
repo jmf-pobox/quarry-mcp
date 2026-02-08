@@ -222,7 +222,12 @@ class TestConfigureClaudeDesktop:
         config = json.loads(config_path.read_text())
         command = config["mcpServers"]["quarry"]["command"]
         assert command.endswith("uvx")
-        assert config["mcpServers"]["quarry"]["args"] == ["quarry-mcp", "mcp"]
+        assert config["mcpServers"]["quarry"]["args"] == [
+            "--from",
+            "quarry-mcp",
+            "quarry",
+            "mcp",
+        ]
 
     def test_preserves_existing_servers(self, tmp_path, monkeypatch):
         config_path = tmp_path / "claude_desktop_config.json"

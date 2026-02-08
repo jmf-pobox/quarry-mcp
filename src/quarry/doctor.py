@@ -122,7 +122,7 @@ def _check_imports() -> CheckResult:
 
 _MCP_SERVER_NAME = "quarry"
 _MCP_COMMAND = "uvx"
-_MCP_ARGS = ["quarry-mcp", "mcp"]
+_MCP_ARGS = ["--from", "quarry-mcp", "quarry", "mcp"]
 
 _DESKTOP_CONFIG_PATH = (
     Path.home()
