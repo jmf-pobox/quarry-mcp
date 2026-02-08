@@ -107,8 +107,12 @@ def ingest(
 
     Supported formats: PDF, TXT, MD, TEX, DOCX.
 
+    The file_path must exist on the host filesystem where Quarry runs.
+    Container paths (e.g. /mnt/user-data/uploads/) are not accessible.
+    For uploaded files or text already in your context, use ingest_text instead.
+
     Args:
-        file_path: Absolute path to the document file.
+        file_path: Absolute path to the document file on the host filesystem.
         overwrite: If true, replace existing data for this document.
     """
     path = Path(file_path)
@@ -139,6 +143,10 @@ def ingest_text(
     format_hint: str = "auto",
 ) -> str:
     """Ingest raw text content: chunk, embed, and index for search.
+
+    Use this for uploaded files, pasted text, or any content already in your
+    context window. This is the preferred tool when the source text is available
+    directly — it skips OCR and file I/O.
 
     Args:
         content: The text content to ingest.
