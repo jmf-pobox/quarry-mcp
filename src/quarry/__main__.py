@@ -25,12 +25,12 @@ console = Console()
 
 @app.command()
 def ingest(
-    file_path: Annotated[Path, typer.Argument(help="Path to PDF file")],
+    file_path: Annotated[Path, typer.Argument(help="Path to document file")],
     overwrite: Annotated[
         bool, typer.Option("--overwrite", help="Replace existing data")
     ] = False,
 ) -> None:
-    """Ingest a PDF: analyze, OCR, chunk, embed, and store."""
+    """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
     logging.basicConfig(level=logging.INFO)
     settings = get_settings()
     db = get_db(settings.lancedb_path)

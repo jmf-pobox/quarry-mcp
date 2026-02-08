@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quarry.mcp_server import delete_document, status
+from quarry.mcp_server import delete_document, ingest_text, status
 
 
 def _settings(tmp_path: Path) -> MagicMock:
@@ -12,6 +12,44 @@ def _settings(tmp_path: Path) -> MagicMock:
     s.lancedb_path = tmp_path / "lancedb"
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     return s
+
+
+class TestIngestText:
+    def test_calls_pipeline_and_returns_progress(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_result = {"document_name": "notes.md", "chunks": 3, "sections": 2}
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_text",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            result = ingest_text("# Hello\nWorld", "notes.md")
+
+        mock_ingest.assert_called_once()
+        call_args = mock_ingest.call_args
+        assert call_args[0][0] == "# Hello\nWorld"
+        assert call_args[0][1] == "notes.md"
+        assert "notes.md" in result
+        assert "chunks" in result
+
+    def test_passes_format_hint(self, tmp_path: Path):
+        settings = _settings(tmp_path)
+        mock_result = {"document_name": "a.txt", "chunks": 1, "sections": 1}
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server.pipeline_ingest_text",
+                return_value=mock_result,
+            ) as mock_ingest,
+        ):
+            ingest_text("text", "a.txt", format_hint="markdown")
+
+        call_kwargs = mock_ingest.call_args[1]
+        assert call_kwargs["format_hint"] == "markdown"
 
 
 class TestDeleteDocument:

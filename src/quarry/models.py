@@ -8,6 +8,7 @@ from datetime import datetime
 class PageType(enum.Enum):
     TEXT = "text"
     IMAGE = "image"
+    SECTION = "section"
 
 
 @dataclass(frozen=True)

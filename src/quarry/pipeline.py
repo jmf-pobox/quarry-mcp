@@ -12,12 +12,71 @@ from quarry.models import PageContent, PageType
 from quarry.ocr_client import ocr_pdf_pages
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.text_extractor import extract_text_pages
+from quarry.text_processor import (
+    SUPPORTED_TEXT_EXTENSIONS,
+    process_raw_text,
+    process_text_file,
+)
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
 
 def ingest_document(
+    file_path: Path,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Ingest a document: dispatch to format-specific handler.
+
+    Supported formats: PDF, TXT, MD, TEX, DOCX.
+
+    Args:
+        file_path: Path to the document.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+
+    Raises:
+        FileNotFoundError: If file does not exist.
+        ValueError: If file format is not supported.
+    """
+    if not file_path.exists():
+        msg = f"File not found: {file_path}"
+        raise FileNotFoundError(msg)
+
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".pdf":
+        return ingest_pdf(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            progress_callback=progress_callback,
+        )
+
+    if suffix in SUPPORTED_TEXT_EXTENSIONS:
+        return ingest_text_file(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            progress_callback=progress_callback,
+        )
+
+    msg = f"Unsupported file format: {suffix}"
+    raise ValueError(msg)
+
+
+def ingest_pdf(
     file_path: Path,
     db: LanceDB,
     settings: Settings,
@@ -37,80 +96,191 @@ def ingest_document(
     Returns:
         Dict with ingestion results (pages, chunks, etc).
     """
-    if not file_path.exists():
-        msg = f"File not found: {file_path}"
-        raise FileNotFoundError(msg)
+    progress = _make_progress(progress_callback)
 
-    def _progress(message: str) -> None:
-        logger.info(message)
-        if progress_callback is not None:
-            progress_callback(message)
-
-    _progress(f"Analyzing: {file_path.name}")
+    progress(f"Analyzing: {file_path.name}")
 
     if overwrite:
         delete_document(db, file_path.name)
 
-    # Step 1: Analyze pages
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
 
     text_pages = [a.page_number for a in analyses if a.page_type == PageType.TEXT]
     image_pages = [a.page_number for a in analyses if a.page_type == PageType.IMAGE]
 
-    _progress(
+    progress(
         f"Pages: {total_pages} total, {len(text_pages)} text, {len(image_pages)} image"
     )
 
-    # Step 2: Extract text and OCR
     all_pages: list[PageContent] = []
 
     if text_pages:
-        _progress(f"Extracting text from {len(text_pages)} pages")
+        progress(f"Extracting text from {len(text_pages)} pages")
         extracted = extract_text_pages(file_path, text_pages, total_pages)
         all_pages.extend(extracted)
 
     if image_pages:
-        _progress(f"Running OCR on {len(image_pages)} pages via Textract")
+        progress(f"Running OCR on {len(image_pages)} pages via Textract")
         ocr_results = ocr_pdf_pages(file_path, image_pages, total_pages, settings)
         all_pages.extend(ocr_results)
 
     all_pages.sort(key=lambda p: p.page_number)
 
-    # Step 3: Chunk
-    _progress("Chunking pages")
-    chunks = chunk_pages(
+    return _chunk_embed_store(
         all_pages,
-        max_chars=settings.chunk_max_chars,
-        overlap_chars=settings.chunk_overlap_chars,
-    )
-    _progress(f"Created {len(chunks)} chunks from {len(all_pages)} pages")
-
-    if not chunks:
-        _progress("No text extracted — nothing to index")
-        return {
-            "document_name": file_path.name,
+        file_path.name,
+        db,
+        settings,
+        progress,
+        extra={
             "total_pages": total_pages,
             "text_pages": len(text_pages),
             "image_pages": len(image_pages),
-            "chunks": 0,
-        }
+        },
+    )
 
-    # Step 4: Embed
-    _progress(f"Generating embeddings ({settings.embedding_model})")
+
+def ingest_text_file(
+    file_path: Path,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Ingest a text document: read, split into sections, chunk, embed, store.
+
+    Supported: .txt, .md, .tex, .docx.
+
+    Args:
+        file_path: Path to the text file.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+    """
+    progress = _make_progress(progress_callback)
+
+    progress(f"Reading: {file_path.name}")
+
+    if overwrite:
+        delete_document(db, file_path.name)
+
+    pages = process_text_file(file_path)
+    progress(f"Sections: {len(pages)}")
+
+    return _chunk_embed_store(
+        pages,
+        file_path.name,
+        db,
+        settings,
+        progress,
+        extra={"sections": len(pages)},
+    )
+
+
+def ingest_text(
+    text: str,
+    document_name: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    format_hint: str = "auto",
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
+    """Ingest raw text: split into sections, chunk, embed, store.
+
+    Args:
+        text: Raw text content.
+        document_name: Name for the document.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        format_hint: One of 'auto', 'plain', 'markdown', 'latex'.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+    """
+    progress = _make_progress(progress_callback)
+
+    progress(f"Processing: {document_name}")
+
+    if overwrite:
+        delete_document(db, document_name)
+
+    pages = process_raw_text(text, document_name, format_hint=format_hint)
+    progress(f"Sections: {len(pages)}")
+
+    return _chunk_embed_store(
+        pages,
+        document_name,
+        db,
+        settings,
+        progress,
+        extra={"sections": len(pages)},
+    )
+
+
+def _make_progress(
+    callback: Callable[[str], None] | None,
+) -> Callable[[str], None]:
+    """Create a progress reporter that logs and optionally calls a callback."""
+
+    def _progress(message: str) -> None:
+        logger.info(message)
+        if callback is not None:
+            callback(message)
+
+    return _progress
+
+
+def _chunk_embed_store(
+    pages: list[PageContent],
+    document_name: str,
+    db: LanceDB,
+    settings: Settings,
+    progress: Callable[[str], None],
+    *,
+    extra: dict[str, object],
+) -> dict[str, object]:
+    """Shared pipeline: chunk pages, embed, store in LanceDB.
+
+    Args:
+        pages: Page contents to process.
+        document_name: Document identifier.
+        db: LanceDB connection.
+        settings: Application settings.
+        progress: Progress reporter.
+        extra: Additional fields for the result dict.
+
+    Returns:
+        Dict with document_name, chunks count, and extra fields.
+    """
+    progress("Chunking")
+    chunks = chunk_pages(
+        pages,
+        max_chars=settings.chunk_max_chars,
+        overlap_chars=settings.chunk_overlap_chars,
+    )
+    progress(f"Created {len(chunks)} chunks")
+
+    if not chunks:
+        progress("No text found — nothing to index")
+        return {"document_name": document_name, "chunks": 0, **extra}
+
+    progress(f"Generating embeddings ({settings.embedding_model})")
     texts = [c.text for c in chunks]
     vectors = embed_texts(texts, model_name=settings.embedding_model)
 
-    # Step 5: Store
-    _progress("Storing in LanceDB")
+    progress("Storing in LanceDB")
     inserted = insert_chunks(db, chunks, vectors)
 
-    _progress(f"Done: {inserted} chunks indexed from {file_path.name}")
+    progress(f"Done: {inserted} chunks indexed from {document_name}")
 
-    return {
-        "document_name": file_path.name,
-        "total_pages": total_pages,
-        "text_pages": len(text_pages),
-        "image_pages": len(image_pages),
-        "chunks": inserted,
-    }
+    return {"document_name": document_name, "chunks": inserted, **extra}

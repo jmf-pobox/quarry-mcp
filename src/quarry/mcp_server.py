@@ -16,7 +16,7 @@ from quarry.database import (
     search,
 )
 from quarry.embeddings import embed_query
-from quarry.pipeline import ingest_document
+from quarry.pipeline import ingest_document, ingest_text as pipeline_ingest_text
 from quarry.types import LanceDB
 
 logging.basicConfig(level=logging.INFO)
@@ -85,10 +85,12 @@ def ingest(
     file_path: str,
     overwrite: bool = False,
 ) -> str:
-    """Ingest a PDF document: OCR, chunk, embed, and index for search.
+    """Ingest a document: OCR, chunk, embed, and index for search.
+
+    Supported formats: PDF, TXT, MD, TEX, DOCX.
 
     Args:
-        file_path: Absolute path to the PDF file.
+        file_path: Absolute path to the document file.
         overwrite: If true, replace existing data for this document.
     """
     path = Path(file_path)
@@ -102,6 +104,41 @@ def ingest(
         db,
         settings,
         overwrite=overwrite,
+        progress_callback=progress_lines.append,
+    )
+
+    progress_lines.append("")
+    progress_lines.append(f"Result: {json.dumps(result, indent=2)}")
+    return "\n".join(progress_lines)
+
+
+@mcp.tool()
+def ingest_text(
+    content: str,
+    document_name: str,
+    overwrite: bool = False,
+    format_hint: str = "auto",
+) -> str:
+    """Ingest raw text content: chunk, embed, and index for search.
+
+    Args:
+        content: The text content to ingest.
+        document_name: Name for the document (e.g., 'notes.md').
+        overwrite: If true, replace existing data for this document.
+        format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
+    """
+    settings = _settings()
+    db = _db()
+
+    progress_lines: list[str] = []
+
+    result = pipeline_ingest_text(
+        content,
+        document_name,
+        db,
+        settings,
+        overwrite=overwrite,
+        format_hint=format_hint,
         progress_callback=progress_lines.append,
     )
 
