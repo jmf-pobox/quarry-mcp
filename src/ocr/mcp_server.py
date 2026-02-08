@@ -31,7 +31,7 @@ def _db() -> LanceDB:
     return get_db(_settings().lancedb_path)
 
 
-@mcp.tool()  # type: ignore[misc]
+@mcp.tool()
 def search_documents(
     query: str,
     limit: int = 10,
@@ -78,7 +78,7 @@ def search_documents(
     )
 
 
-@mcp.tool()  # type: ignore[misc]
+@mcp.tool()
 def ingest(
     file_path: str,
     overwrite: bool = False,
@@ -108,7 +108,7 @@ def ingest(
     return "\n".join(progress_lines)
 
 
-@mcp.tool()  # type: ignore[misc]
+@mcp.tool()
 def get_documents() -> str:
     """List all indexed documents with metadata."""
     db = _db()
@@ -116,7 +116,7 @@ def get_documents() -> str:
     return json.dumps({"total_documents": len(docs), "documents": docs}, indent=2)
 
 
-@mcp.tool()  # type: ignore[misc]
+@mcp.tool()
 def get_page(
     document_name: str,
     page_number: int,
