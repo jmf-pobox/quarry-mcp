@@ -1,5 +1,7 @@
 # quarry-mcp
 
+[![PyPI](https://img.shields.io/pypi/v/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
+
 Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
 Quarry ingests PDFs, images, text files, and raw text into a local vector database, then serves semantic search over that content through the [Model Context Protocol](https://modelcontextprotocol.io). Point Claude Code or Claude Desktop at your documents and ask questions.

@@ -93,16 +93,29 @@ quarry install
 
 ---
 
-## 9. Tag and Release
+## 9. Tag and GitHub Release
 
 ```sh
 git tag vX.Y.Z
 git push origin vX.Y.Z
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "Release notes here.
+
+PyPI: https://pypi.org/project/quarry-mcp/X.Y.Z/"
+```
+
+Verify the release appears on the repo homepage: https://github.com/jmf-pobox/quarry-mcp
+
+---
+
+## 10. Clean Up
+
+```sh
+rm -rf dist/
 ```
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 - **Version conflict:** bump the version and rebuild — PyPI rejects re-uploads of the same version.
 - **Missing dependencies:** add to `[project] dependencies` in `pyproject.toml`.
