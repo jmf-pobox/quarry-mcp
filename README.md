@@ -1,6 +1,7 @@
 # quarry-mcp
 
 [![PyPI](https://img.shields.io/pypi/v/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
+[![GitHub release](https://img.shields.io/github/v/release/jmf-pobox/quarry-mcp)](https://github.com/jmf-pobox/quarry-mcp/releases)
 
 Extract searchable knowledge from any document. Expose it to LLMs via MCP.
 
