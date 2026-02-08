@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Resource leak: `fitz.open()` in `pdf_analyzer.py` and `text_extractor.py` now uses context manager
 - MCP tool handlers and CLI commands now catch exceptions at the boundary, log tracebacks, and return user-friendly errors
+- `pipeline.py` progress calls use `%s`-style lazy formatting instead of f-strings
+- Added `Raises:` docstring sections to all public functions that raise or propagate exceptions
+- Added `DEBUG` logging to `pdf_analyzer`, `text_extractor`, `text_processor`, and `database` modules
 
 ### Changed
 - `ingest` MCP tool and CLI now accept all supported formats (was PDF-only)

@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import fitz
 
 from quarry.models import PageAnalysis, PageType
 
+logger = logging.getLogger(__name__)
+
 TEXT_THRESHOLD = 50
 
 
 def analyze_pdf(pdf_path: Path) -> list[PageAnalysis]:
-    """Classify each page as TEXT or IMAGE based on extractable text content."""
+    """Classify each page as TEXT or IMAGE based on extractable text content.
+
+    Raises:
+        FileNotFoundError: If pdf_path does not exist.
+    """
     results: list[PageAnalysis] = []
 
     with fitz.open(pdf_path) as doc:
+        logger.debug("Opened %s: %d pages", pdf_path.name, len(doc))
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text().strip()
@@ -21,6 +29,13 @@ def analyze_pdf(pdf_path: Path) -> list[PageAnalysis]:
 
             page_type = (
                 PageType.TEXT if text_length >= TEXT_THRESHOLD else PageType.IMAGE
+            )
+            logger.debug(
+                "Page %d: %s (%d chars, threshold=%d)",
+                page_num + 1,
+                page_type.value,
+                text_length,
+                TEXT_THRESHOLD,
             )
 
             results.append(

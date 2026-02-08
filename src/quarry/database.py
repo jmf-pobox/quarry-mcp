@@ -94,7 +94,10 @@ def search(
     Returns:
         List of result dicts with text, metadata, and _distance.
     """
+    logger.debug("Search: limit=%d, document_filter=%s", limit, document_filter)
+
     if TABLE_NAME not in db.list_tables().tables:
+        logger.debug("Search: table %s not found, returning empty", TABLE_NAME)
         return []
 
     table = db.open_table(TABLE_NAME)
@@ -103,7 +106,9 @@ def search(
     if document_filter:
         query = query.where(f"document_name = '{_escape_sql(document_filter)}'")
 
-    return query.to_list()
+    results = query.to_list()
+    logger.debug("Search: %d results returned", len(results))
+    return results
 
 
 def get_page_text(
@@ -121,7 +126,10 @@ def get_page_text(
     Returns:
         Raw page text, or None if not found.
     """
+    logger.debug("get_page_text: document=%s, page=%d", document_name, page_number)
+
     if TABLE_NAME not in db.list_tables().tables:
+        logger.debug("get_page_text: table %s not found", TABLE_NAME)
         return None
 
     table = db.open_table(TABLE_NAME)
@@ -137,6 +145,7 @@ def get_page_text(
     )
 
     if not results:
+        logger.debug("get_page_text: no results found")
         return None
     return str(results[0]["page_raw_text"])
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import fitz
 
 from quarry.models import PageContent, PageType
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text_pages(
@@ -21,13 +24,20 @@ def extract_text_pages(
 
     Returns:
         List of PageContent for each requested page.
+
+    Raises:
+        FileNotFoundError: If pdf_path does not exist.
     """
     results: list[PageContent] = []
 
     with fitz.open(pdf_path) as doc:
+        logger.debug(
+            "Extracting %d text pages from %s", len(page_numbers), pdf_path.name
+        )
         for page_num in page_numbers:
             page = doc[page_num - 1]
             text = page.get_text().strip()
+            logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(
                     document_name=pdf_path.name,
