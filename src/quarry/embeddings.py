@@ -37,6 +37,9 @@ def embed_texts(
 
     Returns:
         Array of shape (len(texts), 768) with normalized embeddings.
+
+    Raises:
+        OSError: If the embedding model cannot be loaded or downloaded.
     """
     model = _get_model(model_name)
     return model.encode(
@@ -61,6 +64,9 @@ def embed_query(
 
     Returns:
         Array of shape (768,) with normalized embedding.
+
+    Raises:
+        OSError: If the embedding model cannot be loaded or downloaded.
     """
     model = _get_model(model_name)
     return model.encode(

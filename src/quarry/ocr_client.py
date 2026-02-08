@@ -32,6 +32,10 @@ def ocr_pdf_pages(
 
     Returns:
         List of PageContent for each requested page.
+
+    Raises:
+        RuntimeError: If the Textract job fails.
+        TimeoutError: If the Textract job exceeds the configured timeout.
     """
     s3: S3Client = boto3.client("s3")  # type: ignore[assignment]
     textract: TextractClient = boto3.client("textract")  # type: ignore[assignment]
@@ -78,6 +82,10 @@ def _run_textract(
 
     Returns:
         Dict mapping 1-indexed page numbers to extracted text.
+
+    Raises:
+        RuntimeError: If the Textract job reports FAILED status.
+        TimeoutError: If polling exceeds the configured maximum wait.
     """
     response = textract.start_document_text_detection(
         DocumentLocation={"S3Object": {"Bucket": bucket, "Name": s3_key}}

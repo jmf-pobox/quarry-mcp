@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 from quarry.models import PageContent, PageType
+
+logger = logging.getLogger(__name__)
 
 MD_HEADER = re.compile(r"^(?=#+\s)", re.MULTILINE)
 LATEX_SECTION = re.compile(r"(?=\\(?:sub)?section\{)")
@@ -33,12 +36,16 @@ def process_text_file(file_path: Path) -> list[PageContent]:
 
     Raises:
         ValueError: If file extension is not supported.
+        FileNotFoundError: If file does not exist.
+        UnicodeDecodeError: If file content is not valid UTF-8.
     """
     suffix = file_path.suffix.lower()
     fmt = _TEXT_FORMATS.get(suffix)
     if fmt is None:
         msg = f"Unsupported text format: {suffix}"
         raise ValueError(msg)
+
+    logger.debug("Processing %s as %s", file_path.name, fmt)
 
     if fmt == "docx":
         return _process_docx(file_path)
@@ -64,6 +71,7 @@ def process_raw_text(
     """
     if format_hint == "auto":
         format_hint = _detect_format(text)
+        logger.debug("Auto-detected format: %s", format_hint)
 
     return _split_by_format(text, format_hint, document_name, "<string>")
 
@@ -95,6 +103,7 @@ def _split_by_format(
     else:
         sections = _split_plain(text)
 
+    logger.debug("Split %s into %d sections (%s)", document_name, len(sections), fmt)
     return _sections_to_pages(sections, document_name, document_path)
 
 

@@ -98,7 +98,7 @@ def ingest_pdf(
     """
     progress = _make_progress(progress_callback)
 
-    progress(f"Analyzing: {file_path.name}")
+    progress("Analyzing: %s", file_path.name)
 
     if overwrite:
         delete_document(db, file_path.name)
@@ -110,18 +110,21 @@ def ingest_pdf(
     image_pages = [a.page_number for a in analyses if a.page_type == PageType.IMAGE]
 
     progress(
-        f"Pages: {total_pages} total, {len(text_pages)} text, {len(image_pages)} image"
+        "Pages: %d total, %d text, %d image",
+        total_pages,
+        len(text_pages),
+        len(image_pages),
     )
 
     all_pages: list[PageContent] = []
 
     if text_pages:
-        progress(f"Extracting text from {len(text_pages)} pages")
+        progress("Extracting text from %d pages", len(text_pages))
         extracted = extract_text_pages(file_path, text_pages, total_pages)
         all_pages.extend(extracted)
 
     if image_pages:
-        progress(f"Running OCR on {len(image_pages)} pages via Textract")
+        progress("Running OCR on %d pages via Textract", len(image_pages))
         ocr_results = ocr_pdf_pages(file_path, image_pages, total_pages, settings)
         all_pages.extend(ocr_results)
 
@@ -165,13 +168,13 @@ def ingest_text_file(
     """
     progress = _make_progress(progress_callback)
 
-    progress(f"Reading: {file_path.name}")
+    progress("Reading: %s", file_path.name)
 
     if overwrite:
         delete_document(db, file_path.name)
 
     pages = process_text_file(file_path)
-    progress(f"Sections: {len(pages)}")
+    progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
@@ -209,13 +212,13 @@ def ingest_text(
     """
     progress = _make_progress(progress_callback)
 
-    progress(f"Processing: {document_name}")
+    progress("Processing: %s", document_name)
 
     if overwrite:
         delete_document(db, document_name)
 
     pages = process_raw_text(text, document_name, format_hint=format_hint)
-    progress(f"Sections: {len(pages)}")
+    progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
@@ -229,13 +232,13 @@ def ingest_text(
 
 def _make_progress(
     callback: Callable[[str], None] | None,
-) -> Callable[[str], None]:
+) -> Callable[..., None]:
     """Create a progress reporter that logs and optionally calls a callback."""
 
-    def _progress(message: str) -> None:
-        logger.info(message)
+    def _progress(fmt: str, *args: object) -> None:
+        logger.info(fmt, *args)
         if callback is not None:
-            callback(message)
+            callback(fmt % args if args else fmt)
 
     return _progress
 
@@ -245,7 +248,7 @@ def _chunk_embed_store(
     document_name: str,
     db: LanceDB,
     settings: Settings,
-    progress: Callable[[str], None],
+    progress: Callable[..., None],
     *,
     extra: dict[str, object],
 ) -> dict[str, object]:
@@ -268,19 +271,19 @@ def _chunk_embed_store(
         max_chars=settings.chunk_max_chars,
         overlap_chars=settings.chunk_overlap_chars,
     )
-    progress(f"Created {len(chunks)} chunks")
+    progress("Created %d chunks", len(chunks))
 
     if not chunks:
         progress("No text found — nothing to index")
         return {"document_name": document_name, "chunks": 0, **extra}
 
-    progress(f"Generating embeddings ({settings.embedding_model})")
+    progress("Generating embeddings (%s)", settings.embedding_model)
     texts = [c.text for c in chunks]
     vectors = embed_texts(texts, model_name=settings.embedding_model)
 
     progress("Storing in LanceDB")
     inserted = insert_chunks(db, chunks, vectors)
 
-    progress(f"Done: {inserted} chunks indexed from {document_name}")
+    progress("Done: %d chunks indexed from %s", inserted, document_name)
 
     return {"document_name": document_name, "chunks": inserted, **extra}
