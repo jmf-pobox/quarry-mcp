@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     s3_bucket: str = "ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b"
 
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
+    registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 

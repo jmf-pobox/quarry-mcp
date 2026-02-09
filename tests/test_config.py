@@ -29,6 +29,8 @@ class TestSettings:
         assert settings.textract_poll_interval == 5
         assert settings.textract_max_wait == 900
         assert isinstance(settings.lancedb_path, Path)
+        expected = Path.home() / ".quarry" / "data" / "registry.db"
+        assert settings.registry_path == expected
 
     def test_override_via_constructor(self):
         settings = Settings(
