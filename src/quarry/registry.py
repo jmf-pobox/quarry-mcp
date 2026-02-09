@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -33,6 +34,89 @@ def open_registry(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     _init_schema(conn)
     return conn
+
+
+def register_directory(
+    conn: sqlite3.Connection,
+    directory: Path,
+    collection: str,
+) -> DirectoryRegistration:
+    """Register a directory for incremental sync.
+
+    Raises:
+        FileNotFoundError: If *directory* does not exist.
+        sqlite3.IntegrityError: If *collection* is already registered.
+    """
+    resolved = directory.resolve()
+    if not resolved.is_dir():
+        msg = f"Directory not found: {resolved}"
+        raise FileNotFoundError(msg)
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT INTO directories (directory, collection, registered_at) "
+        "VALUES (?, ?, ?)",
+        (str(resolved), collection, now),
+    )
+    conn.commit()
+    return DirectoryRegistration(
+        directory=str(resolved),
+        collection=collection,
+        registered_at=now,
+    )
+
+
+def deregister_directory(
+    conn: sqlite3.Connection,
+    collection: str,
+) -> list[str]:
+    """Remove a directory registration and its file records.
+
+    Returns document_names of files that were tracked, so the
+    caller can clean them from LanceDB.
+    """
+    rows = conn.execute(
+        "SELECT document_name FROM files WHERE collection = ?",
+        (collection,),
+    ).fetchall()
+    document_names = [r[0] for r in rows]
+    conn.execute("DELETE FROM files WHERE collection = ?", (collection,))
+    conn.execute(
+        "DELETE FROM directories WHERE collection = ?",
+        (collection,),
+    )
+    conn.commit()
+    return document_names
+
+
+def list_registrations(
+    conn: sqlite3.Connection,
+) -> list[DirectoryRegistration]:
+    """Return all registered directories."""
+    rows = conn.execute(
+        "SELECT directory, collection, registered_at FROM directories "
+        "ORDER BY collection"
+    ).fetchall()
+    return [
+        DirectoryRegistration(directory=r[0], collection=r[1], registered_at=r[2])
+        for r in rows
+    ]
+
+
+def get_registration(
+    conn: sqlite3.Connection,
+    collection: str,
+) -> DirectoryRegistration | None:
+    """Look up a single registration by collection name."""
+    row = conn.execute(
+        "SELECT directory, collection, registered_at FROM directories "
+        "WHERE collection = ?",
+        (collection,),
+    ).fetchone()
+    if row is None:
+        return None
+    return DirectoryRegistration(
+        directory=row[0], collection=row[1], registered_at=row[2]
+    )
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:

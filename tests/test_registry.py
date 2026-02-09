@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
-from quarry.registry import open_registry
+import pytest
+
+from quarry.registry import (
+    deregister_directory,
+    get_registration,
+    list_registrations,
+    open_registry,
+    register_directory,
+)
 
 
 class TestOpenRegistry:
@@ -44,4 +53,88 @@ class TestOpenRegistry:
         db_path = tmp_path / "nested" / "dir" / "registry.db"
         conn = open_registry(db_path)
         assert db_path.exists()
+        conn.close()
+
+
+class TestRegisterDirectory:
+    def test_register_adds_row(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        course_dir = tmp_path / "ml-101"
+        course_dir.mkdir()
+        reg = register_directory(conn, course_dir, "ml-101")
+        assert reg.collection == "ml-101"
+        assert reg.directory == str(course_dir.resolve())
+        assert reg.registered_at != ""
+        conn.close()
+
+    def test_register_nonexistent_directory(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        with pytest.raises(FileNotFoundError, match="Directory not found"):
+            register_directory(conn, tmp_path / "nope", "nope")
+        conn.close()
+
+    def test_register_duplicate_collection(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        d1 = tmp_path / "a"
+        d1.mkdir()
+        d2 = tmp_path / "b"
+        d2.mkdir()
+        register_directory(conn, d1, "shared")
+        with pytest.raises(sqlite3.IntegrityError):
+            register_directory(conn, d2, "shared")
+        conn.close()
+
+
+class TestDeregisterDirectory:
+    def test_deregister_removes_rows(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        d = tmp_path / "course"
+        d.mkdir()
+        register_directory(conn, d, "course")
+        # Insert a fake file record
+        conn.execute(
+            "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
+            ("/fake/path.pdf", "course", "path.pdf", 100.0, 500, "2025-01-01"),
+        )
+        conn.commit()
+        names = deregister_directory(conn, "course")
+        assert names == ["path.pdf"]
+        assert get_registration(conn, "course") is None
+        conn.close()
+
+    def test_deregister_returns_empty_for_unknown(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        names = deregister_directory(conn, "unknown")
+        assert names == []
+        conn.close()
+
+
+class TestListAndGetRegistrations:
+    def test_list_registrations(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        d1 = tmp_path / "a"
+        d1.mkdir()
+        d2 = tmp_path / "b"
+        d2.mkdir()
+        register_directory(conn, d1, "alpha")
+        register_directory(conn, d2, "beta")
+        regs = list_registrations(conn)
+        assert len(regs) == 2
+        assert regs[0].collection == "alpha"
+        assert regs[1].collection == "beta"
+        conn.close()
+
+    def test_get_registration_found(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        d = tmp_path / "x"
+        d.mkdir()
+        register_directory(conn, d, "x")
+        reg = get_registration(conn, "x")
+        assert reg is not None
+        assert reg.collection == "x"
+        conn.close()
+
+    def test_get_registration_not_found(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        assert get_registration(conn, "missing") is None
         conn.close()
