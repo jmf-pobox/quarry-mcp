@@ -22,6 +22,23 @@ _TEXT_FORMATS: dict[str, str] = {
 SUPPORTED_TEXT_EXTENSIONS = frozenset(_TEXT_FORMATS)
 
 
+def _read_text_with_fallback(file_path: Path) -> str:
+    """Read a text file, trying UTF-8 first then falling back to Latin-1.
+
+    Latin-1 is a 1:1 byte mapping that decodes any byte sequence.
+    It produces correct results for Western European encodings
+    (Latin-1, CP1252) which cover German, French, Spanish, etc.
+    """
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        logger.info(
+            "UTF-8 decode failed for %s, falling back to latin-1",
+            file_path.name,
+        )
+        return file_path.read_text(encoding="latin-1")
+
+
 def process_text_file(file_path: Path) -> list[PageContent]:
     """Read a text file and split into sections.
 
@@ -37,7 +54,6 @@ def process_text_file(file_path: Path) -> list[PageContent]:
     Raises:
         ValueError: If file extension is not supported.
         FileNotFoundError: If file does not exist.
-        UnicodeDecodeError: If file content is not valid UTF-8.
     """
     suffix = file_path.suffix.lower()
     fmt = _TEXT_FORMATS.get(suffix)
@@ -50,7 +66,7 @@ def process_text_file(file_path: Path) -> list[PageContent]:
     if fmt == "docx":
         return _process_docx(file_path)
 
-    text = file_path.read_text(encoding="utf-8")
+    text = _read_text_with_fallback(file_path)
     return _split_by_format(text, fmt, file_path.name, str(file_path.resolve()))
 
 
