@@ -140,7 +140,9 @@ def get_file(conn: sqlite3.Connection, path: str) -> FileRecord | None:
     )
 
 
-def upsert_file(conn: sqlite3.Connection, record: FileRecord) -> None:
+def upsert_file(
+    conn: sqlite3.Connection, record: FileRecord, *, commit: bool = True
+) -> None:
     """Insert or replace a file record."""
     conn.execute(
         "INSERT OR REPLACE INTO files "
@@ -155,7 +157,8 @@ def upsert_file(conn: sqlite3.Connection, record: FileRecord) -> None:
             record.ingested_at,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def list_files(
@@ -181,10 +184,11 @@ def list_files(
     ]
 
 
-def delete_file(conn: sqlite3.Connection, path: str) -> None:
+def delete_file(conn: sqlite3.Connection, path: str, *, commit: bool = True) -> None:
     """Delete a single file record by path."""
     conn.execute("DELETE FROM files WHERE path = ?", (path,))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:

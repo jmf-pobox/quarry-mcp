@@ -35,10 +35,12 @@ def discover_files(
 ) -> list[Path]:
     """Recursively find files matching *extensions* under *directory*.
 
-    Returns absolute resolved paths, sorted for deterministic order.
+    Returns absolute paths, sorted for deterministic order.  Uses
+    ``absolute()`` rather than ``resolve()`` so that symlinks within
+    the tree keep their in-tree path (``relative_to`` stays valid).
     """
     return sorted(
-        child.resolve()
+        child.absolute()
         for child in directory.rglob("*")
         if child.is_file() and child.suffix.lower() in extensions
     )
@@ -163,6 +165,7 @@ def sync_collection(
                             size=stat.st_size,
                             ingested_at=datetime.now(UTC).isoformat(),
                         ),
+                        commit=False,
                     )
                     ingested += 1
                     _progress(f"[{collection}] Ingested {doc_name}")
@@ -179,8 +182,10 @@ def sync_collection(
     for doc_name in plan.to_delete:
         delete_document(db, doc_name, collection=collection)
         for rec in files_by_doc_name.get(doc_name, []):
-            delete_file(conn, rec.path)
+            delete_file(conn, rec.path, commit=False)
         _progress(f"[{collection}] Deleted {doc_name}")
+
+    conn.commit()
 
     return SyncResult(
         collection=collection,
