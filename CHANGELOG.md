@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-09
+
+### Added
+- Pluggable backend abstraction: `OcrBackend` and `EmbeddingBackend` protocols in `types.py`
+- `TextractOcrBackend` and `SnowflakeEmbeddingBackend` implementation classes
+- Thread-safe backend factory in `backends.py` with `match/case` dispatch and instance caching
+- `ocr_backend` configuration setting for selecting OCR provider
+
+### Changed
+- Pipeline, CLI, and MCP server now use backend factory instead of direct function imports
+- Integration tests excluded from default `uv run pytest` (opt-in via `uv run pytest -m slow`)
+
 ## [0.2.0] - 2026-02-09
 
 ### Added
