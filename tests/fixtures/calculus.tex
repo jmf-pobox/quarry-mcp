@@ -1,0 +1,21 @@
+\documentclass{article}
+\title{Introduction to Calculus}
+\begin{document}
+
+\section{Limits and Continuity}
+
+The concept of a limit is foundational to calculus. We say that $\lim_{x \to a} f(x) = L$ if $f(x)$ can be made arbitrarily close to $L$ by choosing $x$ sufficiently close to $a$. A function is continuous at a point $a$ if $\lim_{x \to a} f(x) = f(a)$. The epsilon-delta definition formalizes this intuition: for every $\epsilon > 0$, there exists a $\delta > 0$ such that $|f(x) - L| < \epsilon$ whenever $0 < |x - a| < \delta$.
+
+\subsection{One-Sided Limits}
+
+A left-hand limit $\lim_{x \to a^-} f(x)$ considers values approaching $a$ from below, while the right-hand limit $\lim_{x \to a^+} f(x)$ approaches from above. The two-sided limit exists only when both one-sided limits exist and are equal.
+
+\section{Derivatives}
+
+The derivative of a function $f$ at a point $x$ is defined as $f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}$, representing the instantaneous rate of change. The power rule states that $\frac{d}{dx} x^n = n x^{n-1}$. The chain rule, product rule, and quotient rule extend differentiation to composite, multiplicative, and fractional expressions respectively.
+
+\section{Integration}
+
+The definite integral $\int_a^b f(x)\,dx$ represents the signed area under the curve of $f$ between $a$ and $b$. The Fundamental Theorem of Calculus connects differentiation and integration: if $F$ is an antiderivative of $f$, then $\int_a^b f(x)\,dx = F(b) - F(a)$. Common integration techniques include substitution, integration by parts, and partial fraction decomposition.
+
+\end{document}

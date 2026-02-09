@@ -1,0 +1,5 @@
+Photosynthesis is the process by which green plants, algae, and certain bacteria convert light energy into chemical energy stored in glucose. This remarkable biochemical pathway occurs primarily in the chloroplasts of plant cells, where chlorophyll pigments absorb sunlight and use it to drive the synthesis of organic molecules from carbon dioxide and water.
+
+The light reactions take place in the thylakoid membranes of the chloroplast. During this phase, water molecules are split through photolysis, releasing oxygen as a byproduct. The energy captured from photons excites electrons in photosystem II and photosystem I, generating ATP and NADPH through the electron transport chain and chemiosmosis.
+
+The Calvin cycle operates in the stroma of the chloroplast, where the enzyme RuBisCO catalyzes the fixation of carbon dioxide into three-carbon compounds. Using the ATP and NADPH produced during the light reactions, these compounds are reduced to glyceraldehyde-3-phosphate (G3P), which serves as the building block for glucose synthesis and other organic molecules essential for plant growth and metabolism.
