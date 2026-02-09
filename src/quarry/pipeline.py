@@ -25,6 +25,10 @@ from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_EXTENSIONS = (
+    frozenset({".pdf"}) | SUPPORTED_TEXT_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS
+)
+
 
 def ingest_document(
     file_path: Path,
