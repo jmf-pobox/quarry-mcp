@@ -68,7 +68,7 @@ def _mock_single_page_pipeline(
     )
     monkeypatch.setattr(
         "quarry.pipeline.chunk_pages",
-        lambda _pages, max_chars, overlap_chars: chunks,
+        lambda _pages, max_chars, overlap_chars, **_kw: chunks,
     )
     monkeypatch.setattr(
         "quarry.pipeline.embed_texts",
@@ -135,7 +135,7 @@ class TestIngestImageSinglePage:
         monkeypatch.setattr("quarry.pipeline.ocr_image_bytes", _mock_ocr_bytes)
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         from quarry.pipeline import ingest_document
@@ -171,7 +171,7 @@ class TestIngestImageSinglePage:
         monkeypatch.setattr("quarry.pipeline.ocr_image_bytes", _mock_ocr_bytes)
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         from quarry.pipeline import ingest_document
@@ -192,7 +192,7 @@ class TestIngestImageSinglePage:
 
         delete_calls: list[str] = []
 
-        def _mock_delete(_db: object, name: str) -> int:
+        def _mock_delete(_db: object, name: str, **_kw: object) -> int:
             delete_calls.append(name)
             return 0
 
@@ -252,7 +252,7 @@ class TestIngestImageMultiPage:
         monkeypatch.setattr("quarry.pipeline.ocr_document_via_s3", _mock_ocr_s3)
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: chunks,
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         monkeypatch.setattr(
             "quarry.pipeline.embed_texts",

@@ -78,7 +78,7 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: chunks,
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         monkeypatch.setattr(
             "quarry.pipeline.embed_texts",
@@ -130,7 +130,7 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: chunks,
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         monkeypatch.setattr(
             "quarry.pipeline.embed_texts",
@@ -165,7 +165,7 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         from quarry.pipeline import ingest_document
@@ -191,12 +191,12 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         delete_called_with: list[str] = []
 
-        def _mock_delete(_db: object, name: str) -> int:
+        def _mock_delete(_db: object, name: str, **_kw: object) -> int:
             delete_called_with.append(name)
             return 0
 
@@ -225,7 +225,7 @@ class TestIngestDocument:
         )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         from quarry.pipeline import ingest_document
@@ -258,7 +258,7 @@ class TestIngestDocument:
 
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: chunks,
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         monkeypatch.setattr(
             "quarry.pipeline.embed_texts",
@@ -308,7 +308,7 @@ class TestIngestText:
 
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: chunks,
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
         monkeypatch.setattr(
             "quarry.pipeline.embed_texts",
@@ -331,12 +331,12 @@ class TestIngestText:
     def test_overwrite_deletes_existing(self, monkeypatch):
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         delete_called: list[str] = []
 
-        def _mock_delete(_db: object, name: str) -> int:
+        def _mock_delete(_db: object, name: str, **_kw: object) -> int:
             delete_called.append(name)
             return 0
 
@@ -352,7 +352,7 @@ class TestIngestText:
     def test_empty_text_returns_zero_chunks(self, monkeypatch):
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
-            lambda _pages, max_chars, overlap_chars: [],
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
         )
 
         from quarry.pipeline import ingest_text

@@ -32,6 +32,7 @@ def ingest_document(
     settings: Settings,
     *,
     overwrite: bool = False,
+    collection: str = "default",
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a document: dispatch to format-specific handler.
@@ -43,6 +44,7 @@ def ingest_document(
         db: LanceDB connection.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
         progress_callback: Optional callable for progress messages.
 
     Returns:
@@ -64,6 +66,7 @@ def ingest_document(
             db,
             settings,
             overwrite=overwrite,
+            collection=collection,
             progress_callback=progress_callback,
         )
 
@@ -73,6 +76,7 @@ def ingest_document(
             db,
             settings,
             overwrite=overwrite,
+            collection=collection,
             progress_callback=progress_callback,
         )
 
@@ -82,6 +86,7 @@ def ingest_document(
             db,
             settings,
             overwrite=overwrite,
+            collection=collection,
             progress_callback=progress_callback,
         )
 
@@ -95,6 +100,7 @@ def ingest_pdf(
     settings: Settings,
     *,
     overwrite: bool = False,
+    collection: str = "default",
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a PDF document: analyze, extract/OCR, chunk, embed, store.
@@ -104,6 +110,7 @@ def ingest_pdf(
         db: LanceDB connection.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
         progress_callback: Optional callable for progress messages.
 
     Returns:
@@ -114,7 +121,7 @@ def ingest_pdf(
     progress("Analyzing: %s", file_path.name)
 
     if overwrite:
-        delete_document(db, file_path.name)
+        delete_document(db, file_path.name, collection=collection)
 
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
@@ -149,6 +156,7 @@ def ingest_pdf(
         db,
         settings,
         progress,
+        collection=collection,
         extra={
             "total_pages": total_pages,
             "text_pages": len(text_pages),
@@ -163,6 +171,7 @@ def ingest_text_file(
     settings: Settings,
     *,
     overwrite: bool = False,
+    collection: str = "default",
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a text document: read, split into sections, chunk, embed, store.
@@ -174,6 +183,7 @@ def ingest_text_file(
         db: LanceDB connection.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
         progress_callback: Optional callable for progress messages.
 
     Returns:
@@ -184,7 +194,7 @@ def ingest_text_file(
     progress("Reading: %s", file_path.name)
 
     if overwrite:
-        delete_document(db, file_path.name)
+        delete_document(db, file_path.name, collection=collection)
 
     pages = process_text_file(file_path)
     progress("Sections: %d", len(pages))
@@ -195,6 +205,7 @@ def ingest_text_file(
         db,
         settings,
         progress,
+        collection=collection,
         extra={"sections": len(pages)},
     )
 
@@ -205,6 +216,7 @@ def ingest_image(
     settings: Settings,
     *,
     overwrite: bool = False,
+    collection: str = "default",
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a standalone image: OCR, chunk, embed, store.
@@ -220,6 +232,7 @@ def ingest_image(
         db: LanceDB connection.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
         progress_callback: Optional callable for progress messages.
 
     Returns:
@@ -230,7 +243,7 @@ def ingest_image(
     progress("Analyzing image: %s", file_path.name)
 
     if overwrite:
-        delete_document(db, file_path.name)
+        delete_document(db, file_path.name, collection=collection)
 
     analysis = analyze_image(file_path)
     progress(
@@ -242,7 +255,12 @@ def ingest_image(
 
     if analysis.page_count > 1:
         return _ingest_multipage_image(
-            file_path, analysis.page_count, db, settings, progress
+            file_path,
+            analysis.page_count,
+            db,
+            settings,
+            progress,
+            collection=collection,
         )
 
     image_bytes = _prepare_image_bytes(
@@ -260,6 +278,7 @@ def ingest_image(
         db,
         settings,
         progress,
+        collection=collection,
         extra={"format": analysis.format, "image_pages": 1},
     )
 
@@ -285,6 +304,8 @@ def _ingest_multipage_image(
     db: LanceDB,
     settings: Settings,
     progress: Callable[..., None],
+    *,
+    collection: str = "default",
 ) -> dict[str, object]:
     """Ingest a multi-page image (TIFF) via async Textract API."""
     progress("Running OCR on %d pages via Textract (async)", page_count)
@@ -297,6 +318,7 @@ def _ingest_multipage_image(
         db,
         settings,
         progress,
+        collection=collection,
         extra={"format": "TIFF", "image_pages": page_count},
     )
 
@@ -308,6 +330,7 @@ def ingest_text(
     settings: Settings,
     *,
     overwrite: bool = False,
+    collection: str = "default",
     format_hint: str = "auto",
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
@@ -319,6 +342,7 @@ def ingest_text(
         db: LanceDB connection.
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
         format_hint: One of 'auto', 'plain', 'markdown', 'latex'.
         progress_callback: Optional callable for progress messages.
 
@@ -330,7 +354,7 @@ def ingest_text(
     progress("Processing: %s", document_name)
 
     if overwrite:
-        delete_document(db, document_name)
+        delete_document(db, document_name, collection=collection)
 
     pages = process_raw_text(text, document_name, format_hint=format_hint)
     progress("Sections: %d", len(pages))
@@ -341,6 +365,7 @@ def ingest_text(
         db,
         settings,
         progress,
+        collection=collection,
         extra={"sections": len(pages)},
     )
 
@@ -365,6 +390,7 @@ def _chunk_embed_store(
     settings: Settings,
     progress: Callable[..., None],
     *,
+    collection: str = "default",
     extra: dict[str, object],
 ) -> dict[str, object]:
     """Shared pipeline: chunk pages, embed, store in LanceDB.
@@ -375,22 +401,29 @@ def _chunk_embed_store(
         db: LanceDB connection.
         settings: Application settings.
         progress: Progress reporter.
+        collection: Collection name for the chunks.
         extra: Additional fields for the result dict.
 
     Returns:
-        Dict with document_name, chunks count, and extra fields.
+        Dict with document_name, collection, chunks count, and extra fields.
     """
     progress("Chunking")
     chunks = chunk_pages(
         pages,
         max_chars=settings.chunk_max_chars,
         overlap_chars=settings.chunk_overlap_chars,
+        collection=collection,
     )
     progress("Created %d chunks", len(chunks))
 
     if not chunks:
         progress("No text found — nothing to index")
-        return {"document_name": document_name, "chunks": 0, **extra}
+        return {
+            "document_name": document_name,
+            "collection": collection,
+            "chunks": 0,
+            **extra,
+        }
 
     progress("Generating embeddings (%s)", settings.embedding_model)
     texts = [c.text for c in chunks]
@@ -401,4 +434,9 @@ def _chunk_embed_store(
 
     progress("Done: %d chunks indexed from %s", inserted, document_name)
 
-    return {"document_name": document_name, "chunks": inserted, **extra}
+    return {
+        "document_name": document_name,
+        "collection": collection,
+        "chunks": inserted,
+        **extra,
+    }

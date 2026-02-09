@@ -12,6 +12,7 @@ def chunk_pages(
     pages: list[PageContent],
     max_chars: int = 1800,
     overlap_chars: int = 200,
+    collection: str = "default",
 ) -> list[Chunk]:
     """Split page contents into overlapping chunks for embedding.
 
@@ -22,6 +23,7 @@ def chunk_pages(
         pages: Extracted page contents.
         max_chars: Target max characters per chunk (~450 tokens).
         overlap_chars: Character overlap between consecutive chunks.
+        collection: Collection name for the chunks.
 
     Returns:
         List of Chunk objects ready for embedding.
@@ -41,7 +43,7 @@ def chunk_pages(
                 Chunk(
                     document_name=page.document_name,
                     document_path=page.document_path,
-                    collection="default",
+                    collection=collection,
                     page_number=page.page_number,
                     total_pages=page.total_pages,
                     chunk_index=chunk_index,
