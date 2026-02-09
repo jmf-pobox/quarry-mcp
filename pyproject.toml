@@ -158,6 +158,7 @@ minversion = "8.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["slow: marks tests as slow (run with -m slow)"]
 
 [tool.coverage.run]
 source = ["src"]
