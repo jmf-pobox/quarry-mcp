@@ -159,7 +159,7 @@ def _run_textract(
     logger.info("Textract job started: %s (%d pages)", job_id, total_pages)
 
     elapsed = 0.0
-    delay = settings.textract_poll_initial
+    delay = max(settings.textract_poll_initial, 0.1)
     while elapsed < settings.textract_max_wait:
         time.sleep(delay)
         elapsed += delay

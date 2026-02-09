@@ -54,6 +54,15 @@ class TestOpenRegistry:
         assert mode[0] == "wal"
         conn.close()
 
+    def test_foreign_keys_enforced(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            conn.execute(
+                "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
+                ("/x/y.pdf", "nonexistent", "y.pdf", 1.0, 100, "2025-01-01"),
+            )
+        conn.close()
+
     def test_creates_parent_directories(self, tmp_path: Path):
         db_path = tmp_path / "nested" / "dir" / "registry.db"
         conn = open_registry(db_path)
@@ -146,6 +155,14 @@ class TestListAndGetRegistrations:
 
 
 class TestFileRecordOperations:
+    def _register(
+        self, conn: sqlite3.Connection, tmp_path: Path, collection: str
+    ) -> None:
+        """Register a directory for *collection* so FK constraints pass."""
+        d = tmp_path / f"dir-{collection}"
+        d.mkdir(exist_ok=True)
+        register_directory(conn, d, collection)
+
     def _make_record(
         self,
         path: str = "/a/b.pdf",
@@ -162,6 +179,7 @@ class TestFileRecordOperations:
 
     def test_upsert_inserts_new(self, tmp_path: Path):
         conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path, "c")
         rec = self._make_record()
         upsert_file(conn, rec)
         got = get_file(conn, rec.path)
@@ -172,6 +190,7 @@ class TestFileRecordOperations:
 
     def test_upsert_updates_existing(self, tmp_path: Path):
         conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path, "c")
         rec = self._make_record()
         upsert_file(conn, rec)
         updated = FileRecord(
@@ -196,6 +215,8 @@ class TestFileRecordOperations:
 
     def test_list_files_filters_by_collection(self, tmp_path: Path):
         conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path, "alpha")
+        self._register(conn, tmp_path, "beta")
         upsert_file(conn, self._make_record("/a/1.pdf", "alpha"))
         upsert_file(conn, self._make_record("/a/2.pdf", "alpha"))
         upsert_file(conn, self._make_record("/b/3.pdf", "beta"))
@@ -207,6 +228,7 @@ class TestFileRecordOperations:
 
     def test_delete_file_removes_record(self, tmp_path: Path):
         conn = open_registry(tmp_path / "r.db")
+        self._register(conn, tmp_path, "c")
         rec = self._make_record()
         upsert_file(conn, rec)
         delete_file(conn, rec.path)

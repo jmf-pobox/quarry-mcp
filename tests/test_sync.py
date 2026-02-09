@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import time
+import os
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -59,10 +60,16 @@ class TestDiscoverFiles:
 class TestComputeSyncPlan:
     EXTS = frozenset({".pdf", ".txt"})
 
-    def test_new_file_detected(self, tmp_path: Path):
+    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+        """Create registry, docs directory, and register collection 'col'."""
         conn = open_registry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
+        register_directory(conn, d, "col")
+        return conn, d
+
+    def test_new_file_detected(self, tmp_path: Path):
+        conn, d = self._setup(tmp_path)
         (d / "new.pdf").write_bytes(b"data")
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
@@ -72,9 +79,7 @@ class TestComputeSyncPlan:
         conn.close()
 
     def test_unchanged_file_skipped(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         f = d / "existing.pdf"
         f.write_bytes(b"data")
         stat = f.stat()
@@ -95,9 +100,7 @@ class TestComputeSyncPlan:
         conn.close()
 
     def test_changed_file_detected(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         f = d / "changed.pdf"
         f.write_bytes(b"old")
         upsert_file(
@@ -111,18 +114,16 @@ class TestComputeSyncPlan:
                 ingested_at="2025-01-01",
             ),
         )
-        # Modify the file — ensure mtime changes
-        time.sleep(0.05)
+        # Modify the file and force a distinct mtime via os.utime
         f.write_bytes(b"new content that is longer")
+        os.utime(f, (f.stat().st_atime, f.stat().st_mtime + 10))
         plan = compute_sync_plan(d, "col", conn, self.EXTS)
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "changed.pdf"
         conn.close()
 
     def test_deleted_file_detected(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         upsert_file(
             conn,
             FileRecord(
@@ -139,9 +140,7 @@ class TestComputeSyncPlan:
         conn.close()
 
     def test_mixed_scenario(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
 
         # Unchanged file
         unch = d / "unchanged.pdf"
@@ -193,10 +192,16 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
 
 
 class TestSyncCollection:
-    def test_ingests_new_files(self, tmp_path: Path):
+    def _setup(self, tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+        """Create registry, docs directory, and register collection 'col'."""
         conn = open_registry(tmp_path / "r.db")
         d = tmp_path / "docs"
         d.mkdir()
+        register_directory(conn, d, "col")
+        return conn, d
+
+    def test_ingests_new_files(self, tmp_path: Path):
+        conn, d = self._setup(tmp_path)
         (d / "a.txt").write_text("hello")
 
         db = MagicMock()
@@ -217,9 +222,7 @@ class TestSyncCollection:
         conn.close()
 
     def test_error_isolation(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         (d / "good.txt").write_text("ok")
         (d / "bad.txt").write_text("fail")
 
@@ -242,9 +245,7 @@ class TestSyncCollection:
         conn.close()
 
     def test_deletes_removed_files(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         # Register a file that no longer exists on disk
         upsert_file(
             conn,
@@ -272,9 +273,7 @@ class TestSyncCollection:
         conn.close()
 
     def test_registry_updated_after_sync(self, tmp_path: Path):
-        conn = open_registry(tmp_path / "r.db")
-        d = tmp_path / "docs"
-        d.mkdir()
+        conn, d = self._setup(tmp_path)
         (d / "new.txt").write_text("data")
 
         db = MagicMock()

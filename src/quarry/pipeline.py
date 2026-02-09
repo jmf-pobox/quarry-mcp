@@ -37,6 +37,7 @@ def ingest_document(
     *,
     overwrite: bool = False,
     collection: str = "default",
+    document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a document: dispatch to format-specific handler.
@@ -49,6 +50,11 @@ def ingest_document(
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
+        document_name: Override for the stored document name. Defaults to
+            ``file_path.name``.  Pass a relative path (e.g. from
+            ``file_path.relative_to(root)``) to avoid collisions when
+            syncing directories with identically-named files in
+            subdirectories.
         progress_callback: Optional callable for progress messages.
 
     Returns:
@@ -71,6 +77,7 @@ def ingest_document(
             settings,
             overwrite=overwrite,
             collection=collection,
+            document_name=document_name,
             progress_callback=progress_callback,
         )
 
@@ -81,6 +88,7 @@ def ingest_document(
             settings,
             overwrite=overwrite,
             collection=collection,
+            document_name=document_name,
             progress_callback=progress_callback,
         )
 
@@ -91,6 +99,7 @@ def ingest_document(
             settings,
             overwrite=overwrite,
             collection=collection,
+            document_name=document_name,
             progress_callback=progress_callback,
         )
 
@@ -105,6 +114,7 @@ def ingest_pdf(
     *,
     overwrite: bool = False,
     collection: str = "default",
+    document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a PDF document: analyze, extract/OCR, chunk, embed, store.
@@ -115,17 +125,19 @@ def ingest_pdf(
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
         progress_callback: Optional callable for progress messages.
 
     Returns:
         Dict with ingestion results (pages, chunks, etc).
     """
     progress = _make_progress(progress_callback)
+    doc_name = document_name or file_path.name
 
-    progress("Analyzing: %s", file_path.name)
+    progress("Analyzing: %s", doc_name)
 
     if overwrite:
-        delete_document(db, file_path.name, collection=collection)
+        delete_document(db, doc_name, collection=collection)
 
     analyses = analyze_pdf(file_path)
     total_pages = len(analyses)
@@ -156,7 +168,7 @@ def ingest_pdf(
 
     return _chunk_embed_store(
         all_pages,
-        file_path.name,
+        doc_name,
         db,
         settings,
         progress,
@@ -176,6 +188,7 @@ def ingest_text_file(
     *,
     overwrite: bool = False,
     collection: str = "default",
+    document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a text document: read, split into sections, chunk, embed, store.
@@ -188,24 +201,26 @@ def ingest_text_file(
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
         progress_callback: Optional callable for progress messages.
 
     Returns:
         Dict with ingestion results.
     """
     progress = _make_progress(progress_callback)
+    doc_name = document_name or file_path.name
 
-    progress("Reading: %s", file_path.name)
+    progress("Reading: %s", doc_name)
 
     if overwrite:
-        delete_document(db, file_path.name, collection=collection)
+        delete_document(db, doc_name, collection=collection)
 
     pages = process_text_file(file_path)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
         pages,
-        file_path.name,
+        doc_name,
         db,
         settings,
         progress,
@@ -221,6 +236,7 @@ def ingest_image(
     *,
     overwrite: bool = False,
     collection: str = "default",
+    document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Ingest a standalone image: OCR, chunk, embed, store.
@@ -237,17 +253,19 @@ def ingest_image(
         settings: Application settings.
         overwrite: If True, delete existing data for this document first.
         collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
         progress_callback: Optional callable for progress messages.
 
     Returns:
         Dict with ingestion results.
     """
     progress = _make_progress(progress_callback)
+    doc_name = document_name or file_path.name
 
-    progress("Analyzing image: %s", file_path.name)
+    progress("Analyzing image: %s", doc_name)
 
     if overwrite:
-        delete_document(db, file_path.name, collection=collection)
+        delete_document(db, doc_name, collection=collection)
 
     analysis = analyze_image(file_path)
     progress(
@@ -264,6 +282,7 @@ def ingest_image(
             db,
             settings,
             progress,
+            document_name=doc_name,
             collection=collection,
         )
 
@@ -272,13 +291,13 @@ def ingest_image(
     )
     page = ocr_image_bytes(
         image_bytes,
-        document_name=file_path.name,
+        document_name=doc_name,
         document_path=str(file_path.resolve()),
     )
 
     return _chunk_embed_store(
         [page],
-        file_path.name,
+        doc_name,
         db,
         settings,
         progress,
@@ -309,16 +328,18 @@ def _ingest_multipage_image(
     settings: Settings,
     progress: Callable[..., None],
     *,
+    document_name: str | None = None,
     collection: str = "default",
 ) -> dict[str, object]:
     """Ingest a multi-page image (TIFF) via async Textract API."""
+    doc_name = document_name or file_path.name
     progress("Running OCR on %d pages via Textract (async)", page_count)
     all_page_numbers = list(range(1, page_count + 1))
     pages = ocr_document_via_s3(file_path, all_page_numbers, page_count, settings)
 
     return _chunk_embed_store(
         pages,
-        file_path.name,
+        doc_name,
         db,
         settings,
         progress,

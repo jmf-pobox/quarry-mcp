@@ -142,11 +142,13 @@ def sync_collection(
                     settings,
                     overwrite=True,
                     collection=collection,
+                    document_name=str(fp.relative_to(directory)),
                 ): fp
                 for fp in plan.to_ingest
             }
             for future in as_completed(futures):
                 fp = futures[future]
+                doc_name = str(fp.relative_to(directory))
                 try:
                     future.result()
                     stat = fp.stat()
@@ -155,25 +157,28 @@ def sync_collection(
                         FileRecord(
                             path=str(fp),
                             collection=collection,
-                            document_name=fp.name,
+                            document_name=doc_name,
                             mtime=stat.st_mtime,
                             size=stat.st_size,
                             ingested_at=datetime.now(UTC).isoformat(),
                         ),
                     )
                     ingested += 1
-                    _progress(f"[{collection}] Ingested {fp.name}")
+                    _progress(f"[{collection}] Ingested {doc_name}")
                 except Exception as exc:  # noqa: BLE001
                     failed += 1
-                    errors.append(f"{fp.name}: {exc}")
-                    _progress(f"[{collection}] Failed {fp.name}: {exc}")
+                    errors.append(f"{doc_name}: {exc}")
+                    _progress(f"[{collection}] Failed {doc_name}: {exc}")
+
+    # Pre-build lookup for O(1) path resolution during deletes
+    files_by_doc_name: dict[str, list[FileRecord]] = {}
+    for rec in list_files(conn, collection):
+        files_by_doc_name.setdefault(rec.document_name, []).append(rec)
 
     for doc_name in plan.to_delete:
         delete_document(db, doc_name, collection=collection)
-        # Find the registry path for this document
-        for rec in list_files(conn, collection):
-            if rec.document_name == doc_name:
-                delete_file(conn, rec.path)
+        for rec in files_by_doc_name.get(doc_name, []):
+            delete_file(conn, rec.path)
         _progress(f"[{collection}] Deleted {doc_name}")
 
     return SyncResult(
