@@ -23,17 +23,25 @@ SUPPORTED_TEXT_EXTENSIONS = frozenset(_TEXT_FORMATS)
 
 
 def _read_text_with_fallback(file_path: Path) -> str:
-    """Read a text file, trying UTF-8 first then falling back to Latin-1.
+    """Read a text file, trying UTF-8 then CP1252 then Latin-1.
 
-    Latin-1 is a 1:1 byte mapping that decodes any byte sequence.
-    It produces correct results for Western European encodings
-    (Latin-1, CP1252) which cover German, French, Spanish, etc.
+    CP1252 (Windows-1252) is a superset of Latin-1 that correctly
+    decodes smart quotes and other characters in the 0x80-0x9F range.
+    Latin-1 is the final fallback — a 1:1 byte mapping that decodes
+    any byte sequence but maps 0x80-0x9F to C1 control characters.
     """
     try:
         return file_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         logger.info(
-            "UTF-8 decode failed for %s, falling back to latin-1",
+            "UTF-8 decode failed for %s, trying cp1252",
+            file_path.name,
+        )
+    try:
+        return file_path.read_text(encoding="cp1252")
+    except UnicodeDecodeError:
+        logger.info(
+            "CP1252 decode failed for %s, falling back to latin-1",
             file_path.name,
         )
         return file_path.read_text(encoding="latin-1")

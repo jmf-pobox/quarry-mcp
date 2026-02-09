@@ -33,10 +33,10 @@ class TestReadTextWithFallback:
 
     def test_cp1252_file(self, tmp_path: Path):
         f = tmp_path / "windows.txt"
-        # CP1252 curly quotes (0x93, 0x94) — valid latin-1 range
+        # 0x93/0x94 are left/right double quotes in CP1252
         f.write_bytes(b"\x93Hello\x94")
         result = _read_text_with_fallback(f)
-        assert "Hello" in result
+        assert result == "\u201cHello\u201d"
 
 
 class TestProcessTextFile:
