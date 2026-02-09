@@ -314,7 +314,7 @@ def ingest_image(
 def _prepare_image_bytes(image_path: Path, *, needs_conversion: bool) -> bytes:
     """Read image bytes, converting to a Textract-native format if needed.
 
-    MPO (iPhone multi-picture) is saved as JPEG to preserve size.
+    MPO (iPhone multi-picture) is re-encoded as JPEG to avoid PNG size bloat.
     BMP and WebP are saved as lossless PNG.
     """
     if not needs_conversion:
