@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
+    ocr_backend: str = "textract"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
