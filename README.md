@@ -234,6 +234,7 @@ All settings are configurable via environment variables:
 | `TEXTRACT_POLL_INITIAL` | `5.0` | Initial seconds between Textract status checks |
 | `TEXTRACT_POLL_MAX` | `30.0` | Maximum polling interval (exponential backoff, 1.5x) |
 | `TEXTRACT_MAX_WAIT` | `900` | Maximum seconds to wait for Textract job |
+| `REGISTRY_PATH` | `~/.quarry/data/registry.db` | Path to directory registration SQLite database |
 
 ## Architecture
 

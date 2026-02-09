@@ -18,7 +18,6 @@ from quarry.pipeline import SUPPORTED_EXTENSIONS, ingest_document
 from quarry.registry import (
     FileRecord,
     delete_file,
-    get_file,
     list_files,
     list_registrations,
     open_registry,
@@ -68,12 +67,15 @@ def compute_sync_plan(
     disk_files = discover_files(directory, extensions)
     disk_paths = {str(p) for p in disk_files}
 
+    # Single query: load all known files for this collection into a dict
+    known_files = {r.path: r for r in list_files(conn, collection)}
+
     to_ingest: list[Path] = []
     unchanged = 0
 
     for file_path in disk_files:
         stat = file_path.stat()
-        record = get_file(conn, str(file_path))
+        record = known_files.get(str(file_path))
         if (
             record is None
             or record.mtime != stat.st_mtime
@@ -83,8 +85,9 @@ def compute_sync_plan(
         else:
             unchanged += 1
 
-    db_files = list_files(conn, collection)
-    to_delete = [r.document_name for r in db_files if r.path not in disk_paths]
+    to_delete = [
+        r.document_name for r in known_files.values() if r.path not in disk_paths
+    ]
 
     return SyncPlan(
         to_ingest=to_ingest,
@@ -179,18 +182,25 @@ def sync_collection(
     for rec in list_files(conn, collection):
         files_by_doc_name.setdefault(rec.document_name, []).append(rec)
 
+    deleted = 0
     for doc_name in plan.to_delete:
-        delete_document(db, doc_name, collection=collection)
-        for rec in files_by_doc_name.get(doc_name, []):
-            delete_file(conn, rec.path, commit=False)
-        _progress(f"[{collection}] Deleted {doc_name}")
+        try:
+            delete_document(db, doc_name, collection=collection)
+            for rec in files_by_doc_name.get(doc_name, []):
+                delete_file(conn, rec.path, commit=False)
+            deleted += 1
+            _progress(f"[{collection}] Deleted {doc_name}")
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            errors.append(f"{doc_name}: {exc}")
+            _progress(f"[{collection}] Failed to delete {doc_name}: {exc}")
 
     conn.commit()
 
     return SyncResult(
         collection=collection,
         ingested=ingested,
-        deleted=len(plan.to_delete),
+        deleted=deleted,
         skipped=plan.unchanged,
         failed=failed,
         errors=errors,

@@ -208,5 +208,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             ingested_at   TEXT NOT NULL,
             FOREIGN KEY (collection) REFERENCES directories(collection)
         );
+        CREATE INDEX IF NOT EXISTS idx_files_collection_path
+            ON files(collection, path);
         """
     )
