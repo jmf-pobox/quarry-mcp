@@ -53,11 +53,25 @@ def register_directory(
         msg = f"Directory not found: {resolved}"
         raise FileNotFoundError(msg)
     now = datetime.now(UTC).isoformat()
-    conn.execute(
-        "INSERT INTO directories (directory, collection, registered_at) "
-        "VALUES (?, ?, ?)",
-        (str(resolved), collection, now),
-    )
+    try:
+        conn.execute(
+            "INSERT INTO directories (directory, collection, registered_at) "
+            "VALUES (?, ?, ?)",
+            (str(resolved), collection, now),
+        )
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT directory, collection FROM directories "
+            "WHERE directory = ? OR collection = ?",
+            (str(resolved), collection),
+        ).fetchone()
+        if existing and existing[0] == str(resolved):
+            msg = (
+                f"Directory already registered: {resolved} (collection '{existing[1]}')"
+            )
+        else:
+            msg = f"Collection name already in use: '{collection}'"
+        raise ValueError(msg) from None
     conn.commit()
     return DirectoryRegistration(
         directory=str(resolved),

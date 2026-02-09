@@ -156,12 +156,16 @@ def ingest_pdf(
 
     if text_pages:
         progress("Extracting text from %d pages", len(text_pages))
-        extracted = extract_text_pages(file_path, text_pages, total_pages)
+        extracted = extract_text_pages(
+            file_path, text_pages, total_pages, document_name=doc_name
+        )
         all_pages.extend(extracted)
 
     if image_pages:
         progress("Running OCR on %d pages via Textract", len(image_pages))
-        ocr_results = ocr_document_via_s3(file_path, image_pages, total_pages, settings)
+        ocr_results = ocr_document_via_s3(
+            file_path, image_pages, total_pages, settings, document_name=doc_name
+        )
         all_pages.extend(ocr_results)
 
     all_pages.sort(key=lambda p: p.page_number)
@@ -335,7 +339,9 @@ def _ingest_multipage_image(
     doc_name = document_name or file_path.name
     progress("Running OCR on %d pages via Textract (async)", page_count)
     all_page_numbers = list(range(1, page_count + 1))
-    pages = ocr_document_via_s3(file_path, all_page_numbers, page_count, settings)
+    pages = ocr_document_via_s3(
+        file_path, all_page_numbers, page_count, settings, document_name=doc_name
+    )
 
     return _chunk_embed_store(
         pages,

@@ -245,6 +245,7 @@ class TestIngestImageMultiPage:
             page_numbers: list[int],
             total_pages: int,
             settings: Settings,
+            **_kw: object,
         ) -> list[PageContent]:
             s3_calls.append((path, page_numbers, total_pages))
             return ocr_pages

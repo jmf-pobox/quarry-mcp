@@ -94,8 +94,17 @@ class TestRegisterDirectory:
         d2 = tmp_path / "b"
         d2.mkdir()
         register_directory(conn, d1, "shared")
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(ValueError, match="Collection name already in use"):
             register_directory(conn, d2, "shared")
+        conn.close()
+
+    def test_register_duplicate_directory(self, tmp_path: Path):
+        conn = open_registry(tmp_path / "r.db")
+        d = tmp_path / "course"
+        d.mkdir()
+        register_directory(conn, d, "first")
+        with pytest.raises(ValueError, match="Directory already registered"):
+            register_directory(conn, d, "second")
         conn.close()
 
 

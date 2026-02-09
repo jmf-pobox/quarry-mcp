@@ -484,12 +484,11 @@ class TestSyncAllRegistrations:
                 return_value=mock_results,
             ),
         ):
-            raw = sync_all_registrations()
-        # Progress lines precede the JSON summary
-        result = json.loads(raw[raw.index("{") :])
+            result = json.loads(sync_all_registrations())
         assert result["collections_synced"] == 1
         assert result["results"]["math"]["ingested"] == 2
         assert result["results"]["math"]["skipped"] == 3
+        assert isinstance(result["progress"], list)
 
 
 class TestListRegistrations:

@@ -364,17 +364,14 @@ def sync_all_registrations() -> str:
         for col, res in results.items()
     }
 
-    progress_lines.append("")
-    progress_lines.append(
-        json.dumps(
-            {
-                "collections_synced": len(results),
-                "results": summary,
-            },
-            indent=2,
-        )
+    return json.dumps(
+        {
+            "collections_synced": len(results),
+            "results": summary,
+            "progress": progress_lines,
+        },
+        indent=2,
     )
-    return "\n".join(progress_lines)
 
 
 @mcp.tool()

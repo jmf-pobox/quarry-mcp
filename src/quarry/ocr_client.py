@@ -19,6 +19,8 @@ def ocr_document_via_s3(
     page_numbers: list[int],
     total_pages: int,
     settings: Settings,
+    *,
+    document_name: str | None = None,
 ) -> list[PageContent]:
     """OCR document pages using AWS Textract async API via S3.
 
@@ -31,6 +33,8 @@ def ocr_document_via_s3(
         page_numbers: 1-indexed page numbers that need OCR.
         total_pages: Total pages in the document.
         settings: Application settings with AWS config.
+        document_name: Override for stored document name.
+            Defaults to ``document_path.name``.
 
     Returns:
         List of PageContent for each requested page.
@@ -39,6 +43,8 @@ def ocr_document_via_s3(
         RuntimeError: If the Textract job fails.
         TimeoutError: If the Textract job exceeds the configured timeout.
     """
+    doc_name = document_name or document_path.name
+
     s3 = cast("S3Client", boto3.client("s3"))
     textract = cast("TextractClient", boto3.client("textract"))
 
@@ -66,7 +72,7 @@ def ocr_document_via_s3(
         if page_num in requested:
             results.append(
                 PageContent(
-                    document_name=document_path.name,
+                    document_name=doc_name,
                     document_path=str(document_path.resolve()),
                     page_number=page_num,
                     total_pages=total_pages,
