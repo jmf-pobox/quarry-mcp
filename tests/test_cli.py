@@ -92,6 +92,8 @@ class TestDeleteCmd:
 class TestSearchCmd:
     def test_prints_results(self):
         mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
         mock_results = [
             {
                 "document_name": "report.pdf",
@@ -103,7 +105,10 @@ class TestSearchCmd:
         with (
             patch("quarry.__main__.get_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
             patch("quarry.__main__.search", return_value=mock_results),
         ):
             result = runner.invoke(app, ["search", "revenue growth"])
@@ -115,10 +120,15 @@ class TestSearchCmd:
 
     def test_no_results(self):
         mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
         with (
             patch("quarry.__main__.get_settings", return_value=_mock_settings()),
             patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
             patch("quarry.__main__.search", return_value=[]),
         ):
             result = runner.invoke(app, ["search", "nonexistent topic"])

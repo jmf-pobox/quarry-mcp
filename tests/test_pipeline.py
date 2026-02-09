@@ -32,6 +32,33 @@ def _make_page_content(
     )
 
 
+def _mock_ocr_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    ocr_document_return: list[PageContent] | None = None,
+) -> MagicMock:
+    """Mock get_ocr_backend to return a backend with configurable returns."""
+    backend = MagicMock()
+    if ocr_document_return is not None:
+        backend.ocr_document.return_value = ocr_document_return
+    monkeypatch.setattr("quarry.pipeline.get_ocr_backend", lambda _settings: backend)
+    return backend
+
+
+def _mock_embedding_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    vectors: np.ndarray,
+) -> MagicMock:
+    """Mock get_embedding_backend to return a backend with given vectors."""
+    backend = MagicMock()
+    backend.embed_texts.return_value = vectors
+    backend.model_name = "test-model"
+    monkeypatch.setattr(
+        "quarry.pipeline.get_embedding_backend", lambda _settings: backend
+    )
+    return backend
+
+
 class TestIngestDocument:
     def test_file_not_found(self):
         from quarry.pipeline import ingest_document
@@ -80,10 +107,7 @@ class TestIngestDocument:
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
-        monkeypatch.setattr(
-            "quarry.pipeline.embed_texts",
-            lambda _texts, model_name: vectors,
-        )
+        _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
             "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,
@@ -124,18 +148,12 @@ class TestIngestDocument:
         vectors = np.zeros((1, 768), dtype=np.float32)
 
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
-        monkeypatch.setattr(
-            "quarry.pipeline.ocr_document_via_s3",
-            lambda _path, _pages, _total, _settings, **_kw: ocr_pages,
-        )
+        _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
-        monkeypatch.setattr(
-            "quarry.pipeline.embed_texts",
-            lambda _texts, model_name: vectors,
-        )
+        _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
             "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,
@@ -159,10 +177,7 @@ class TestIngestDocument:
         ocr_pages = [_make_page_content(1, PageType.IMAGE, "")]
 
         monkeypatch.setattr("quarry.pipeline.analyze_pdf", lambda _path: analyses)
-        monkeypatch.setattr(
-            "quarry.pipeline.ocr_document_via_s3",
-            lambda _path, _pages, _total, _settings, **_kw: ocr_pages,
-        )
+        _mock_ocr_backend(monkeypatch, ocr_document_return=ocr_pages)
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
@@ -260,10 +275,7 @@ class TestIngestDocument:
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
-        monkeypatch.setattr(
-            "quarry.pipeline.embed_texts",
-            lambda _texts, model_name: vectors,
-        )
+        _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
             "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,
@@ -310,10 +322,7 @@ class TestIngestText:
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
-        monkeypatch.setattr(
-            "quarry.pipeline.embed_texts",
-            lambda _texts, model_name: vectors,
-        )
+        _mock_embedding_backend(monkeypatch, vectors)
         monkeypatch.setattr(
             "quarry.pipeline.insert_chunks",
             lambda _db, _chunks, _vectors: 1,

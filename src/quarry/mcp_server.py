@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
 from quarry.config import Settings, get_settings
 from quarry.database import (
@@ -20,7 +21,6 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document, ingest_text as pipeline_ingest_text
 from quarry.registry import (
     deregister_directory as registry_deregister,
@@ -79,7 +79,7 @@ def search_documents(
     settings = _settings()
     db = _db()
 
-    query_vector = embed_query(query, model_name=settings.embedding_model)
+    query_vector = get_embedding_backend(settings).embed_query(query)
 
     results = search(
         db,

@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 from rich.progress import Progress
 
+from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
 from quarry.config import get_settings
 from quarry.database import (
@@ -21,7 +22,6 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document
 from quarry.registry import (
     deregister_directory,
@@ -103,7 +103,7 @@ def search_cmd(
     settings = get_settings()
     db = get_db(settings.lancedb_path)
 
-    query_vector = embed_query(query, model_name=settings.embedding_model)
+    query_vector = get_embedding_backend(settings).embed_query(query)
     results = search(
         db, query_vector, limit=limit, collection_filter=collection or None
     )

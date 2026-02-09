@@ -4,16 +4,15 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from quarry.backends import get_embedding_backend, get_ocr_backend
 from quarry.chunker import chunk_pages
 from quarry.config import Settings
 from quarry.database import delete_document, insert_chunks
-from quarry.embeddings import embed_texts
 from quarry.image_analyzer import (
     SUPPORTED_IMAGE_EXTENSIONS,
     analyze_image,
 )
 from quarry.models import PageContent, PageType
-from quarry.ocr_client import ocr_document_via_s3, ocr_image_bytes
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.text_extractor import extract_text_pages
 from quarry.text_processor import (
@@ -162,9 +161,10 @@ def ingest_pdf(
         all_pages.extend(extracted)
 
     if image_pages:
-        progress("Running OCR on %d pages via Textract", len(image_pages))
-        ocr_results = ocr_document_via_s3(
-            file_path, image_pages, total_pages, settings, document_name=doc_name
+        progress("Running OCR on %d pages", len(image_pages))
+        ocr = get_ocr_backend(settings)
+        ocr_results = ocr.ocr_document(
+            file_path, image_pages, total_pages, document_name=doc_name
         )
         all_pages.extend(ocr_results)
 
@@ -293,7 +293,8 @@ def ingest_image(
     image_bytes = _prepare_image_bytes(
         file_path, needs_conversion=analysis.needs_conversion
     )
-    page = ocr_image_bytes(
+    ocr = get_ocr_backend(settings)
+    page = ocr.ocr_image_bytes(
         image_bytes,
         document_name=doc_name,
         document_path=str(file_path.resolve()),
@@ -337,10 +338,11 @@ def _ingest_multipage_image(
 ) -> dict[str, object]:
     """Ingest a multi-page image (TIFF) via async Textract API."""
     doc_name = document_name or file_path.name
-    progress("Running OCR on %d pages via Textract (async)", page_count)
+    progress("Running OCR on %d pages (async)", page_count)
     all_page_numbers = list(range(1, page_count + 1))
-    pages = ocr_document_via_s3(
-        file_path, all_page_numbers, page_count, settings, document_name=doc_name
+    ocr = get_ocr_backend(settings)
+    pages = ocr.ocr_document(
+        file_path, all_page_numbers, page_count, document_name=doc_name
     )
 
     return _chunk_embed_store(
@@ -456,9 +458,10 @@ def _chunk_embed_store(
             **extra,
         }
 
-    progress("Generating embeddings (%s)", settings.embedding_model)
+    embedder = get_embedding_backend(settings)
+    progress("Generating embeddings (%s)", embedder.model_name)
     texts = [c.text for c in chunks]
-    vectors = embed_texts(texts, model_name=settings.embedding_model)
+    vectors = embedder.embed_texts(texts)
 
     progress("Storing in LanceDB")
     inserted = insert_chunks(db, chunks, vectors)

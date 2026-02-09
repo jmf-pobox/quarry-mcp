@@ -197,6 +197,12 @@ class TestStatus:
         assert result["registered_directories"] == 0
 
 
+def _mock_embedding_backend(mock_vector: np.ndarray) -> MagicMock:
+    backend = MagicMock()
+    backend.embed_query.return_value = mock_vector
+    return backend
+
+
 class TestSearchDocuments:
     def test_returns_results(self, tmp_path: Path):
         settings = _settings(tmp_path)
@@ -214,7 +220,10 @@ class TestSearchDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.mcp_server.get_embedding_backend",
+                return_value=_mock_embedding_backend(mock_vector),
+            ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
             result = json.loads(search_documents("revenue growth"))
@@ -231,7 +240,10 @@ class TestSearchDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.mcp_server.get_embedding_backend",
+                return_value=_mock_embedding_backend(mock_vector),
+            ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
             search_documents("test", limit=100)
@@ -245,7 +257,10 @@ class TestSearchDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.mcp_server.get_embedding_backend",
+                return_value=_mock_embedding_backend(mock_vector),
+            ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
             search_documents("test", document_filter="report.pdf")
@@ -259,7 +274,10 @@ class TestSearchDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.mcp_server.get_embedding_backend",
+                return_value=_mock_embedding_backend(mock_vector),
+            ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
             search_documents("test", document_filter="")
@@ -273,7 +291,10 @@ class TestSearchDocuments:
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
-            patch("quarry.mcp_server.embed_query", return_value=mock_vector),
+            patch(
+                "quarry.mcp_server.get_embedding_backend",
+                return_value=_mock_embedding_backend(mock_vector),
+            ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
             search_documents("test", collection="math")

@@ -49,14 +49,10 @@ def _create_multi_page_tiff(path: Path, page_count: int) -> None:
     frames[0].save(path, format="TIFF", save_all=True, append_images=frames[1:])
 
 
-def _mock_single_page_pipeline(
-    monkeypatch: pytest.MonkeyPatch, chunks: list[Chunk]
-) -> None:
-    """Set up monkeypatches for single-page image ingestion."""
-    vectors = np.zeros((len(chunks), 768), dtype=np.float32)
-
-    monkeypatch.setattr(
-        "quarry.pipeline.ocr_image_bytes",
+def _mock_ocr_backend_single(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Mock get_ocr_backend for single-page image tests."""
+    backend = MagicMock()
+    backend.ocr_image_bytes.side_effect = (
         lambda image_bytes, document_name, document_path: PageContent(
             document_name=document_name,
             document_path=document_path,
@@ -64,15 +60,29 @@ def _mock_single_page_pipeline(
             total_pages=1,
             text="ocr text",
             page_type=PageType.IMAGE,
-        ),
+        )
     )
+    monkeypatch.setattr("quarry.pipeline.get_ocr_backend", lambda _settings: backend)
+    return backend
+
+
+def _mock_single_page_pipeline(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[Chunk]
+) -> None:
+    """Set up monkeypatches for single-page image ingestion."""
+    vectors = np.zeros((len(chunks), 768), dtype=np.float32)
+
+    _mock_ocr_backend_single(monkeypatch)
     monkeypatch.setattr(
         "quarry.pipeline.chunk_pages",
         lambda _pages, max_chars, overlap_chars, **_kw: chunks,
     )
+    embedding_backend = MagicMock()
+    embedding_backend.embed_texts.return_value = vectors
+    embedding_backend.model_name = "test-model"
     monkeypatch.setattr(
-        "quarry.pipeline.embed_texts",
-        lambda _texts, model_name: vectors,
+        "quarry.pipeline.get_embedding_backend",
+        lambda _settings: embedding_backend,
     )
     monkeypatch.setattr(
         "quarry.pipeline.insert_chunks",
@@ -118,8 +128,9 @@ class TestIngestImageSinglePage:
         _create_image(bmp_file, "BMP")
 
         ocr_calls: list[bytes] = []
+        backend = MagicMock()
 
-        def _mock_ocr_bytes(
+        def _ocr_bytes(
             image_bytes: bytes, document_name: str, document_path: str
         ) -> PageContent:
             ocr_calls.append(image_bytes)
@@ -132,7 +143,10 @@ class TestIngestImageSinglePage:
                 page_type=PageType.IMAGE,
             )
 
-        monkeypatch.setattr("quarry.pipeline.ocr_image_bytes", _mock_ocr_bytes)
+        backend.ocr_image_bytes.side_effect = _ocr_bytes
+        monkeypatch.setattr(
+            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+        )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
@@ -154,8 +168,9 @@ class TestIngestImageSinglePage:
         _create_image(webp_file, "WEBP")
 
         ocr_calls: list[bytes] = []
+        backend = MagicMock()
 
-        def _mock_ocr_bytes(
+        def _ocr_bytes(
             image_bytes: bytes, document_name: str, document_path: str
         ) -> PageContent:
             ocr_calls.append(image_bytes)
@@ -168,7 +183,10 @@ class TestIngestImageSinglePage:
                 page_type=PageType.IMAGE,
             )
 
-        monkeypatch.setattr("quarry.pipeline.ocr_image_bytes", _mock_ocr_bytes)
+        backend.ocr_image_bytes.side_effect = _ocr_bytes
+        monkeypatch.setattr(
+            "quarry.pipeline.get_ocr_backend", lambda _settings: backend
+        )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [],
@@ -238,26 +256,21 @@ class TestIngestImageMultiPage:
         ]
         vectors = np.zeros((1, 768), dtype=np.float32)
 
-        s3_calls: list[tuple[object, ...]] = []
-
-        def _mock_ocr_s3(
-            path: Path,
-            page_numbers: list[int],
-            total_pages: int,
-            settings: Settings,
-            **_kw: object,
-        ) -> list[PageContent]:
-            s3_calls.append((path, page_numbers, total_pages))
-            return ocr_pages
-
-        monkeypatch.setattr("quarry.pipeline.ocr_document_via_s3", _mock_ocr_s3)
+        ocr_backend = MagicMock()
+        ocr_backend.ocr_document.return_value = ocr_pages
+        monkeypatch.setattr(
+            "quarry.pipeline.get_ocr_backend", lambda _settings: ocr_backend
+        )
         monkeypatch.setattr(
             "quarry.pipeline.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: chunks,
         )
+        embedding_backend = MagicMock()
+        embedding_backend.embed_texts.return_value = vectors
+        embedding_backend.model_name = "test-model"
         monkeypatch.setattr(
-            "quarry.pipeline.embed_texts",
-            lambda _texts, model_name: vectors,
+            "quarry.pipeline.get_embedding_backend",
+            lambda _settings: embedding_backend,
         )
         monkeypatch.setattr(
             "quarry.pipeline.insert_chunks",
@@ -273,9 +286,10 @@ class TestIngestImageMultiPage:
         assert result["format"] == "TIFF"
         assert result["image_pages"] == 3
         assert result["chunks"] == 1
-        # Verify async S3 path was used with all pages
-        assert len(s3_calls) == 1
-        assert s3_calls[0][1] == [1, 2, 3]
+        # Verify backend's ocr_document was called with all pages
+        ocr_backend.ocr_document.assert_called_once()
+        call_args = ocr_backend.ocr_document.call_args
+        assert call_args[0][1] == [1, 2, 3]
 
 
 class TestIngestImageProgress:
