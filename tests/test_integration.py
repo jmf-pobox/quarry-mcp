@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from quarry.backends import get_embedding_backend
 from quarry.config import Settings
 from quarry.database import (
     count_chunks,
@@ -12,7 +13,6 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.embeddings import embed_query
 from quarry.pipeline import ingest_document, ingest_text
 from quarry.types import LanceDB
 
@@ -34,7 +34,7 @@ def _search(
     collection_filter: str | None = None,
 ) -> list[dict[str, object]]:
     """Embed a query and search the database."""
-    vector = embed_query(query, model_name=settings.embedding_model)
+    vector = get_embedding_backend(settings).embed_query(query)
     return search(
         db,
         vector,
