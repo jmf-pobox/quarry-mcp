@@ -1,10 +1,32 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
-from dataclasses import dataclass
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
-from quarry.registry import get_file, list_files
+from quarry.config import Settings
+from quarry.database import (
+    create_collection_index,
+    delete_document,
+    optimize_table,
+)
+from quarry.pipeline import SUPPORTED_EXTENSIONS, ingest_document
+from quarry.registry import (
+    FileRecord,
+    delete_file,
+    get_file,
+    list_files,
+    list_registrations,
+    open_registry,
+    upsert_file,
+)
+from quarry.types import LanceDB
+
+logger = logging.getLogger(__name__)
 
 
 def discover_files(
@@ -67,3 +89,131 @@ def compute_sync_plan(
         to_delete=to_delete,
         unchanged=unchanged,
     )
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    collection: str
+    ingested: int
+    deleted: int
+    skipped: int
+    failed: int
+    errors: list[str] = field(default_factory=list)
+
+
+def sync_collection(
+    directory: Path,
+    collection: str,
+    db: LanceDB,
+    settings: Settings,
+    conn: sqlite3.Connection,
+    *,
+    max_workers: int = 4,
+    progress_callback: Callable[[str], None] | None = None,
+) -> SyncResult:
+    """Sync a single registered directory with LanceDB.
+
+    Computes the delta, ingests new/changed files in parallel,
+    removes deleted files, and updates the registry.
+    """
+
+    def _progress(msg: str) -> None:
+        logger.info(msg)
+        if progress_callback is not None:
+            progress_callback(msg)
+
+    plan = compute_sync_plan(directory, collection, conn, SUPPORTED_EXTENSIONS)
+    _progress(
+        f"[{collection}] {len(plan.to_ingest)} to ingest, "
+        f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
+    )
+
+    ingested = 0
+    failed = 0
+    errors: list[str] = []
+
+    if plan.to_ingest:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    ingest_document,
+                    fp,
+                    db,
+                    settings,
+                    overwrite=True,
+                    collection=collection,
+                ): fp
+                for fp in plan.to_ingest
+            }
+            for future in as_completed(futures):
+                fp = futures[future]
+                try:
+                    future.result()
+                    stat = fp.stat()
+                    upsert_file(
+                        conn,
+                        FileRecord(
+                            path=str(fp),
+                            collection=collection,
+                            document_name=fp.name,
+                            mtime=stat.st_mtime,
+                            size=stat.st_size,
+                            ingested_at=datetime.now(UTC).isoformat(),
+                        ),
+                    )
+                    ingested += 1
+                    _progress(f"[{collection}] Ingested {fp.name}")
+                except Exception as exc:  # noqa: BLE001
+                    failed += 1
+                    errors.append(f"{fp.name}: {exc}")
+                    _progress(f"[{collection}] Failed {fp.name}: {exc}")
+
+    for doc_name in plan.to_delete:
+        delete_document(db, doc_name, collection=collection)
+        # Find the registry path for this document
+        for rec in list_files(conn, collection):
+            if rec.document_name == doc_name:
+                delete_file(conn, rec.path)
+        _progress(f"[{collection}] Deleted {doc_name}")
+
+    return SyncResult(
+        collection=collection,
+        ingested=ingested,
+        deleted=len(plan.to_delete),
+        skipped=plan.unchanged,
+        failed=failed,
+        errors=errors,
+    )
+
+
+def sync_all(
+    db: LanceDB,
+    settings: Settings,
+    *,
+    max_workers: int = 4,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, SyncResult]:
+    """Sync all registered directories.
+
+    Opens the registry, iterates all registrations, syncs each,
+    then optimizes the LanceDB table.
+    """
+    conn = open_registry(settings.registry_path)
+    try:
+        registrations = list_registrations(conn)
+        results: dict[str, SyncResult] = {}
+        for reg in registrations:
+            results[reg.collection] = sync_collection(
+                Path(reg.directory),
+                reg.collection,
+                db,
+                settings,
+                conn,
+                max_workers=max_workers,
+                progress_callback=progress_callback,
+            )
+        create_collection_index(db)
+        optimize_table(db)
+        return results
+    finally:
+        conn.close()
