@@ -32,6 +32,9 @@ htmlcov/
 # mypy
 .mypy_cache/
 
+# pytest
+.pytest_cache/
+
 # ruff
 .ruff_cache/
 
