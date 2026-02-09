@@ -46,7 +46,8 @@ def register_directory(
 
     Raises:
         FileNotFoundError: If *directory* does not exist.
-        sqlite3.IntegrityError: If *collection* is already registered.
+        ValueError: If *directory* is already registered or *collection*
+            name is already in use.
     """
     resolved = directory.resolve()
     if not resolved.is_dir():
