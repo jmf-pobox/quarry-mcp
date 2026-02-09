@@ -125,6 +125,31 @@ class TestSearchCmd:
         assert result.exit_code == 0
 
 
+class TestDeleteCollectionCmd:
+    def test_deletes_collection(self):
+        with (
+            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_collection", return_value=50),
+        ):
+            result = runner.invoke(app, ["delete-collection", "math"])
+
+        assert result.exit_code == 0
+        assert "Deleted 50 chunks" in result.output
+        assert "math" in result.output
+
+    def test_not_found(self):
+        with (
+            patch("quarry.__main__.get_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_collection", return_value=0),
+        ):
+            result = runner.invoke(app, ["delete-collection", "unknown"])
+
+        assert result.exit_code == 0
+        assert "No data found" in result.output
+
+
 class TestCollectionsCmd:
     def test_lists_collections(self):
         mock_cols = [

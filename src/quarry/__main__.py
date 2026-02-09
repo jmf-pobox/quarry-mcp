@@ -14,6 +14,7 @@ from rich.progress import Progress
 from quarry.collections import derive_collection
 from quarry.config import get_settings
 from quarry.database import (
+    delete_collection as db_delete_collection,
     delete_document as db_delete_document,
     get_db,
     list_collections as db_list_collections,
@@ -170,6 +171,22 @@ def collections_cmd() -> None:
             f"{col['document_count']} documents, "
             f"{col['chunk_count']} chunks"
         )
+
+
+@app.command(name="delete-collection")
+@_cli_errors
+def delete_collection_cmd(
+    collection: Annotated[str, typer.Argument(help="Collection name to delete")],
+) -> None:
+    """Delete all indexed data for a collection."""
+    settings = get_settings()
+    db = get_db(settings.lancedb_path)
+    deleted = db_delete_collection(db, collection)
+
+    if deleted == 0:
+        print(f"No data found for collection {collection!r}")
+    else:
+        print(f"Deleted {deleted} chunks for collection {collection!r}")
 
 
 @app.command()
