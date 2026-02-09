@@ -11,18 +11,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_model: EmbeddingModel | None = None
+_models: dict[str, EmbeddingModel] = {}
 
 
 def _get_model(model_name: str) -> EmbeddingModel:
-    global _model
-    if _model is None:
+    if model_name not in _models:
         from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
         logger.info("Loading embedding model: %s", model_name)
-        _model = SentenceTransformer(model_name)
+        _models[model_name] = SentenceTransformer(model_name)
         logger.info("Model loaded")
-    return _model
+    return _models[model_name]
 
 
 def embed_texts(

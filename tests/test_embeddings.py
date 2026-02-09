@@ -16,7 +16,7 @@ def _mock_model() -> MagicMock:
 
 class TestEmbedTexts:
     def setup_method(self):
-        embeddings_mod._model = None
+        embeddings_mod._models.clear()
 
     def test_returns_embeddings(self):
         model = _mock_model()
@@ -50,7 +50,7 @@ class TestEmbedTexts:
 
 class TestEmbedQuery:
     def setup_method(self):
-        embeddings_mod._model = None
+        embeddings_mod._models.clear()
 
     def test_uses_query_prompt(self):
         model = _mock_model()
