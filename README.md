@@ -36,7 +36,7 @@ Quarry also preserves full page text alongside chunks, so LLMs can reference sur
 - **Local vector embeddings** using snowflake-arctic-embed-m-v1.5 (768-dim)
 - **LanceDB** for fast, local vector storage (no external database)
 - **Directory registration and incremental sync** — register directories, detect new/changed/deleted files via mtime+size, re-index in parallel
-- **MCP server** with 11 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `delete_collection`, `list_collections`, `register_directory`, `deregister_directory`, `sync_all_registrations`, `list_registrations`, `status`
+- **MCP server** with 13 tools: `search_documents`, `ingest`, `ingest_text`, `get_documents`, `get_page`, `delete_document`, `delete_collection`, `list_collections`, `register_directory`, `deregister_directory`, `sync_all_registrations`, `list_registrations`, `status`
 - **CLI** for ingestion, search, document management, directory registration, and sync
 - **Full page text preserved** alongside chunks for LLM reference
 

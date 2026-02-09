@@ -410,11 +410,14 @@ def status() -> str:
     chunks = count_chunks(db)
     cols = db_list_collections(db)
 
-    conn = open_registry(settings.registry_path)
-    try:
-        regs = registry_list(conn)
-    finally:
-        conn.close()
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = registry_list(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
 
     db_size_bytes = (
         sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())

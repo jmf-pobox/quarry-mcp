@@ -122,7 +122,8 @@ def sync_collection(
         if progress_callback is not None:
             progress_callback(msg)
 
-    plan = compute_sync_plan(directory, collection, conn, SUPPORTED_EXTENSIONS)
+    resolved = directory.resolve()
+    plan = compute_sync_plan(resolved, collection, conn, SUPPORTED_EXTENSIONS)
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
@@ -142,13 +143,13 @@ def sync_collection(
                     settings,
                     overwrite=True,
                     collection=collection,
-                    document_name=str(fp.relative_to(directory)),
+                    document_name=str(fp.relative_to(resolved)),
                 ): fp
                 for fp in plan.to_ingest
             }
             for future in as_completed(futures):
                 fp = futures[future]
-                doc_name = str(fp.relative_to(directory))
+                doc_name = str(fp.relative_to(resolved))
                 try:
                     future.result()
                     stat = fp.stat()

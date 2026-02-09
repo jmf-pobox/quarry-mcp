@@ -133,6 +133,7 @@ class TestStatus:
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
         (settings.lancedb_path / "data.lance").write_bytes(b"x" * 1024)
+        settings.registry_path.touch()
 
         mock_docs = [{"document_name": "a.pdf"}, {"document_name": "b.pdf"}]
         mock_cols = [{"collection": "math", "document_count": 2, "chunk_count": 42}]
@@ -160,6 +161,7 @@ class TestStatus:
     def test_empty_database(self, tmp_path: Path):
         settings = _settings(tmp_path)
         settings.lancedb_path.mkdir(parents=True)
+        settings.registry_path.touch()
 
         mock_conn = MagicMock()
         with (
@@ -181,20 +183,18 @@ class TestStatus:
 
     def test_nonexistent_db_path(self, tmp_path: Path):
         settings = _settings(tmp_path)
-
-        mock_conn = MagicMock()
+        # registry_path doesn't exist → status() skips open_registry
         with (
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
             patch("quarry.mcp_server.count_chunks", return_value=0),
             patch("quarry.mcp_server.db_list_collections", return_value=[]),
-            patch("quarry.mcp_server.open_registry", return_value=mock_conn),
-            patch("quarry.mcp_server.registry_list", return_value=[]),
         ):
             result = json.loads(status())
 
         assert result["database_size_bytes"] == 0
+        assert result["registered_directories"] == 0
 
 
 class TestSearchDocuments:

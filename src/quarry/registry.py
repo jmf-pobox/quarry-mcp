@@ -76,7 +76,8 @@ def deregister_directory(
     caller can clean them from LanceDB.
     """
     rows = conn.execute(
-        "SELECT document_name FROM files WHERE collection = ?",
+        "SELECT DISTINCT document_name FROM files WHERE collection = ? "
+        "ORDER BY document_name",
         (collection,),
     ).fetchall()
     document_names = [r[0] for r in rows]
