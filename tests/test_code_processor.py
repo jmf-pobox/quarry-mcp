@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -12,17 +11,6 @@ from quarry.code_processor import (
     process_code_file,
 )
 from quarry.models import PageType
-
-try:
-    import tree_sitter_language_pack  # noqa: F401
-
-    _HAS_TREESITTER = True
-except ImportError:
-    _HAS_TREESITTER = False
-
-needs_treesitter = pytest.mark.skipif(
-    not _HAS_TREESITTER, reason="tree-sitter-language-pack not installed"
-)
 
 
 class TestSupportedExtensions:
@@ -37,7 +25,6 @@ class TestSupportedExtensions:
         assert overlap == frozenset(), f"Overlapping extensions: {overlap}"
 
 
-@needs_treesitter
 class TestProcessCodeFile:
     def test_python_functions(self, tmp_path: Path):
         f = tmp_path / "example.py"
@@ -201,19 +188,12 @@ class TestFallbackSplit:
 
 
 class TestTreeSitterEdgeCases:
-    def test_returns_none_when_not_installed(self):
-        with patch.dict("sys.modules", {"tree_sitter_language_pack": None}):
-            result = _split_with_treesitter("def foo(): pass", "python", "test.py")
-            assert result is None
-
-    @needs_treesitter
     def test_returns_none_for_unknown_language(self):
         result = _split_with_treesitter(
             "some code", "nonexistent_language_xyz", "test.xyz"
         )
         assert result is None
 
-    @needs_treesitter
     def test_single_function_returns_one_section(self):
         result = _split_with_treesitter(
             "def hello():\n    print('hi')\n", "python", "test.py"
@@ -223,7 +203,6 @@ class TestTreeSitterEdgeCases:
         assert "def hello" in result[0]
 
 
-@needs_treesitter
 class TestImportsGrouped:
     """Imports and small top-level statements should be grouped."""
 

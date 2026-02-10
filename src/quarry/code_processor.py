@@ -4,6 +4,8 @@ import logging
 import re
 from pathlib import Path
 
+from tree_sitter_language_pack import get_parser
+
 from quarry.models import PageContent, PageType
 from quarry.text_processor import _read_text_with_fallback
 
@@ -103,8 +105,8 @@ _DEFINITION_NODE_TYPES = frozenset(
 def process_code_file(file_path: Path) -> list[PageContent]:
     """Parse a source code file into semantic sections.
 
-    Uses tree-sitter for language-aware splitting when available.
-    Falls back to blank-line splitting otherwise.
+    Uses tree-sitter for language-aware splitting. Falls back to
+    blank-line splitting for unsupported language grammars.
 
     Args:
         file_path: Path to source code file.
@@ -144,19 +146,9 @@ def _split_with_treesitter(
 ) -> list[str] | None:
     """Split source code using tree-sitter AST.
 
-    Returns None if tree-sitter is not installed or the language is
-    not available, signaling the caller to use fallback splitting.
+    Returns None if the language grammar is not available,
+    signaling the caller to use fallback splitting.
     """
-    try:
-        from tree_sitter_language_pack import get_parser  # noqa: PLC0415
-    except ImportError:
-        logger.info(
-            "tree-sitter-language-pack not installed; "
-            "falling back to plain splitting for %s",
-            document_name,
-        )
-        return None
-
     try:
         parser = get_parser(language)
     except (KeyError, ValueError, LookupError):
