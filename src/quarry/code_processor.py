@@ -160,7 +160,7 @@ def _split_with_treesitter(
         return None
 
     try:
-        parser = get_parser(language)  # type: ignore[arg-type]
+        parser = get_parser(language)
     except (KeyError, ValueError, LookupError):
         logger.warning(
             "tree-sitter language %r not available for %s; "
