@@ -10,9 +10,18 @@ Categories: `format` (file type support), `provider` (OCR/embedding backends),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-10
+
 ### Format
 - Source code ingestion with tree-sitter parsing (30+ languages, required dependency)
 - `PageType.CODE` enum value for distinguishing code chunks from prose
+
+### Pipeline
+- Handle MPO (iPhone multi-picture) JPEG format — converted to standard JPEG before OCR
+- Handle non-UTF-8 text file encodings (UTF-8 → CP1252 → Latin-1 fallback chain)
+- Downscale oversized images before OCR (halve dimensions up to 5x)
+- Skip macOS resource fork files (`._*`, `.DS_Store`) and hidden directories during sync
+- Fixed concurrent table creation race condition via double-checked locking
 
 ### Infra
 - **Breaking:** Renamed LanceDB table from `ocr_chunks` to `chunks`. Run `quarry sync` after upgrading to re-index.
