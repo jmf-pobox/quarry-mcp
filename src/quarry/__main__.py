@@ -13,7 +13,7 @@ from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import get_settings
+from quarry.config import configure_logging, get_settings
 from quarry.database import (
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
@@ -31,7 +31,7 @@ from quarry.registry import (
 )
 from quarry.sync import sync_all
 
-logging.basicConfig(level=logging.INFO)
+configure_logging(get_settings())
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")

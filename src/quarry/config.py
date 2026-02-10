@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
@@ -13,6 +15,7 @@ class Settings(BaseSettings):
 
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
+    log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
     ocr_backend: str = "textract"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
@@ -30,3 +33,26 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     return Settings()
+
+
+def configure_logging(settings: Settings) -> None:
+    """Set up root logger with stderr and file handlers at INFO level."""
+    settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    stderr_handler = logging.StreamHandler()
+    stderr_handler.setLevel(logging.INFO)
+    stderr_handler.setFormatter(fmt)
+    root.addHandler(stderr_handler)
+
+    file_handler = RotatingFileHandler(
+        settings.log_path,
+        maxBytes=5_000_000,  # 5 MB per file
+        backupCount=3,  # keep quarry.log.1, .2, .3
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)

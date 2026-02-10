@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, get_settings
+from quarry.config import Settings, configure_logging, get_settings
 from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
@@ -31,7 +31,7 @@ from quarry.registry import (
 from quarry.sync import sync_all as engine_sync_all
 from quarry.types import LanceDB
 
-logging.basicConfig(level=logging.INFO)
+configure_logging(get_settings())
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("quarry-mcp")
