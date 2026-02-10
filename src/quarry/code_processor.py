@@ -152,12 +152,11 @@ def _split_with_treesitter(
     try:
         parser = get_parser(language)
     except (KeyError, ValueError, LookupError):
-        logger.warning(
+        logger.info(
             "tree-sitter language %r not available for %s; "
             "falling back to plain splitting",
             language,
             document_name,
-            exc_info=True,
         )
         return None
 
