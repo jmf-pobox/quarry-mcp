@@ -12,6 +12,7 @@ Categories: `format` (file type support), `provider` (OCR/embedding backends),
 
 ### Infra
 - Renamed LanceDB table from `ocr_chunks` to `chunks`
+- Persistent logging to `~/.quarry/data/quarry.log` with rotation (5 MB, 3 backups)
 
 ## [0.2.1] - 2026-02-09
 
