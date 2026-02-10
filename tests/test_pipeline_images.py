@@ -367,8 +367,6 @@ class TestPrepareImageBytes:
         """PNG exceeding max_bytes is re-encoded as JPEG."""
         path = tmp_path / "big.png"
         # Random noise: PNG can't compress it well, JPEG can
-        import numpy as np
-
         rng = np.random.default_rng(42)
         pixels = rng.integers(0, 256, (500, 500, 3), dtype=np.uint8)
         img = Image.fromarray(pixels)
@@ -388,11 +386,12 @@ class TestPrepareImageBytes:
     def test_oversized_jpeg_downscaled(self, tmp_path: Path) -> None:
         """JPEG exceeding max_bytes is downscaled."""
         path = tmp_path / "big.jpg"
-        # Create a large JPEG with random-ish content
-        img = Image.new("RGB", (4000, 3000), color=(0, 0, 0))
-        for x in range(0, 4000, 10):
-            for y in range(0, 3000, 10):
-                img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+        # Patterned image that doesn't compress well in JPEG
+        yy, xx = np.indices((3000, 4000))
+        pixels = np.stack([xx % 256, yy % 256, (xx + yy) % 256], axis=-1).astype(
+            np.uint8
+        )
+        img = Image.fromarray(pixels, mode="RGB")
         img.save(path, format="JPEG", quality=99)
         jpeg_size = path.stat().st_size
 
@@ -414,6 +413,22 @@ class TestPrepareImageBytes:
 
         result = _prepare_image_bytes(path, needs_conversion=True, max_bytes=10_000_000)
         assert result[:4] == b"\x89PNG"
+
+    def test_rgba_png_converts_to_jpeg(self, tmp_path: Path) -> None:
+        """RGBA PNG exceeding max_bytes converts to RGB JPEG."""
+        path = tmp_path / "screenshot.png"
+        rng = np.random.default_rng(99)
+        pixels = rng.integers(0, 256, (500, 500, 4), dtype=np.uint8)
+        img = Image.fromarray(pixels, mode="RGBA")
+        img.save(path, format="PNG")
+        png_size = path.stat().st_size
+
+        from quarry.pipeline import _prepare_image_bytes
+
+        result = _prepare_image_bytes(
+            path, needs_conversion=False, max_bytes=png_size - 1
+        )
+        assert result[:2] == b"\xff\xd8"
 
     def test_mpo_conversion_with_max_bytes(self, tmp_path: Path) -> None:
         """MPO still converts to JPEG when max_bytes is set."""

@@ -377,30 +377,43 @@ def _encode_image_to_fit(
     # Re-encode as JPEG if not already (much smaller for photos)
     if out_fmt != "JPEG":
         out_fmt, save_kw = "JPEG", {"quality": 95}
+        rgb = img.convert("RGB") if img.mode != "RGB" else img
         buf = io.BytesIO()
-        img.save(buf, format=out_fmt, **save_kw)
+        rgb.save(buf, format=out_fmt, **save_kw)
         data = buf.getvalue()
         logger.info("Re-encoded %s as JPEG (%d bytes)", name, len(data))
         if len(data) <= max_bytes:
             return data
+        img = rgb
 
     # Downscale until under limit
     current = img
     for _ in range(5):
         w, h = current.size
-        current = current.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+        new_w, new_h = max(1, w // 2), max(1, h // 2)
+        if (new_w, new_h) == (w, h):
+            break
+        current = current.resize((new_w, new_h), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         current.save(buf, format=out_fmt, **save_kw)
         data = buf.getvalue()
         logger.info(
             "Downscaled %s to %dx%d (%d bytes)",
             name,
-            w // 2,
-            h // 2,
+            new_w,
+            new_h,
             len(data),
         )
         if len(data) <= max_bytes:
             return data
+
+    if max_bytes > 0 and len(data) > max_bytes:
+        logger.warning(
+            "%s still %d bytes after downscaling (limit %d)",
+            name,
+            len(data),
+            max_bytes,
+        )
 
     return data
 
