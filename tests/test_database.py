@@ -444,22 +444,21 @@ class TestConcurrentInsert:
         """Multiple threads calling insert_chunks on a fresh DB must not race."""
         db = get_db(tmp_path / "db")
         num_workers = 4
-        chunks_per_worker = [
+        tasks = [
             [_make_chunk(chunk_index=i, document_name=f"doc{w}.pdf")]
             for w in range(num_workers)
             for i in range(2)
         ]
-        vectors_per_worker = [_random_vectors(1) for _ in chunks_per_worker]
+        all_vectors = _random_vectors(len(tasks))
+        task_vectors = [all_vectors[i : i + 1] for i in range(len(tasks))]
 
         errors: list[Exception] = []
 
         def _insert(idx: int) -> int:
-            return insert_chunks(db, chunks_per_worker[idx], vectors_per_worker[idx])
+            return insert_chunks(db, tasks[idx], task_vectors[idx])
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(_insert, i): i for i in range(len(chunks_per_worker))
-            }
+            futures = {executor.submit(_insert, i): i for i in range(len(tasks))}
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -467,4 +466,4 @@ class TestConcurrentInsert:
                     errors.append(exc)
 
         assert errors == [], f"Concurrent insert raised: {errors}"
-        assert count_chunks(db) == len(chunks_per_worker)
+        assert count_chunks(db) == len(tasks)
