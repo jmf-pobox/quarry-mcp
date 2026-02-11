@@ -21,9 +21,9 @@ Most RAG tools handle plain text. Quarry handles the full spectrum:
 | **Indexing** | Vector embeddings, incremental sync, collections | Basic embedding |
 | **Query** | Semantic search, format filters (planned), full page context | Vector similarity only |
 | **Interface** | MCP server + CLI | Usually one or the other |
-| **OCR** | Cloud (AWS Textract) today, local (Tesseract) planned | None |
+| **OCR** | Local (Tesseract, planned) and cloud (AWS Textract) | None |
 
-Quarry's vision: support both local and cloud backends for each capability. Users with GPUs run everything locally. Others use cloud services. Anyone can mix and match.
+Quarry works out of the box with local capabilities — no cloud accounts or API keys required to get started. For demanding use cases (OCR on scanned documents, large-scale ingestion), cloud backends like AWS Textract are available as drop-in upgrades. The goal: simple enough for non-engineers, complete enough for the most demanding personal knowledge bases.
 
 ## Capabilities
 
@@ -87,20 +87,18 @@ quarry install
 # Check everything is working
 quarry doctor
 
-# Configure AWS credentials (required for OCR)
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-export AWS_DEFAULT_REGION=us-east-1
-
-# Ingest a PDF
-quarry ingest /path/to/document.pdf
+# Ingest documents — works locally, no cloud account needed
+quarry ingest notes.md
+quarry ingest src/main.py
 
 # Search
-quarry search "revenue growth in 2024"
+quarry search "authentication logic"
 
 # List indexed documents
 quarry list
 ```
+
+PDF and image OCR requires AWS Textract — see [AWS Setup](#aws-setup) below. Text files, source code, and markdown work entirely locally.
 
 ## Installation
 
@@ -123,7 +121,7 @@ Run `quarry doctor` to verify your environment:
 
 ### AWS Setup
 
-Quarry uses AWS Textract for OCR. Your IAM user needs:
+Optional — only needed for PDF image pages and standalone image OCR. Your IAM user needs:
 
 ```json
 {
@@ -317,7 +315,7 @@ Connectors                Formats              Transformations
 - **Email** — EML/MBOX with header, body, and attachment extraction
 
 ### Transformations
-- **Local OCR** — Tesseract backend for offline/air-gapped environments
+- **Local OCR** — Tesseract backend so OCR works out of the box without cloud setup
 - **PII detection** — identify and redact sensitive information before indexing
 
 ### Connectors
