@@ -145,6 +145,7 @@ warn_unused_ignores = false  # lancedb stubs differ across environments
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+warn_unused_ignores = false  # pydantic-settings stubs differ across environments
 
 [[tool.mypy.overrides]]
 module = [
