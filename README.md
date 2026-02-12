@@ -21,7 +21,7 @@ Most RAG tools handle plain text. Quarry handles the full spectrum:
 | **Indexing** | Vector embeddings, incremental sync, collections | Basic embedding |
 | **Query** | Semantic search, format filters (planned), full page context | Vector similarity only |
 | **Interface** | MCP server + CLI | Usually one or the other |
-| **OCR** | Local (Tesseract, planned) and cloud (AWS Textract) | None |
+| **OCR** | Local (RapidOCR, offline) and cloud (AWS Textract) | None |
 
 Quarry works out of the box with local capabilities — no cloud accounts or API keys required to get started. For demanding use cases (OCR on scanned documents, large-scale ingestion), cloud backends like AWS Textract are available as drop-in upgrades. The goal: simple enough for non-engineers, complete enough for the most demanding personal knowledge bases.
 
@@ -44,8 +44,8 @@ Each format goes through a content-specific transformation before indexing:
 | Source | Transformation | Output |
 |---|---|---|
 | PDF (text pages) | PyMuPDF extraction | Prose chunks |
-| PDF (image pages) | AWS Textract OCR | Prose chunks |
-| Images | AWS Textract OCR | Prose chunks |
+| PDF (image pages) | Local OCR (RapidOCR) or AWS Textract | Prose chunks |
+| Images | Local OCR (RapidOCR) or AWS Textract | Prose chunks |
 | Text files | Section-aware splitting (headings, `\section{}`, paragraphs) | Section chunks |
 | Source code | Tree-sitter AST parsing (functions, classes, imports) | Code chunks |
 | Spreadsheets (planned) | pandas → LaTeX tabular | Tabular chunks |
@@ -98,7 +98,7 @@ quarry search "authentication logic"
 quarry list
 ```
 
-PDF and image OCR requires AWS Textract — see [AWS Setup](#aws-setup) below. Text files, source code, and markdown work entirely locally.
+PDF and image OCR works locally out of the box via RapidOCR. For higher accuracy on scanned documents, configure AWS Textract — see [AWS Setup](#aws-setup) below.
 
 ## Installation
 
@@ -114,14 +114,26 @@ Run `quarry doctor` to verify your environment:
 ```
   ✓ Python version: 3.13.1
   ✓ Data directory: /Users/you/.quarry/data/lancedb
-  ✓ AWS credentials: AKIA****YMUH (via shared-credentials-file)
+  ✓ Local OCR: RapidOCR engine OK
+  ○ AWS credentials: Not configured (optional — needed for OCR_BACKEND=textract)
   ✓ Embedding model: snowflake-arctic-embed-m-v1.5 cached
-  ✓ Core imports: 5 modules OK
+  ✓ Core imports: 8 modules OK
 ```
+
+### OCR Backends
+
+Quarry ships with two OCR backends:
+
+| Backend | Set via | Speed | Quality | Setup |
+|---------|---------|-------|---------|-------|
+| **local** (default) | `OCR_BACKEND=local` | ~7-8s/page | Good — reads names, amounts, dates, descriptions accurately. Minor artifacts: occasional fullwidth punctuation, spacing inconsistencies on dense forms. | None |
+| **textract** | `OCR_BACKEND=textract` | ~2-3s/page | Excellent — production-grade character accuracy | AWS credentials + S3 bucket |
+
+The local backend uses RapidOCR (PaddleOCR models via ONNX Runtime, CPU-only, ~214 MB). In testing on a 6-page scanned boatyard invoice, it extracted task descriptions, dollar amounts, labor hours, and addresses accurately enough for semantic search.
 
 ### AWS Setup
 
-Optional — only needed for PDF image pages and standalone image OCR. Your IAM user needs:
+Optional — only needed if you want Textract OCR quality. Your IAM user needs:
 
 ```json
 {
@@ -257,8 +269,9 @@ All settings are configurable via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AWS_ACCESS_KEY_ID` | | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | | AWS secret key |
+| `OCR_BACKEND` | `local` | OCR backend: `local` (RapidOCR) or `textract` (AWS) |
+| `AWS_ACCESS_KEY_ID` | | AWS access key (textract only) |
+| `AWS_SECRET_ACCESS_KEY` | | AWS secret key (textract only) |
 | `AWS_DEFAULT_REGION` | `us-east-1` | AWS region |
 | `S3_BUCKET` | `ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b` | S3 bucket for Textract uploads |
 | `LANCEDB_PATH` | `~/.quarry/data/lancedb` | Path to LanceDB storage |
@@ -276,9 +289,9 @@ All settings are configurable via environment variables:
 Connectors                Formats              Transformations
   │                         │                        │
   ├─ Local filesystem       ├─ PDF ──────┬─ text ──→ PyMuPDF extraction
-  │   (register + sync)     │            └─ image ─→ Textract OCR
+  │   (register + sync)     │            └─ image ─→ OCR (local or Textract)
   │                         │
-  └─ Google Drive           ├─ Images ─────────────→ Textract OCR
+  └─ Google Drive           ├─ Images ─────────────→ OCR (local or Textract)
      (planned)              │
                             ├─ Text files ─────────→ Section-aware splitting
                             │
@@ -315,7 +328,6 @@ Connectors                Formats              Transformations
 - **Email** — EML/MBOX with header, body, and attachment extraction
 
 ### Transformations
-- **Local OCR** — Tesseract backend so OCR works out of the box without cloud setup
 - **PII detection** — identify and redact sensitive information before indexing
 
 ### Connectors
