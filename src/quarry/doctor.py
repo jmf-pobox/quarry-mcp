@@ -61,13 +61,15 @@ def _check_aws_credentials() -> CheckResult:
         return CheckResult(
             name="AWS credentials",
             passed=False,
-            message="No credentials found (env vars, ~/.aws/credentials, or IAM role)",
+            message="Not configured (optional — needed for OCR_BACKEND=textract)",
+            required=False,
         )
     if not key:
         return CheckResult(
             name="AWS credentials",
             passed=False,
-            message="No credentials found (env vars, ~/.aws/credentials, or IAM role)",
+            message="Not configured (optional — needed for OCR_BACKEND=textract)",
+            required=False,
         )
     masked = key[:4] + "****" + key[-4:]
     method = getattr(credentials, "method", "unknown")
@@ -99,8 +101,36 @@ def _check_embedding_model() -> CheckResult:
     )
 
 
+def _check_local_ocr() -> CheckResult:
+    """Check that the local OCR engine (RapidOCR) can initialize."""
+    try:
+        from quarry.ocr_local import _get_engine  # noqa: PLC0415
+
+        _get_engine()
+        return CheckResult(
+            name="Local OCR",
+            passed=True,
+            message="RapidOCR engine OK",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="Local OCR",
+            passed=False,
+            message=str(exc),
+        )
+
+
 def _check_imports() -> CheckResult:
-    modules = ["lancedb", "sentence_transformers", "fitz", "PIL", "boto3"]
+    modules = [
+        "lancedb",
+        "sentence_transformers",
+        "fitz",
+        "PIL",
+        "boto3",
+        "rapidocr",
+        "onnxruntime",
+        "cv2",
+    ]
     failed: list[str] = []
     for mod in modules:
         try:
@@ -230,6 +260,7 @@ def check_environment() -> int:
     checks = [
         _check_python_version(),
         _check_data_directory(),
+        _check_local_ocr(),
         _check_aws_credentials(),
         _check_embedding_model(),
         _check_imports(),
