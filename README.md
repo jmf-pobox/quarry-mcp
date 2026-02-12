@@ -112,18 +112,24 @@ Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quar
 
 | Tool | Description |
 |------|-------------|
+| **Search** | |
 | `search_documents` | Semantic search across indexed documents |
+| **Ingestion** | |
 | `ingest` | Ingest a file (PDF, image, text, source code) |
 | `ingest_text` | Index raw text content directly |
+| **Documents** | |
 | `get_documents` | List indexed documents with metadata |
 | `get_page` | Retrieve full text for a specific page |
 | `delete_document` | Remove a document and its chunks |
-| `delete_collection` | Remove all documents in a collection |
+| **Collections** | |
 | `list_collections` | List collections with document/chunk counts |
+| `delete_collection` | Remove all documents in a collection |
+| **Directory sync** | |
 | `register_directory` | Register a directory for sync |
 | `deregister_directory` | Remove a directory registration |
 | `sync_all_registrations` | Sync all registered directories |
 | `list_registrations` | List registered directories |
+| **System** | |
 | `status` | Database stats: counts, storage size, model info |
 
 **Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_text` with extracted content for uploads. For files on your Mac, provide the local path to `ingest`.
