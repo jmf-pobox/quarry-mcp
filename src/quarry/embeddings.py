@@ -81,6 +81,8 @@ class OnnxEmbeddingBackend:
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Embed a batch of texts. Returns shape (n, dimension)."""
+        if not texts:
+            return np.empty((0, self._dimension), dtype=np.float32)
         encodings = self._tokenizer.encode_batch(texts)
         input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
         attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)

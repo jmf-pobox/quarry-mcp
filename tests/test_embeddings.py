@@ -91,6 +91,17 @@ class TestEmbedTexts:
         expected_val = 1.0 / np.sqrt(768)
         np.testing.assert_allclose(result[0], expected_val, atol=1e-6)
 
+    def test_empty_texts_returns_empty_array(self):
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3:
+            result = embed_texts([])
+
+        assert result.shape == (0, 768)
+        session.run.assert_not_called()
+
 
 class TestEmbedQuery:
     def setup_method(self):
