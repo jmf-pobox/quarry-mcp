@@ -9,7 +9,10 @@ import pytest
 import quarry.embeddings as embeddings_mod
 from quarry.backends import clear_caches, get_embedding_backend, get_ocr_backend
 from quarry.config import Settings
+from quarry.embeddings import SnowflakeEmbeddingBackend
 from quarry.models import PageContent, PageType
+from quarry.ocr_client import TextractOcrBackend
+from quarry.ocr_local import LocalOcrBackend
 
 
 def _settings(**overrides: object) -> Settings:
@@ -27,9 +30,13 @@ class TestGetOcrBackend:
     def setup_method(self) -> None:
         clear_caches()
 
-    def test_returns_textract_backend(self) -> None:
+    def test_returns_local_backend_by_default(self) -> None:
         backend = get_ocr_backend(_settings())
-        assert type(backend).__name__ == "TextractOcrBackend"
+        assert isinstance(backend, LocalOcrBackend)
+
+    def test_returns_textract_backend(self) -> None:
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
+        assert isinstance(backend, TextractOcrBackend)
 
     def test_caches_by_key(self) -> None:
         settings = _settings()
@@ -48,7 +55,7 @@ class TestGetEmbeddingBackend:
 
     def test_returns_snowflake_backend(self) -> None:
         backend = get_embedding_backend(_settings())
-        assert type(backend).__name__ == "SnowflakeEmbeddingBackend"
+        assert isinstance(backend, SnowflakeEmbeddingBackend)
 
     def test_exposes_dimension(self) -> None:
         backend = get_embedding_backend(_settings())
@@ -73,7 +80,7 @@ class TestClearCaches:
         clear_caches()
         # After clearing, new instances should be created
         backend = get_ocr_backend(settings)
-        assert type(backend).__name__ == "TextractOcrBackend"
+        assert isinstance(backend, LocalOcrBackend)
 
 
 class TestTextractOcrBackend:
@@ -101,7 +108,7 @@ class TestTextractOcrBackend:
             lambda _path, _pages, _total, _settings, **_kw: expected,
         )
 
-        backend = get_ocr_backend(_settings())
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
         result = backend.ocr_document(pdf_file, [1], 1, document_name="test.pdf")
         assert result == expected
 
@@ -119,7 +126,7 @@ class TestTextractOcrBackend:
             lambda _bytes, _name, _path: expected,
         )
 
-        backend = get_ocr_backend(_settings())
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
         result = backend.ocr_image_bytes(b"fake", "img.png", "/tmp/img.png")
         assert result == expected
 
