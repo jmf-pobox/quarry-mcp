@@ -27,8 +27,12 @@ class TestGetOcrBackend:
     def setup_method(self) -> None:
         clear_caches()
 
-    def test_returns_textract_backend(self) -> None:
+    def test_returns_local_backend_by_default(self) -> None:
         backend = get_ocr_backend(_settings())
+        assert type(backend).__name__ == "LocalOcrBackend"
+
+    def test_returns_textract_backend(self) -> None:
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
         assert type(backend).__name__ == "TextractOcrBackend"
 
     def test_caches_by_key(self) -> None:
@@ -73,7 +77,7 @@ class TestClearCaches:
         clear_caches()
         # After clearing, new instances should be created
         backend = get_ocr_backend(settings)
-        assert type(backend).__name__ == "TextractOcrBackend"
+        assert type(backend).__name__ == "LocalOcrBackend"
 
 
 class TestTextractOcrBackend:
@@ -101,7 +105,7 @@ class TestTextractOcrBackend:
             lambda _path, _pages, _total, _settings, **_kw: expected,
         )
 
-        backend = get_ocr_backend(_settings())
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
         result = backend.ocr_document(pdf_file, [1], 1, document_name="test.pdf")
         assert result == expected
 
@@ -119,7 +123,7 @@ class TestTextractOcrBackend:
             lambda _bytes, _name, _path: expected,
         )
 
-        backend = get_ocr_backend(_settings())
+        backend = get_ocr_backend(_settings(ocr_backend="textract"))
         result = backend.ocr_image_bytes(b"fake", "img.png", "/tmp/img.png")
         assert result == expected
 

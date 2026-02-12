@@ -23,6 +23,12 @@ def get_ocr_backend(settings: Settings) -> OcrBackend:
         with _lock:
             if key not in _ocr_cache:
                 match key:
+                    case "local":
+                        from quarry.ocr_local import (  # noqa: PLC0415
+                            LocalOcrBackend,
+                        )
+
+                        _ocr_cache[key] = LocalOcrBackend(settings)
                     case "textract":
                         from quarry.ocr_client import (  # noqa: PLC0415
                             TextractOcrBackend,
@@ -30,7 +36,8 @@ def get_ocr_backend(settings: Settings) -> OcrBackend:
 
                         _ocr_cache[key] = TextractOcrBackend(settings)
                     case _:
-                        msg = f"Unknown OCR backend: '{key}'. Available: textract"
+                        available = "local, textract"
+                        msg = f"Unknown OCR backend: '{key}'. Available: {available}"
                         raise ValueError(msg)
     return _ocr_cache[key]
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
     registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
     log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
-    ocr_backend: str = "textract"
+    ocr_backend: str = "local"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
