@@ -111,6 +111,7 @@ Before creating a PR, verify:
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry** added for notable changes
 - [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`
+- [ ] **Live demo** for features — create a test database (`--db demo`), ingest real content, and exercise the new behavior end-to-end. Fix any issues discovered before opening the PR.
 
 ### Pull Request and Code Review Workflow
 
