@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Index
+- **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
+- `stored_page_type()` mapping: TEXT/IMAGE/SECTION → `"text"`, CODE → `"code"`
+- Inline content `document_path` changed from `"<string>"` sentinel to empty string
+- **Breaking:** Existing indexes need re-ingestion (`quarry sync`) to populate new columns
+
 ## [0.5.0] - 2026-02-13
 
 ### Transform
