@@ -1,3 +1,5 @@
+"""Directory sync: discover files, compute delta, ingest new/changed, delete removed."""
+
 from __future__ import annotations
 
 import logging
@@ -70,9 +72,11 @@ def compute_sync_plan(
 ) -> SyncPlan:
     """Compare files on disk against the registry to produce a sync plan.
 
-    Returns which files need ingesting (new or changed), which
-    document_names should be deleted (removed from disk), and
-    how many were unchanged.
+    Compares both mtime and size: mtime can change without content change
+    (e.g. touch), and size can change without mtime (rare but possible).
+    Either difference triggers re-ingest. Returns which files need
+    ingesting (new or changed), which document_names should be deleted
+    (removed from disk), and how many were unchanged.
     """
     disk_files = discover_files(directory, extensions)
     disk_paths = {str(p) for p in disk_files}
@@ -130,6 +134,10 @@ def sync_collection(
 
     Computes the delta, ingests new/changed files in parallel,
     removes deleted files, and updates the registry.
+
+    Catches OSError, ValueError, RuntimeError, TimeoutError for
+    individual file ingest/delete failures so sync continues when
+    one file fails.
     """
 
     def _progress(msg: str) -> None:
@@ -182,9 +190,10 @@ def sync_collection(
                     )
                     ingested += 1
                     _progress(f"[{collection}] Ingested {doc_name}")
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
                     failed += 1
                     errors.append(f"{doc_name}: {exc}")
+                    logger.exception("Ingest failed for %s", doc_name)
                     _progress(f"[{collection}] Failed {doc_name}: {exc}")
 
     # Pre-build lookup for O(1) path resolution during deletes
@@ -200,9 +209,10 @@ def sync_collection(
                 delete_file(conn, rec.path, commit=False)
             deleted += 1
             _progress(f"[{collection}] Deleted {doc_name}")
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
             failed += 1
             errors.append(f"{doc_name}: {exc}")
+            logger.exception("Delete failed for %s", doc_name)
             _progress(f"[{collection}] Failed to delete {doc_name}: {exc}")
 
     conn.commit()

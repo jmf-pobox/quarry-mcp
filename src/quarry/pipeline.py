@@ -1,3 +1,5 @@
+"""Document ingestion pipeline: dispatch by format, chunk, embed, store."""
+
 from __future__ import annotations
 
 import logging
@@ -315,8 +317,8 @@ def ingest_image(
     Supported: PNG, JPEG, TIFF (multi-page), BMP, WebP.
     BMP and WebP are converted to PNG before OCR.
 
-    Single-page images use Textract sync API (DetectDocumentText).
-    Multi-page TIFFs use Textract async API via S3.
+    Single-page images use the configured OCR backend's sync path.
+    Multi-page TIFFs use the async path (S3 for Textract, local for RapidOCR).
 
     Args:
         file_path: Path to image file.
@@ -366,7 +368,7 @@ def ingest_image(
     page = ocr.ocr_image_bytes(
         image_bytes,
         document_name=doc_name,
-        document_path=str(file_path.resolve()),
+        document_path=file_path.resolve(),
     )
 
     return _chunk_embed_store(
@@ -425,7 +427,12 @@ def _encode_image_to_fit(
     max_bytes: int,
     name: str,
 ) -> bytes:
-    """Encode image, re-encoding as JPEG and/or downscaling if oversized."""
+    """Encode image, re-encoding as JPEG and/or downscaling if oversized.
+
+    Strategy: save as-is; if over limit, re-encode as JPEG (much smaller for
+    photos); then downscale by halves until under limit. Keeps quality while
+    meeting OCR engine byte limits.
+    """
     import io  # noqa: PLC0415
 
     from PIL import Image  # noqa: PLC0415
@@ -491,7 +498,7 @@ def _ingest_multipage_image(
     document_name: str | None = None,
     collection: str = "default",
 ) -> dict[str, object]:
-    """Ingest a multi-page image (TIFF) via async Textract API."""
+    """Ingest a multi-page image (TIFF) via the OCR backend's async path."""
     doc_name = document_name or file_path.name
     progress("Running OCR on %d pages (async)", page_count)
     all_page_numbers = list(range(1, page_count + 1))
@@ -511,7 +518,7 @@ def _ingest_multipage_image(
     )
 
 
-def ingest_text(
+def ingest_text_content(
     text: str,
     document_name: str,
     db: LanceDB,

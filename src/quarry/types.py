@@ -1,3 +1,9 @@
+"""Protocol definitions for quarry.
+
+Infrastructure protocols (LanceDB, Textract, S3) abstract external libraries.
+Domain protocols (OcrBackend, EmbeddingBackend) define backend contracts.
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
@@ -11,13 +17,16 @@ if TYPE_CHECKING:
     from quarry.models import PageContent
 
 
+# --- Infrastructure: LanceDB ---
+
+
 class LanceTable(Protocol):
     def add(self, data: list[dict[str, object]]) -> None: ...
     def search(
         self,
         query: list[float] | None = ...,
     ) -> LanceQuery: ...
-    def count_rows(self, filter: str | None = ...) -> int: ...  # noqa: A002
+    def count_rows(self, predicate: str | None = ...) -> int: ...
     def delete(self, predicate: str) -> None: ...
     def create_scalar_index(
         self,
@@ -50,6 +59,9 @@ class LanceDB(Protocol):
         data: list[dict[str, object]],
         schema: object,
     ) -> LanceTable: ...
+
+
+# --- Infrastructure: AWS (Textract, S3) ---
 
 
 class TextractClient(Protocol):
@@ -89,6 +101,9 @@ class S3Client(Protocol):
     ) -> None: ...
 
 
+# --- Domain: OCR and Embedding backends ---
+
+
 class OcrBackend(Protocol):
     """Protocol for OCR backends that extract text from documents."""
 
@@ -107,7 +122,7 @@ class OcrBackend(Protocol):
         self,
         image_bytes: bytes,
         document_name: str,
-        document_path: str,
+        document_path: Path,
     ) -> PageContent:
         """OCR a single-page image from bytes."""
         ...

@@ -13,7 +13,8 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document, ingest_text
+from quarry.pipeline import ingest_document, ingest_text_content
+from quarry.results import SearchResult
 from quarry.types import LanceDB
 
 from .conftest import FIXTURES_DIR
@@ -32,7 +33,7 @@ def _search(
     limit: int = 5,
     document_filter: str | None = None,
     collection_filter: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[SearchResult]:
     """Embed a query and search the database."""
     vector = get_embedding_backend(settings).embed_query(query)
     return search(
@@ -300,13 +301,13 @@ class TestOverwriteBehavior:
         lance_db: LanceDB,
         integration_settings: Settings,
     ) -> None:
-        ingest_text(
+        ingest_text_content(
             "The mitochondria is the powerhouse of the cell.",
             "bio.txt",
             lance_db,
             integration_settings,
         )
-        ingest_text(
+        ingest_text_content(
             "Tectonic plates shift and cause earthquakes along fault lines.",
             "bio.txt",
             lance_db,
@@ -333,7 +334,7 @@ class TestOverwriteBehavior:
         lance_db: LanceDB,
         integration_settings: Settings,
     ) -> None:
-        ingest_text(
+        ingest_text_content(
             "Helium is a noble gas with atomic number two.",
             "chem.txt",
             lance_db,
@@ -341,7 +342,7 @@ class TestOverwriteBehavior:
         )
         count_before = count_chunks(lance_db)
 
-        ingest_text(
+        ingest_text_content(
             "Helium is a noble gas with atomic number two.",
             "chem.txt",
             lance_db,
@@ -418,7 +419,9 @@ class TestRawTextIngestion:
             "lithosphere. The lithosphere is divided into several tectonic "
             "plates that float on the semi-fluid asthenosphere beneath them."
         )
-        result = ingest_text(content, "geology.txt", lance_db, integration_settings)
+        result = ingest_text_content(
+            content, "geology.txt", lance_db, integration_settings
+        )
         assert int(str(result["chunks"])) >= 1
 
         results = _search(lance_db, "tectonic plates lithosphere", integration_settings)
@@ -430,7 +433,7 @@ class TestRawTextIngestion:
         lance_db: LanceDB,
         integration_settings: Settings,
     ) -> None:
-        ingest_text(
+        ingest_text_content(
             "RNA polymerase transcribes DNA into messenger RNA.",
             "bio-notes.txt",
             lance_db,

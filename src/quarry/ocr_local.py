@@ -1,3 +1,5 @@
+"""OCR backend implementation using RapidOCR (local, no AWS)."""
+
 from __future__ import annotations
 
 import io
@@ -139,7 +141,7 @@ class LocalOcrBackend:
         self,
         image_bytes: bytes,
         document_name: str,
-        document_path: str,
+        document_path: Path,
     ) -> PageContent:
         """OCR a single-page image from bytes."""
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -147,7 +149,7 @@ class LocalOcrBackend:
         logger.info("OCR image %s: %d chars", document_name, len(text))
         return PageContent(
             document_name=document_name,
-            document_path=document_path,
+            document_path=str(document_path),
             page_number=1,
             total_pages=1,
             text=text,

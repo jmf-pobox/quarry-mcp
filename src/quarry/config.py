@@ -1,3 +1,5 @@
+"""Application settings (AWS, embedding, chunking, OCR) and logging config."""
+
 from __future__ import annotations
 
 import logging
@@ -23,6 +25,7 @@ class Settings(BaseSettings):
     registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
     log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
     ocr_backend: str = "local"
+    # Cache key for get_embedding_backend(); OnnxEmbeddingBackend ignores it.
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
 
@@ -42,9 +45,14 @@ def get_settings() -> Settings:
 
 
 def configure_logging(settings: Settings) -> None:
-    """Set up root logger with stderr and file handlers at INFO level."""
-    settings.log_path.parent.mkdir(parents=True, exist_ok=True)
+    """Set up root logger with stderr and file handlers at INFO level.
+
+    Idempotent: returns early if root logger already has handlers.
+    """
     root = logging.getLogger()
+    if root.handlers:
+        return
+    settings.log_path.parent.mkdir(parents=True, exist_ok=True)
     root.setLevel(logging.INFO)
 
     fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
