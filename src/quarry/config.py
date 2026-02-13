@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     aws_default_region: str = "us-east-1"
     s3_bucket: str = ""
 
-    lancedb_path: Path = Path.home() / ".quarry" / "data" / "lancedb"
-    registry_path: Path = Path.home() / ".quarry" / "data" / "registry.db"
+    quarry_root: Path = Path.home() / ".quarry" / "data"
+    lancedb_path: Path = Path.home() / ".quarry" / "data" / "default" / "lancedb"
+    registry_path: Path = Path.home() / ".quarry" / "data" / "default" / "registry.db"
     log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
     ocr_backend: str = "local"
     # Cache key for get_embedding_backend(); OnnxEmbeddingBackend ignores it.
@@ -43,6 +44,28 @@ class Settings(BaseSettings):
     textract_max_image_bytes: int = 10_485_760  # 10 MiB sync API limit
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+
+def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings:
+    """Return a copy of *settings* with lancedb_path and registry_path resolved.
+
+    If *db_name* is provided, paths resolve to ``quarry_root / db_name / ...``.
+    If ``LANCEDB_PATH`` is set in the environment the setting is already
+    overridden by pydantic-settings, so we leave it alone.
+    When *db_name* is None and no env override, paths use the ``default`` database.
+    """
+    import os  # noqa: PLC0415
+
+    if os.environ.get("LANCEDB_PATH"):
+        return settings
+
+    name = db_name or "default"
+    return settings.model_copy(
+        update={
+            "lancedb_path": settings.quarry_root / name / "lancedb",
+            "registry_path": settings.quarry_root / name / "registry.db",
+        },
+    )
 
 
 def load_settings() -> Settings:
