@@ -83,9 +83,15 @@ def _check_aws_credentials() -> CheckResult:
 def _check_embedding_model() -> CheckResult:
     from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
 
-    from quarry.config import ONNX_MODEL_FILE, ONNX_MODEL_REPO  # noqa: PLC0415
+    from quarry.config import (  # noqa: PLC0415
+        ONNX_MODEL_FILE,
+        ONNX_MODEL_REPO,
+        ONNX_MODEL_REVISION,
+    )
 
-    cached = try_to_load_from_cache(ONNX_MODEL_REPO, ONNX_MODEL_FILE)
+    cached = try_to_load_from_cache(
+        ONNX_MODEL_REPO, ONNX_MODEL_FILE, revision=ONNX_MODEL_REVISION
+    )
     if isinstance(cached, str) and Path(cached).exists():
         return CheckResult(
             name="Embedding model",

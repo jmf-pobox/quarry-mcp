@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-import quarry.embeddings as embeddings_mod
 from quarry.backends import clear_caches, get_embedding_backend, get_ocr_backend
 from quarry.config import Settings
 from quarry.embeddings import OnnxEmbeddingBackend
@@ -134,7 +133,6 @@ class TestTextractOcrBackend:
 class TestOnnxEmbeddingBackend:
     def setup_method(self) -> None:
         clear_caches()
-        embeddings_mod._backends.clear()
 
     def _mock_onnx(self) -> tuple[MagicMock, MagicMock]:
         session = MagicMock()
@@ -157,7 +155,7 @@ class TestOnnxEmbeddingBackend:
 
         with (
             patch(
-                "quarry.embeddings._download_model_files",
+                "quarry.embeddings._load_model_files",
                 return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
             ),
             patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
@@ -173,7 +171,7 @@ class TestOnnxEmbeddingBackend:
 
         with (
             patch(
-                "quarry.embeddings._download_model_files",
+                "quarry.embeddings._load_model_files",
                 return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
             ),
             patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),

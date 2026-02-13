@@ -52,7 +52,7 @@ def get_embedding_backend(settings: Settings) -> EmbeddingBackend:
                     OnnxEmbeddingBackend,
                 )
 
-                _embedding_cache[key] = OnnxEmbeddingBackend(settings.embedding_model)
+                _embedding_cache[key] = OnnxEmbeddingBackend()
     return _embedding_cache[key]
 
 

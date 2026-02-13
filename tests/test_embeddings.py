@@ -4,8 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-import quarry.embeddings as embeddings_mod
-from quarry.embeddings import embed_query, embed_texts
+from quarry.embeddings import OnnxEmbeddingBackend
 
 
 def _mock_session() -> MagicMock:
@@ -34,7 +33,7 @@ def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
     """Patch huggingface_hub, tokenizers, and onnxruntime for unit tests."""
     return (
         patch(
-            "quarry.embeddings._download_model_files",
+            "quarry.embeddings._load_model_files",
             return_value=("/fake/model.onnx", "/fake/tokenizer.json"),
         ),
         patch("tokenizers.Tokenizer.from_file", return_value=tokenizer),
@@ -43,9 +42,6 @@ def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
 
 
 class TestEmbedTexts:
-    def setup_method(self):
-        embeddings_mod._backends.clear()
-
     def test_returns_embeddings(self):
         session = _mock_session()
         tokenizer = _mock_tokenizer()
@@ -56,23 +52,13 @@ class TestEmbedTexts:
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
-            result = embed_texts(["a", "b", "c"])
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts(["a", "b", "c"])
 
         assert result.shape == (3, 768)
         # Verify normalization: each vector should have unit norm
         norms = np.linalg.norm(result, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-6)
-
-    def test_caches_backend(self):
-        session = _mock_session()
-        tokenizer = _mock_tokenizer()
-
-        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
-        with p1 as mock_download, p2, p3:
-            embed_texts(["a"])
-            embed_texts(["b"])
-
-        mock_download.assert_called_once()
 
     def test_cls_pooling(self):
         """Verify CLS token (index 0) is used for pooling."""
@@ -85,7 +71,8 @@ class TestEmbedTexts:
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
-            result = embed_texts(["test"])
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts(["test"])
 
         # After normalization, should be 1/sqrt(768) in each dimension
         expected_val = 1.0 / np.sqrt(768)
@@ -97,23 +84,22 @@ class TestEmbedTexts:
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
-            result = embed_texts([])
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts([])
 
         assert result.shape == (0, 768)
         session.run.assert_not_called()
 
 
 class TestEmbedQuery:
-    def setup_method(self):
-        embeddings_mod._backends.clear()
-
     def test_prepends_query_prefix(self):
         session = _mock_session()
         tokenizer = _mock_tokenizer()
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
-            embed_query("search term")
+            backend = OnnxEmbeddingBackend()
+            backend.embed_query("search term")
 
         tokenizer.encode_batch.assert_called_once()
         texts = tokenizer.encode_batch.call_args[0][0]
@@ -127,6 +113,19 @@ class TestEmbedQuery:
 
         p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
         with p1, p2, p3:
-            result = embed_query("search term")
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_query("search term")
 
         assert result.shape == (768,)
+
+
+class TestModelName:
+    def test_returns_repo_name(self):
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+
+        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3:
+            backend = OnnxEmbeddingBackend()
+
+        assert backend.model_name == "Snowflake/snowflake-arctic-embed-m-v1.5"
