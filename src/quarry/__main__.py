@@ -13,7 +13,7 @@ from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import configure_logging, load_settings
+from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
 from quarry.database import (
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
@@ -37,6 +37,29 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(help="quarry: extract searchable knowledge from any document")
 console = Console()
 err_console = Console(stderr=True)
+
+_db_name: str | None = None
+
+
+@app.callback()
+def _app_callback(
+    db: Annotated[
+        str,
+        typer.Option(
+            "--db",
+            help="Named database (default: 'default'). "
+            "Resolves to ~/.quarry/data/<name>/lancedb.",
+        ),
+    ] = "",
+) -> None:
+    """Global options."""
+    global _db_name
+    _db_name = db or None
+
+
+def _resolved_settings() -> Settings:
+    """Load settings with --db resolution applied."""
+    return resolve_db_paths(load_settings(), _db_name)
 
 
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
@@ -66,7 +89,7 @@ def ingest(
     ] = "",
 ) -> None:
     """Ingest a document: chunk, embed, and store. Supports PDF, TXT, MD, TEX, DOCX."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     resolved = file_path.resolve()
     col = derive_collection(resolved, explicit=collection or None)
@@ -100,7 +123,7 @@ def search_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
@@ -125,7 +148,7 @@ def list_cmd(
     ] = "",
 ) -> None:
     """List all indexed documents."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     docs = list_documents(db, collection_filter=collection or None)
 
@@ -150,7 +173,7 @@ def delete_cmd(
     ] = "",
 ) -> None:
     """Delete all indexed data for a document."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_document(db, document_name, collection=collection or None)
 
@@ -164,7 +187,7 @@ def delete_cmd(
 @_cli_errors
 def collections_cmd() -> None:
     """List all collections with document and chunk counts."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     cols = db_list_collections(db)
 
@@ -186,7 +209,7 @@ def delete_collection_cmd(
     collection: Annotated[str, typer.Argument(help="Collection name to delete")],
 ) -> None:
     """Delete all indexed data for a collection."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     deleted = db_delete_collection(db, collection)
 
@@ -206,7 +229,7 @@ def register(
     ] = "",
 ) -> None:
     """Register a directory for incremental sync."""
-    settings = load_settings()
+    settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
     conn = open_registry(settings.registry_path)
@@ -227,7 +250,7 @@ def deregister(
     ] = False,
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
-    settings = load_settings()
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         doc_names = deregister_directory(conn, collection)
@@ -246,7 +269,7 @@ def deregister(
 @_cli_errors
 def registrations_cmd() -> None:
     """List all registered directories."""
-    settings = load_settings()
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         regs = list_registrations(conn)
@@ -269,7 +292,7 @@ def sync_cmd(
     ] = 4,
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
-    settings = load_settings()
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     with Progress(console=console) as progress:
@@ -290,6 +313,36 @@ def sync_cmd(
         )
         for err in res.errors:
             console.print(f"  error: {err}", style="red")
+
+
+@app.command(name="databases")
+@_cli_errors
+def databases_cmd() -> None:
+    """List named databases with document counts and storage size."""
+    settings = _resolved_settings()
+    root = settings.quarry_root
+
+    if not root.exists():
+        print("No databases found.")
+        return
+
+    found = False
+    for entry in sorted(root.iterdir()):
+        lance_dir = entry / "lancedb"
+        if not entry.is_dir() or not lance_dir.exists():
+            continue
+        found = True
+        db = get_db(lance_dir)
+        docs = list_documents(db)
+        size_bytes = sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
+        if size_bytes >= 1_048_576:
+            size_str = f"{size_bytes / 1_048_576:.1f} MB"
+        else:
+            size_str = f"{size_bytes / 1024:.1f} KB"
+        print(f"{entry.name}: {len(docs)} documents, {size_str}")
+
+    if not found:
+        print("No databases found.")
 
 
 @app.command()
@@ -315,7 +368,7 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main()
+    mcp_main(db_name=_db_name)
 
 
 if __name__ == "__main__":
