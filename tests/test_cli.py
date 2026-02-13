@@ -328,6 +328,199 @@ class TestDatabasesCmd:
         assert "No databases found" in result.output
 
 
+class TestDbOption:
+    """Verify --db flag is parsed and forwarded to resolve_db_paths."""
+
+    def test_list_passes_db_to_resolver(self):
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["list", "--db", "work"])
+        assert result.exit_code == 0
+        mock_resolve.assert_called_once()
+        assert mock_resolve.call_args[0][1] == "work"
+
+    def test_search_passes_db_to_resolver(self):
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_embedding_backend",
+                return_value=mock_backend,
+            ),
+            patch("quarry.__main__.search", return_value=[]),
+        ):
+            result = runner.invoke(app, ["search", "query", "--db", "work"])
+        assert result.exit_code == 0
+        assert mock_resolve.call_args[0][1] == "work"
+
+    def test_delete_passes_db_to_resolver(self):
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_delete_document", return_value=0),
+        ):
+            result = runner.invoke(app, ["delete", "x.pdf", "--db", "work"])
+        assert result.exit_code == 0
+        assert mock_resolve.call_args[0][1] == "work"
+
+    def test_collections_passes_db_to_resolver(self):
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["collections", "--db", "work"])
+        assert result.exit_code == 0
+        assert mock_resolve.call_args[0][1] == "work"
+
+    def test_default_db_passes_none(self):
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            runner.invoke(app, ["list"])
+        assert mock_resolve.call_args[0][1] is None
+
+    def test_db_after_subcommand_works(self):
+        """Regression: --db must work after the subcommand name."""
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["list", "--db", "personal"])
+        assert result.exit_code == 0
+        assert mock_resolve.call_args[0][1] == "personal"
+
+
+class TestIngestCmd:
+    def test_ingests_document(self, tmp_path: Path):
+        f = tmp_path / "doc.txt"
+        f.write_text("hello")
+        mock_result = {"document_name": "doc.txt", "chunks": 1}
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_document",
+                return_value=mock_result,
+            ),
+        ):
+            result = runner.invoke(app, ["ingest", str(f)])
+        assert result.exit_code == 0
+        assert "doc.txt" in result.output
+
+    def test_ingest_passes_db(self, tmp_path: Path):
+        f = tmp_path / "doc.txt"
+        f.write_text("hello")
+        with (
+            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
+            patch(
+                "quarry.__main__.resolve_db_paths",
+                return_value=_mock_settings(),
+            ) as mock_resolve,
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_document",
+                return_value={"chunks": 1},
+            ),
+        ):
+            result = runner.invoke(app, ["ingest", str(f), "--db", "work"])
+        assert result.exit_code == 0
+        assert mock_resolve.call_args[0][1] == "work"
+
+
+class TestDatabasesCmdSizeFormatting:
+    def test_megabyte_formatting(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path
+        lance_dir = tmp_path / "big" / "lancedb"
+        lance_dir.mkdir(parents=True)
+        # Create a file > 1MB
+        (lance_dir / "data.lance").write_bytes(b"x" * 2_097_152)
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=settings,
+            ),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["databases"])
+        assert result.exit_code == 0
+        assert "MB" in result.output
+
+    def test_kilobyte_formatting(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path
+        lance_dir = tmp_path / "small" / "lancedb"
+        lance_dir.mkdir(parents=True)
+        (lance_dir / "data.lance").write_bytes(b"x" * 512)
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=settings,
+            ),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["databases"])
+        assert result.exit_code == 0
+        assert "KB" in result.output
+
+    def test_skips_non_database_dirs(self, tmp_path: Path):
+        settings = _mock_settings()
+        settings.quarry_root = tmp_path
+        # Dir without lancedb subdir should be skipped
+        (tmp_path / "not-a-db").mkdir()
+        (tmp_path / "real" / "lancedb").mkdir(parents=True)
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=settings,
+            ),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["databases"])
+        assert result.exit_code == 0
+        assert "not-a-db" not in result.output
+        assert "real" in result.output
+
+
 class TestCliErrors:
     def test_error_exits_with_code_1(self):
         with (
