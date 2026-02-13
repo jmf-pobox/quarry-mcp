@@ -101,7 +101,7 @@ class TestResolveDbPaths:
             aws_secret_access_key="test",
         )
         resolved = resolve_db_paths(settings, db_name="work")
-        assert resolved.lancedb_path == settings.lancedb_path
+        assert resolved.lancedb_path == Path("/custom/path")
 
     def test_does_not_mutate_original(self):
         settings = Settings(
@@ -111,3 +111,23 @@ class TestResolveDbPaths:
         original_path = settings.lancedb_path
         resolve_db_paths(settings, db_name="other")
         assert settings.lancedb_path == original_path
+
+    def test_rejects_path_separator(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid database name"):
+            resolve_db_paths(settings, db_name="../escape")
+
+    def test_rejects_dot_dot(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid database name"):
+            resolve_db_paths(settings, db_name="..")

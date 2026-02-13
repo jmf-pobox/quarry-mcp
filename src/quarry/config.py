@@ -46,17 +46,27 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
+_DEFAULT_LANCEDB = Path.home() / ".quarry" / "data" / "default" / "lancedb"
+
+
 def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings:
     """Return a copy of *settings* with lancedb_path and registry_path resolved.
 
     If *db_name* is provided, paths resolve to ``quarry_root / db_name / ...``.
-    If ``LANCEDB_PATH`` is set in the environment the setting is already
-    overridden by pydantic-settings, so we leave it alone.
-    When *db_name* is None and no env override, paths use the ``default`` database.
-    """
-    import os  # noqa: PLC0415
+    If ``LANCEDB_PATH`` was overridden (via env var or ``.env``), the caller's
+    explicit path is preserved.
+    When *db_name* is None and no override, paths use the ``default`` database.
 
-    if os.environ.get("LANCEDB_PATH"):
+    Raises ``ValueError`` if *db_name* contains path separators or traversal
+    segments.
+    """
+    if db_name is not None and (
+        "/" in db_name or "\\" in db_name or db_name in (".", "..")
+    ):
+        msg = f"Invalid database name: {db_name!r}"
+        raise ValueError(msg)
+
+    if settings.lancedb_path != _DEFAULT_LANCEDB:
         return settings
 
     name = db_name or "default"
