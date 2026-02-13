@@ -14,6 +14,24 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-13
+
+### Transform
+- **ONNX Runtime embedding backend** — replaced sentence-transformers with direct ONNX Runtime inference. Eliminates PyTorch dependency (~2 GB), model loads in <1s.
+- Split `_download_model_files` (network, install-time) from `_load_model_files` (local-only, runtime) for clear separation of concerns
+- Pinned embedding model to git revision `e58a8f75` in both download and load paths
+
+### Infra
+- **Breaking:** `sentence-transformers` dependency removed. Run `quarry install` to download the ONNX model if upgrading.
+- Typed result structures: `IngestResult`, `SearchResult`, `DocumentSummary`, `CollectionSummary` TypedDicts in `results.py`
+- `OcrBackend` protocol standardized on `Path` for `document_path` parameter
+- Idempotent `configure_logging` (safe to call multiple times)
+- Narrowed exception catches in sync engine (no bare `Exception`)
+- Deferred botocore import in sync module (no AWS imports at load time)
+- `quarry doctor` verifies both ONNX model and tokenizer are cached
+- Removed stale `TODO.md` and `CODE-DESIGN-EVALUATION.md`
+- 323 tests across 20 modules
+
 ## [0.4.2] - 2026-02-12
 
 ### Infra
