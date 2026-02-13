@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from quarry import __version__
-from quarry.config import Settings
+from quarry.config import Settings, resolve_db_paths
 
 
 class TestVersion:
@@ -29,7 +29,7 @@ class TestSettings:
         assert settings.textract_poll_initial == 5.0
         assert settings.textract_max_wait == 900
         assert isinstance(settings.lancedb_path, Path)
-        expected = Path.home() / ".quarry" / "data" / "registry.db"
+        expected = Path.home() / ".quarry" / "data" / "default" / "registry.db"
         assert settings.registry_path == expected
 
     def test_override_via_constructor(self):
@@ -56,7 +56,8 @@ class TestSettings:
             aws_secret_access_key="test",
         )
         home = Path.home()
-        assert settings.lancedb_path == home / ".quarry" / "data" / "lancedb"
+        expected = home / ".quarry" / "data" / "default" / "lancedb"
+        assert settings.lancedb_path == expected
 
     def test_embedding_model_default(self):
         settings = Settings(
@@ -64,3 +65,69 @@ class TestSettings:
             aws_secret_access_key="test",
         )
         assert settings.embedding_model == "Snowflake/snowflake-arctic-embed-m-v1.5"
+
+    def test_quarry_root_default(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        assert settings.quarry_root == Path.home() / ".quarry" / "data"
+
+
+class TestResolveDbPaths:
+    def test_default_uses_default_database(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        resolved = resolve_db_paths(settings)
+        assert resolved.lancedb_path == settings.quarry_root / "default" / "lancedb"
+        expected = settings.quarry_root / "default" / "registry.db"
+        assert resolved.registry_path == expected
+
+    def test_named_database(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        resolved = resolve_db_paths(settings, db_name="work")
+        assert resolved.lancedb_path == settings.quarry_root / "work" / "lancedb"
+        assert resolved.registry_path == settings.quarry_root / "work" / "registry.db"
+
+    def test_lancedb_path_env_override(self, monkeypatch):
+        monkeypatch.setenv("LANCEDB_PATH", "/custom/path")
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        resolved = resolve_db_paths(settings, db_name="work")
+        assert resolved.lancedb_path == Path("/custom/path")
+
+    def test_does_not_mutate_original(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        original_path = settings.lancedb_path
+        resolve_db_paths(settings, db_name="other")
+        assert settings.lancedb_path == original_path
+
+    def test_rejects_path_separator(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid database name"):
+            resolve_db_paths(settings, db_name="../escape")
+
+    def test_rejects_dot_dot(self):
+        settings = Settings(
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+        )
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid database name"):
+            resolve_db_paths(settings, db_name="..")

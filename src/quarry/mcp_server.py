@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, configure_logging, load_settings
+from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
 from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("quarry-mcp")
 
+_db_name: str | None = None
+
 
 def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
     """Catch exceptions at the MCP boundary, log, and return error string."""
@@ -55,7 +57,7 @@ def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
 
 
 def _settings() -> Settings:
-    return load_settings()
+    return resolve_db_paths(load_settings(), _db_name)
 
 
 def _db() -> LanceDB:
@@ -444,7 +446,9 @@ def status() -> str:
     )
 
 
-def main() -> None:
+def main(db_name: str | None = None) -> None:
+    global _db_name
+    _db_name = db_name
     mcp.run(transport="stdio")
 
 

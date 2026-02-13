@@ -529,3 +529,38 @@ class TestListRegistrations:
         with patch("quarry.mcp_server._settings", return_value=settings):
             result = json.loads(list_registrations())
         assert result["total_registrations"] == 0
+
+
+class TestDbNamePropagation:
+    def test_settings_uses_db_name(self, tmp_path: Path):
+        """Verify _settings() calls resolve_db_paths with the module _db_name."""
+        import quarry.mcp_server as mcp_mod
+
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "work"
+            with patch(
+                "quarry.mcp_server.resolve_db_paths",
+            ) as mock_resolve:
+                mock_resolve.return_value = _settings(tmp_path)
+                mcp_mod._settings()
+            mock_resolve.assert_called_once()
+            assert mock_resolve.call_args[0][1] == "work"
+        finally:
+            mcp_mod._db_name = original
+
+    def test_settings_default_none(self, tmp_path: Path):
+        """Without db_name set, resolve_db_paths receives None."""
+        import quarry.mcp_server as mcp_mod
+
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = None
+            with patch(
+                "quarry.mcp_server.resolve_db_paths",
+            ) as mock_resolve:
+                mock_resolve.return_value = _settings(tmp_path)
+                mcp_mod._settings()
+            assert mock_resolve.call_args[0][1] is None
+        finally:
+            mcp_mod._db_name = original
