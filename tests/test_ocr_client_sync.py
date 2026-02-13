@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -52,7 +53,7 @@ class TestOcrImageBytes:
         result = ocr_image_bytes(
             image_bytes=b"fake-png-bytes",
             document_name="photo.png",
-            document_path="/tmp/photo.png",
+            document_path=Path("/tmp/photo.png"),
         )
 
         assert result.document_name == "photo.png"
@@ -77,7 +78,7 @@ class TestOcrImageBytes:
         result = ocr_image_bytes(
             image_bytes=b"blank-image",
             document_name="blank.png",
-            document_path="/tmp/blank.png",
+            document_path=Path("/tmp/blank.png"),
         )
 
         assert result.text == ""

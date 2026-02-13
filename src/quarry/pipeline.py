@@ -366,7 +366,7 @@ def ingest_image(
     page = ocr.ocr_image_bytes(
         image_bytes,
         document_name=doc_name,
-        document_path=str(file_path.resolve()),
+        document_path=file_path.resolve(),
     )
 
     return _chunk_embed_store(

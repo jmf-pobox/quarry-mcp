@@ -126,7 +126,7 @@ class TestTextractOcrBackend:
         )
 
         backend = get_ocr_backend(_settings(ocr_backend="textract"))
-        result = backend.ocr_image_bytes(b"fake", "img.png", "/tmp/img.png")
+        result = backend.ocr_image_bytes(b"fake", "img.png", Path("/tmp/img.png"))
         assert result == expected
 
 

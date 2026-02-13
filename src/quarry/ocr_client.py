@@ -87,7 +87,7 @@ def ocr_document_via_s3(
 def ocr_image_bytes(
     image_bytes: bytes,
     document_name: str,
-    document_path: str,
+    document_path: Path,
 ) -> PageContent:
     """OCR a single-page image using Textract sync API.
 
@@ -96,7 +96,7 @@ def ocr_image_bytes(
     Args:
         image_bytes: Image file bytes (JPEG or PNG).
         document_name: Document name for metadata.
-        document_path: Full path string for metadata.
+        document_path: Path to the document for metadata.
 
     Returns:
         PageContent for the single page.
@@ -116,7 +116,7 @@ def ocr_image_bytes(
 
     return PageContent(
         document_name=document_name,
-        document_path=document_path,
+        document_path=str(document_path),
         page_number=1,
         total_pages=1,
         text=text,
@@ -253,7 +253,7 @@ class TextractOcrBackend:
         self,
         image_bytes: bytes,
         document_name: str,
-        document_path: str,
+        document_path: Path,
     ) -> PageContent:
         """OCR a single-page image from bytes."""
         return ocr_image_bytes(image_bytes, document_name, document_path)

@@ -17,7 +17,7 @@ class LanceTable(Protocol):
         self,
         query: list[float] | None = ...,
     ) -> LanceQuery: ...
-    def count_rows(self, filter: str | None = ...) -> int: ...  # noqa: A002
+    def count_rows(self, predicate: str | None = ...) -> int: ...
     def delete(self, predicate: str) -> None: ...
     def create_scalar_index(
         self,
@@ -107,7 +107,7 @@ class OcrBackend(Protocol):
         self,
         image_bytes: bytes,
         document_name: str,
-        document_path: str,
+        document_path: Path,
     ) -> PageContent:
         """OCR a single-page image from bytes."""
         ...
