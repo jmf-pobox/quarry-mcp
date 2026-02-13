@@ -110,6 +110,9 @@ def ingest(
 def search_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
+    document: Annotated[
+        str, typer.Option("--document", "-d", help="Filter by document name")
+    ] = "",
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Filter by collection")
     ] = "",
@@ -134,6 +137,7 @@ def search_cmd(
         db,
         query_vector,
         limit=limit,
+        document_filter=document or None,
         collection_filter=collection or None,
         page_type_filter=page_type or None,
         source_format_filter=source_format or None,

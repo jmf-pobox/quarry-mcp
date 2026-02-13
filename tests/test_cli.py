@@ -138,7 +138,14 @@ class TestSearchCmd:
 
         assert result.exit_code == 0
 
-    def test_passes_page_type_filter(self):
+    def _assert_filter_passthrough(
+        self,
+        cli_flag: str,
+        cli_value: str,
+        expected_key: str,
+        expected_value: str | None,
+    ) -> None:
+        """Invoke search with one CLI flag and assert it reaches search()."""
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
@@ -151,30 +158,34 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]) as mock_search,
         ):
-            result = runner.invoke(app, ["search", "query", "--page-type", "code"])
+            result = runner.invoke(app, ["search", "query", cli_flag, cli_value])
 
         assert result.exit_code == 0
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["page_type_filter"] == "code"
+        assert mock_search.call_args[1][expected_key] == expected_value
+
+    def test_passes_document_filter(self):
+        self._assert_filter_passthrough(
+            "--document",
+            "report.pdf",
+            "document_filter",
+            "report.pdf",
+        )
+
+    def test_passes_page_type_filter(self):
+        self._assert_filter_passthrough(
+            "--page-type",
+            "code",
+            "page_type_filter",
+            "code",
+        )
 
     def test_passes_source_format_filter(self):
-        mock_vector = np.zeros(768, dtype=np.float32)
-        mock_backend = MagicMock()
-        mock_backend.embed_query.return_value = mock_vector
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch(
-                "quarry.__main__.get_embedding_backend",
-                return_value=mock_backend,
-            ),
-            patch("quarry.__main__.search", return_value=[]) as mock_search,
-        ):
-            result = runner.invoke(app, ["search", "query", "--source-format", ".py"])
-
-        assert result.exit_code == 0
-        call_kwargs = mock_search.call_args[1]
-        assert call_kwargs["source_format_filter"] == ".py"
+        self._assert_filter_passthrough(
+            "--source-format",
+            ".py",
+            "source_format_filter",
+            ".py",
+        )
 
     def test_empty_filters_pass_none(self):
         mock_vector = np.zeros(768, dtype=np.float32)
@@ -193,6 +204,7 @@ class TestSearchCmd:
 
         assert result.exit_code == 0
         call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["document_filter"] is None
         assert call_kwargs["page_type_filter"] is None
         assert call_kwargs["source_format_filter"] is None
 
