@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from quarry.embeddings import OnnxEmbeddingBackend
+from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
 
 
 def _mock_session() -> MagicMock:
@@ -116,6 +116,63 @@ class TestEmbedQuery:
             result = backend.embed_query("search term")
 
         assert result.shape == (768,)
+
+
+class TestBatching:
+    def test_session_called_per_batch(self):
+        """Input exceeding batch size triggers multiple session.run calls."""
+        n = _EMBED_BATCH_SIZE + 1
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        # Return correct shape for each batch call
+        session.run.side_effect = lambda _output_names, feeds: (
+            np.zeros((len(feeds["input_ids"]), 5, 768), dtype=np.float32),
+            np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
+        )
+
+        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3:
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts([f"text {i}" for i in range(n)])
+
+        assert result.shape == (n, 768)
+        assert session.run.call_count == 2
+
+    def test_large_input_correct_shape(self):
+        """3.x batches produce output shape (n, 768) with 4 session calls."""
+        n = _EMBED_BATCH_SIZE * 3 + 5
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        session.run.side_effect = lambda _output_names, feeds: (
+            np.zeros((len(feeds["input_ids"]), 5, 768), dtype=np.float32),
+            np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
+        )
+
+        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3:
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts([f"text {i}" for i in range(n)])
+
+        assert result.shape == (n, 768)
+        assert session.run.call_count == 4
+
+    def test_single_batch_calls_session_once(self):
+        """Input exactly at batch size calls session.run exactly once."""
+        n = _EMBED_BATCH_SIZE
+        session = _mock_session()
+        tokenizer = _mock_tokenizer()
+        session.run.side_effect = lambda _output_names, feeds: (
+            np.zeros((len(feeds["input_ids"]), 5, 768), dtype=np.float32),
+            np.zeros((len(feeds["input_ids"]), 768), dtype=np.float32),
+        )
+
+        p1, p2, p3 = _patch_onnx_backend(session, tokenizer)
+        with p1, p2, p3:
+            backend = OnnxEmbeddingBackend()
+            result = backend.embed_texts([f"text {i}" for i in range(n)])
+
+        assert result.shape == (n, 768)
+        assert session.run.call_count == 1
 
 
 class TestModelName:
