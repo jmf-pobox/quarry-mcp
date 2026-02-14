@@ -317,7 +317,7 @@ def registrations_cmd(
 def sync_cmd(
     workers: Annotated[
         int, typer.Option("--workers", "-w", help="Parallel workers")
-    ] = 4,
+    ] = 2,
     database: DbOption = "",
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""

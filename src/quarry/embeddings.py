@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_EMBED_BATCH_SIZE: int = 32
+
 
 def _download_model_files() -> tuple[str, str]:
     """Download ONNX model and tokenizer from HuggingFace Hub.
@@ -105,23 +107,46 @@ class OnnxEmbeddingBackend:
         return ONNX_MODEL_REPO
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        """Embed a batch of texts. Returns shape (n, dimension)."""
+        """Embed a batch of texts. Returns shape (n, dimension).
+
+        Processes texts in batches of ``_EMBED_BATCH_SIZE`` to bound peak
+        memory.  Without batching, a 575-text call allocates ~15 GB per
+        attention layer — enough to OOM-kill a 24 GB laptop.
+        """
         if not texts:
             return np.empty((0, self._dimension), dtype=np.float32)
-        encodings = self._tokenizer.encode_batch(texts)
-        input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
-        attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
 
-        _token_embeddings, sentence_embedding = self._session.run(
-            None,
-            {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-            },
-        )
+        n = len(texts)
+        n_batches = (n + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE
+        logger.debug("Embedding %d texts in %d batches", n, n_batches)
 
-        # Model provides pre-pooled, pre-normalized sentence embeddings
-        result: NDArray[np.float32] = sentence_embedding
+        if n > 256:
+            logger.warning(
+                "Large embedding request (%d texts). "
+                "Consider chunking at the document level.",
+                n,
+            )
+
+        parts: list[NDArray[np.float32]] = []
+        for i in range(n_batches):
+            batch = texts[i * _EMBED_BATCH_SIZE : (i + 1) * _EMBED_BATCH_SIZE]
+            encodings = self._tokenizer.encode_batch(batch)
+            input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+            attention_mask = np.array(
+                [e.attention_mask for e in encodings], dtype=np.int64
+            )
+
+            _token_embeddings, sentence_embedding = self._session.run(
+                None,
+                {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                },
+            )
+            parts.append(sentence_embedding)
+            logger.debug("Embedded batch %d/%d", i + 1, n_batches)
+
+        result: NDArray[np.float32] = np.concatenate(parts)
         return result
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
