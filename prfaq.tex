@@ -512,8 +512,7 @@ run \texttt{quarry install}, and start searching.
   (7--13 depending on batch size; see \texttt{benchmarks/embed\_throughput.py}).
   Concurrent workers provide no additional throughput due to CPU cache
   contention. A 10{,}000-file directory (\texttildelow70{,}000 chunks) takes
-  roughly 1.5--2 hours---comparable to macOS Spotlight, which re-indexes for
-  hours after a long offline period. Files are queryable as they are
+  roughly 1.5--2 hours. Files are queryable as they are
   indexed---the user does not wait for the full sync to complete. Subsequent
   syncs are incremental and fast (only new or changed files).
 
