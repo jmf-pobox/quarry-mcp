@@ -268,7 +268,7 @@ result = ingest_content("Quarterly revenue was $4.2M.", "notes.txt", db, setting
 
 # Search
 backend = get_embedding_backend(settings)
-vector = backend.embed("revenue figures")
+vector = backend.embed_query("revenue figures")
 results = search(db, vector, limit=5, collection_filter="work")
 for r in results:
     print(r["text"], r["_distance"])
