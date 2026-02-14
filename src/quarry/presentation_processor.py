@@ -30,33 +30,38 @@ def _table_to_latex(table: Table) -> str:
     return rows_to_latex(headers, data)
 
 
-def _extract_shapes(slide: Slide) -> tuple[str, list[str], list[str]]:
-    """Extract title, body parts, and table parts from slide shapes.
+def _extract_shapes(slide: Slide) -> tuple[str, list[str]]:
+    """Extract title and content parts from slide shapes in order.
+
+    Text shapes are LaTeX-escaped; tables are already escaped by
+    ``rows_to_latex``.  All non-title shapes are collected in iteration
+    order so interleaved text and tables preserve their slide layout.
 
     Returns:
-        Tuple of (title, body_parts, table_parts).
+        Tuple of (title, content_parts).
     """
     title = ""
-    body_parts: list[str] = []
-    table_parts: list[str] = []
+    content_parts: list[str] = []
 
-    if slide.shapes.title is not None:
-        title = slide.shapes.title.text.strip()
+    title_shape = slide.shapes.title
+    if title_shape is not None:
+        title = title_shape.text.strip()
 
     for shape in slide.shapes:
         if shape.has_table:
+            # Tables are LaTeX-escaped internally by rows_to_latex
             latex = _table_to_latex(shape.table)  # type: ignore[attr-defined]
             if latex:
-                table_parts.append(latex)
+                content_parts.append(latex)
         elif shape.has_text_frame:
-            if slide.shapes.title is not None and shape is slide.shapes.title:
+            if title_shape is not None and shape is title_shape:
                 continue
             tf = shape.text_frame  # type: ignore[attr-defined]
             text: str = tf.text.strip()
             if text:
-                body_parts.append(text)
+                content_parts.append(escape_latex(text))
 
-    return title, body_parts, table_parts
+    return title, content_parts
 
 
 def _extract_notes(slide: Slide) -> str:
@@ -74,14 +79,9 @@ def _extract_slide_text(slide: Slide) -> tuple[str, str, str]:
         Tuple of (title, body, notes) where each is a string.
         Empty strings for missing components.
     """
-    title, body_parts, table_parts = _extract_shapes(slide)
+    title, content_parts = _extract_shapes(slide)
     notes = _extract_notes(slide)
-
-    body = "\n\n".join(body_parts)
-    if table_parts:
-        tables = "\n\n".join(table_parts)
-        body = f"{body}\n\n{tables}" if body else tables
-
+    body = "\n\n".join(content_parts)
     return title, body, notes
 
 
@@ -109,7 +109,7 @@ def _format_slide_content(
         parts.append(body)
 
     if notes:
-        parts.append(f"---\nSpeaker Notes:\n{notes}")
+        parts.append(f"---\nSpeaker Notes:\n{escape_latex(notes)}")
 
     return "\n\n".join(parts)
 

@@ -363,6 +363,74 @@ class TestProcessPresentationFile:
         assert r"\$4.2M" in pages[0].text
         assert r"\&" in pages[0].text
 
+    def test_body_special_chars_escaped(self, tmp_path: Path):
+        f = _make_pptx(tmp_path)
+        prs = _new_prs()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        txbox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+        txbox.text_frame.text = "Revenue was $4.2M (12% growth)"
+        _save(prs, f)
+
+        pages = process_presentation_file(f)
+
+        assert r"\$4.2M" in pages[0].text
+        assert r"12\%" in pages[0].text
+
+    def test_notes_special_chars_escaped(self, tmp_path: Path):
+        f = _make_pptx(tmp_path)
+        prs = _new_prs()
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = "Title"
+        slide.placeholders[1].text = "Body"
+        notes_slide = slide.notes_slide
+        notes_slide.notes_text_frame.text = "Budget: $500 & costs"
+        _save(prs, f)
+
+        pages = process_presentation_file(f)
+
+        assert r"\$500" in pages[0].text
+        assert r"\&" in pages[0].text
+
+    def test_notes_only_slide_included(self, tmp_path: Path):
+        f = _make_pptx(tmp_path)
+        prs = _new_prs()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+        notes_slide = slide.notes_slide
+        notes_slide.notes_text_frame.text = "Hidden context note"
+        _save(prs, f)
+
+        pages = process_presentation_file(f)
+
+        assert len(pages) == 1
+        assert "Speaker Notes:" in pages[0].text
+        assert "Hidden context note" in pages[0].text
+
+    def test_interleaved_text_and_tables(self, tmp_path: Path):
+        f = _make_pptx(tmp_path)
+        prs = _new_prs()
+        slide = prs.slides.add_slide(prs.slide_layouts[5])
+
+        txbox1 = slide.shapes.add_textbox(
+            Inches(1), Inches(0.5), Inches(4), Inches(0.5)
+        )
+        txbox1.text_frame.text = "First text"
+
+        table1 = _add_table(slide, 2, 1, top=1.5)
+        table1.cell(0, 0).text = "Header1"
+        table1.cell(1, 0).text = "Val1"
+
+        txbox2 = slide.shapes.add_textbox(Inches(1), Inches(3), Inches(4), Inches(0.5))
+        txbox2.text_frame.text = "Second text"
+        _save(prs, f)
+
+        pages = process_presentation_file(f)
+
+        text = pages[0].text
+        first_pos = text.find("First text")
+        table_pos = text.find("Header1")
+        second_pos = text.find("Second text")
+        assert first_pos < table_pos < second_pos
+
 
 class TestProcessPresentationErrors:
     def test_unsupported_extension(self, tmp_path: Path):
