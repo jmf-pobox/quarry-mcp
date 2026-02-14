@@ -390,6 +390,22 @@ def doctor() -> None:
 
 
 @app.command()
+@_cli_errors
+def serve(
+    port: Annotated[
+        int,
+        typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
+    ] = 0,
+    database: DbOption = "",
+) -> None:
+    """Start the HTTP API server for quarry-menubar."""
+    from quarry.http_server import serve as http_serve  # noqa: PLC0415
+
+    settings = _resolved_settings(database)
+    http_serve(settings, port=port)
+
+
+@app.command()
 def mcp(
     database: DbOption = "",
 ) -> None:
