@@ -55,11 +55,7 @@ def _has_markdown_headings(text: str) -> bool:
     return False
 
 
-def process_html_file(
-    file_path: Path,
-    *,
-    document_name: str | None = None,
-) -> list[PageContent]:
+def process_html_file(file_path: Path) -> list[PageContent]:
     """Parse an HTML file into Markdown sections for embedding.
 
     Strategy:
@@ -68,13 +64,11 @@ def process_html_file(
       3. Extract ``<title>`` text.
       4. Remove boilerplate tags (script, style, nav, etc.).
       5. Convert cleaned body to Markdown via markdownify.
-      6. Prepend title as ``# Heading`` if the body has no headings.
+      6. Prepend title as ``# Heading`` only if the body has no headings.
       7. Split on Markdown headings, or fall back to blank-line paragraphs.
 
     Args:
         file_path: Path to ``.html`` or ``.htm`` file.
-        document_name: Override for stored document name.  Defaults to
-            ``file_path.name``.
 
     Returns:
         List of PageContent objects, one per section.  Empty list when the
@@ -88,8 +82,8 @@ def process_html_file(
         msg = f"Unsupported HTML format: {suffix}"
         raise ValueError(msg)
 
-    resolved_name = document_name or file_path.name
-    logger.debug("Processing HTML: %s", resolved_name)
+    document_name = file_path.name
+    logger.debug("Processing HTML: %s", document_name)
 
     html_text = _read_text_with_fallback(file_path)
     soup = BeautifulSoup(html_text, "html.parser")
@@ -101,7 +95,7 @@ def process_html_file(
     content_root = body if isinstance(body, Tag) else soup
     markdown = _html_to_markdown(str(content_root))
 
-    if title:
+    if title and not _has_markdown_headings(markdown):
         markdown = f"# {title}\n\n{markdown}"
 
     # Choose splitting strategy based on content structure.
@@ -114,4 +108,4 @@ def process_html_file(
         return []
 
     document_path = str(file_path.resolve())
-    return _sections_to_pages(sections, resolved_name, document_path, PageType.SECTION)
+    return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)

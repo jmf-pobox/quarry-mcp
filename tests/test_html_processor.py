@@ -271,13 +271,19 @@ class TestProcessHTMLFile:
         assert "Alice" in full
         assert "30" in full
 
-    def test_document_name_override(self, tmp_path: Path):
-        f = tmp_path / "page.html"
-        f.write_text("<html><body><p>Content</p></body></html>")
+    def test_title_not_duplicated_when_body_has_headings(self, tmp_path: Path):
+        f = tmp_path / "titled.html"
+        f.write_text(
+            "<html><head><title>Page Title</title></head>"
+            "<body><h1>Introduction</h1><p>Body text.</p></body></html>"
+        )
 
-        pages = process_html_file(f, document_name="subdir/page.html")
+        pages = process_html_file(f)
 
-        assert pages[0].document_name == "subdir/page.html"
+        full = " ".join(p.text for p in pages)
+        # Title should NOT be prepended because the body already has headings.
+        assert full.count("Page Title") == 0
+        assert "Introduction" in full
 
     def test_special_chars_in_content(self, tmp_path: Path):
         f = tmp_path / "special.html"

@@ -424,7 +424,7 @@ def ingest_html_file(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_html_file(file_path, document_name=document_name)
+    pages = process_html_file(file_path)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
