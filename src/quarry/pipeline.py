@@ -22,6 +22,10 @@ from quarry.image_analyzer import (
 from quarry.models import PageContent, PageType
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.results import IngestResult
+from quarry.html_processor import (
+    SUPPORTED_HTML_EXTENSIONS,
+    process_html_file,
+)
 from quarry.spreadsheet_processor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
     process_spreadsheet_file,
@@ -42,6 +46,7 @@ SUPPORTED_EXTENSIONS = (
     | SUPPORTED_IMAGE_EXTENSIONS
     | SUPPORTED_CODE_EXTENSIONS
     | SUPPORTED_SPREADSHEET_EXTENSIONS
+    | SUPPORTED_HTML_EXTENSIONS
 )
 
 
@@ -57,8 +62,8 @@ def ingest_document(
 ) -> IngestResult:
     """Ingest a document: dispatch to format-specific handler.
 
-    Supported formats: PDF, TXT, MD, TEX, DOCX, PNG, JPEG, TIFF, BMP, WebP,
-    XLSX, CSV.
+    Supported formats: PDF, TXT, MD, TEX, DOCX, HTML, PNG, JPEG, TIFF, BMP,
+    WebP, XLSX, CSV.
 
     Args:
         file_path: Path to the document.
@@ -132,6 +137,17 @@ def ingest_document(
 
     if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
         return ingest_spreadsheet(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            document_name=document_name,
+            progress_callback=progress_callback,
+        )
+
+    if suffix in SUPPORTED_HTML_EXTENSIONS:
+        return ingest_html_file(
             file_path,
             db,
             settings,
@@ -371,6 +387,55 @@ def ingest_spreadsheet(
         collection=collection,
         source_format=file_path.suffix.lower(),
         sheets=sheet_count,
+    )
+
+
+def ingest_html_file(
+    file_path: Path,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "default",
+    document_name: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> IngestResult:
+    """Ingest an HTML document: parse, clean, convert to Markdown, chunk, embed, store.
+
+    Supported: .html, .htm.
+
+    Args:
+        file_path: Path to the HTML file.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+    """
+    progress = _make_progress(progress_callback)
+    document_name = document_name or file_path.name
+
+    progress("Reading: %s", document_name)
+
+    if overwrite:
+        delete_document(db, document_name, collection=collection)
+
+    pages = process_html_file(file_path, document_name=document_name)
+    progress("Sections: %d", len(pages))
+
+    return _chunk_embed_store(
+        pages,
+        document_name,
+        db,
+        settings,
+        progress,
+        collection=collection,
+        source_format=file_path.suffix.lower(),
+        sections=len(pages),
     )
 
 
