@@ -21,6 +21,7 @@ class IngestResult(TypedDict):
     sections: NotRequired[int]
     definitions: NotRequired[int]
     sheets: NotRequired[int]
+    slides: NotRequired[int]
     format: NotRequired[str]
 
 

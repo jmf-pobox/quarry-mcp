@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from pptx import Presentation
@@ -15,21 +16,35 @@ from quarry.presentation_processor import (
     process_presentation_file,
 )
 
+if TYPE_CHECKING:
+    from pptx.presentation import Presentation as PresentationType
+    from pptx.slide import Slide
+    from pptx.table import Table
+
 
 def _make_pptx(tmp_path: Path, name: str = "test.pptx") -> Path:
-    """Create a blank PPTX and return (path, Presentation)."""
+    """Return the path for a new PPTX file."""
     return tmp_path / name
 
 
-def _new_prs() -> Presentation:
+def _new_prs() -> PresentationType:
     return Presentation()
 
 
-def _save(prs: Presentation, path: Path) -> None:
+def _save(prs: PresentationType, path: Path) -> None:
     prs.save(str(path))
 
 
-def _add_table(slide, rows, cols, *, left=1, top=1, width=4, height=2):
+def _add_table(
+    slide: Slide,
+    rows: int,
+    cols: int,
+    *,
+    left: float = 1,
+    top: float = 1,
+    width: float = 4,
+    height: float = 2,
+) -> Table:
     """Add a table to a slide, returning the Table object."""
     shape = slide.shapes.add_table(
         rows,
