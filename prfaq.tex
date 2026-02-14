@@ -507,13 +507,15 @@ run \texttt{quarry install}, and start searching.
   of documents on a single machine. LanceDB handles this efficiently with
   on-disk storage and approximate nearest neighbor search.
 
-  Initial indexing is the main time investment. The ONNX embedding model
-  processes \texttildelow8 chunks/second per thread on an M2 CPU; with two
-  concurrent workers, a 10{,}000-file directory (\texttildelow70{,}000 chunks)
-  takes roughly 1.5--2 hours. This is comparable to macOS Spotlight, which
-  re-indexes for hours after a long offline period. Files are queryable as
-  they are indexed---the user does not wait for the full sync to complete.
-  Subsequent syncs are incremental and fast (only new or changed files).
+  Initial indexing is the main time investment. Benchmarked on an M2 MacBook
+  Air, the ONNX embedding model sustains \texttildelow11 chunks/second
+  (7--13 depending on batch size; see \texttt{benchmarks/embed\_throughput.py}).
+  Concurrent workers provide no additional throughput due to CPU cache
+  contention. A 10{,}000-file directory (\texttildelow70{,}000 chunks) takes
+  roughly 1.5--2 hours---comparable to macOS Spotlight, which re-indexes for
+  hours after a long offline period. Files are queryable as they are
+  indexed---the user does not wait for the full sync to complete. Subsequent
+  syncs are incremental and fast (only new or changed files).
 
   Query latency remains fast regardless of database size because LanceDB uses
   IVF-PQ indexing.
