@@ -83,8 +83,8 @@ def ingest_file(
 ) -> None:
     """Ingest a document from a file path.
 
-    Supports PDF, images (JPG, PNG, TIFF, HEIC), spreadsheets (XLSX, CSV),
-    HTML, TXT, MD, TEX, DOCX, and source code files.
+    Supports PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX),
+    spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source code files.
     """
     settings = _resolved_settings(database)
     db = get_db(settings.lancedb_path)

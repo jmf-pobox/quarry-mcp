@@ -77,18 +77,27 @@ quarry ingest-file report.pdf --overwrite
 # Search
 quarry search "authentication logic"
 quarry search "quarterly revenue" -n 5
+quarry search "test coverage" --page-type code
+quarry search "revenue" --source-format .xlsx
 
 # Manage
 quarry list
 quarry delete report.pdf
 quarry collections
 quarry delete-collection math
+quarry databases                    # list all named databases with stats
 
 # Directory sync — register a folder, then sync to pick up changes
 quarry register /path/to/docs --collection my-docs
-quarry sync
+quarry sync                         # ingest new/changed, remove deleted
 quarry registrations
 quarry deregister my-docs
+
+# System
+quarry install                      # download model, configure MCP
+quarry doctor                       # check environment health
+quarry serve                        # start HTTP API for quarry-menubar
+quarry mcp                          # start MCP server (stdio)
 ```
 
 ### MCP Server
@@ -149,7 +158,10 @@ All settings via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OCR_BACKEND` | `local` | `local` (RapidOCR, offline) or `textract` (AWS) |
+| `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases and logs |
 | `LANCEDB_PATH` | `~/.quarry/data/default/lancedb` | Vector database location (overrides `--db`) |
+| `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
+| `LOG_PATH` | `~/.quarry/data/quarry.log` | Log file location (rotating, 5 MB max) |
 | `CHUNK_MAX_CHARS` | `1800` | Target max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
@@ -214,19 +226,28 @@ Each database resolves to `~/.quarry/data/<name>/lancedb` with its own registry.
 | `TEXTRACT_POLL_INITIAL` | `5.0` | Initial Textract polling interval (seconds) |
 | `TEXTRACT_POLL_MAX` | `30.0` | Max polling interval (1.5x exponential backoff) |
 | `TEXTRACT_MAX_WAIT` | `900` | Max wait for Textract job (seconds) |
-| `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
+| `TEXTRACT_MAX_IMAGE_BYTES` | `10485760` | Max image size for Textract sync API (10 MB) |
+| `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | Embedding model identifier (cache key) |
+| `EMBEDDING_DIMENSION` | `768` | Embedding vector dimension |
 
 ## Architecture
 
 ```
 Connectors                Formats              Transformations
   │                         │                        │
-  ├─ Local filesystem       ├─ PDF ──────┬─ text ──→ PyMuPDF extraction
-  │   (register + sync)     │            └─ image ─→ OCR (local or Textract)
-  │                         │
-  └─ Google Drive           ├─ Images ─────────────→ OCR (local or Textract)
-     (planned)              │
+  └─ Local filesystem       ├─ PDF ──────┬─ text ──→ PyMuPDF extraction
+      (register + sync)     │            └─ image ─→ OCR (local or Textract)
+                            │
+                            ├─ Images ─────────────→ OCR (local or Textract)
+                            │
+                            ├─ Spreadsheets ───────→ LaTeX tabular serialization
+                            │
+                            ├─ Presentations ──────→ Slide extraction + LaTeX tables
+                            │
+                            ├─ HTML ───────────────→ Boilerplate stripping + Markdown
+                            │
                             ├─ Text files ─────────→ Section-aware splitting
+                            │   (TXT, MD, LaTeX, DOCX)
                             │
                             ├─ Source code ─────────→ Tree-sitter AST splitting
                             │
@@ -236,18 +257,20 @@ Connectors                Formats              Transformations
                                                     │
                                                     ├─ Sentence-aware chunking
                                                     ├─ Chunk metadata (page_type, source_format)
-                                                    ├─ Vector embeddings (768-dim)
+                                                    ├─ Vector embeddings (768-dim, ONNX Runtime)
                                                     └─ LanceDB storage
                                                          │
                                                   Query
                                                     │
                                                     ├─ Semantic search
-                                                    └─ Collection filtering
+                                                    ├─ Collection filtering
+                                                    └─ Format filtering (page_type, source_format)
                                                          │
                                                   Interface
                                                     │
                                                     ├─ MCP Server (stdio)
-                                                    └─ CLI (typer + rich)
+                                                    ├─ CLI (typer + rich)
+                                                    └─ HTTP API (for quarry-menubar)
 ```
 
 ## Library API
@@ -281,8 +304,10 @@ The public API surface is in `quarry/__init__.py`. Pipeline functions accept a `
 
 ## Roadmap
 
-- macOS menu bar companion app
+- [macOS menu bar companion app](https://github.com/jmf-pobox/quarry-menubar) — native macOS search interface (in development)
 - Google Drive connector
+- `quarry sync --watch` for live filesystem monitoring
+- PII detection and redaction
 
 For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 
