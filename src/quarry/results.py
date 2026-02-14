@@ -20,6 +20,7 @@ class IngestResult(TypedDict):
     image_pages: NotRequired[int]
     sections: NotRequired[int]
     definitions: NotRequired[int]
+    sheets: NotRequired[int]
     format: NotRequired[str]
 
 

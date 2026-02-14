@@ -296,15 +296,55 @@ class TestIngestDocument:
         assert result["chunks"] == 1
         assert result["sections"] == 2
 
-    def test_unsupported_format_raises(self, tmp_path: Path):
+    def test_dispatches_spreadsheet_file(self, monkeypatch, tmp_path: Path):
         csv_file = tmp_path / "data.csv"
-        csv_file.write_text("a,b,c")
+        csv_file.write_text("A,B\n1,2\n")
+
+        chunks = [
+            Chunk(
+                document_name="data.csv",
+                document_path=str(csv_file),
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="1 & 2",
+                page_raw_text="1 & 2",
+                page_type="spreadsheet",
+                source_format=".csv",
+                ingestion_timestamp=datetime.now(tz=UTC),
+            )
+        ]
+        vectors = np.zeros((1, 768), dtype=np.float32)
+
+        monkeypatch.setattr(
+            "quarry.pipeline.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: chunks,
+        )
+        _mock_embedding_backend(monkeypatch, vectors)
+        monkeypatch.setattr(
+            "quarry.pipeline.insert_chunks",
+            lambda _db, _chunks, _vectors: 1,
+        )
+
+        from quarry.pipeline import ingest_document
+
+        db = MagicMock()
+        result = ingest_document(csv_file, db, _settings())
+
+        assert result["document_name"] == "data.csv"
+        assert result["chunks"] == 1
+        assert result["sheets"] == 1
+
+    def test_unsupported_format_raises(self, tmp_path: Path):
+        zip_file = tmp_path / "archive.zip"
+        zip_file.write_bytes(b"PK\x03\x04")
 
         from quarry.pipeline import ingest_document
 
         db = MagicMock()
         with pytest.raises(ValueError, match="Unsupported file format"):
-            ingest_document(csv_file, db, _settings())
+            ingest_document(zip_file, db, _settings())
 
 
 class TestIngestText:

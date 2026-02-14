@@ -22,6 +22,10 @@ from quarry.image_analyzer import (
 from quarry.models import PageContent, PageType
 from quarry.pdf_analyzer import analyze_pdf
 from quarry.results import IngestResult
+from quarry.spreadsheet_processor import (
+    SUPPORTED_SPREADSHEET_EXTENSIONS,
+    process_spreadsheet_file,
+)
 from quarry.text_extractor import extract_text_pages
 from quarry.text_processor import (
     SUPPORTED_TEXT_EXTENSIONS,
@@ -37,6 +41,7 @@ SUPPORTED_EXTENSIONS = (
     | SUPPORTED_TEXT_EXTENSIONS
     | SUPPORTED_IMAGE_EXTENSIONS
     | SUPPORTED_CODE_EXTENSIONS
+    | SUPPORTED_SPREADSHEET_EXTENSIONS
 )
 
 
@@ -52,7 +57,8 @@ def ingest_document(
 ) -> IngestResult:
     """Ingest a document: dispatch to format-specific handler.
 
-    Supported formats: PDF, TXT, MD, TEX, DOCX, PNG, JPEG, TIFF, BMP, WebP.
+    Supported formats: PDF, TXT, MD, TEX, DOCX, PNG, JPEG, TIFF, BMP, WebP,
+    XLSX, CSV.
 
     Args:
         file_path: Path to the document.
@@ -115,6 +121,17 @@ def ingest_document(
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
         return ingest_image(
+            file_path,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            document_name=document_name,
+            progress_callback=progress_callback,
+        )
+
+    if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
+        return ingest_spreadsheet(
             file_path,
             db,
             settings,
@@ -301,6 +318,59 @@ def ingest_code_file(
         collection=collection,
         source_format=file_path.suffix.lower(),
         definitions=len(pages),
+    )
+
+
+def ingest_spreadsheet(
+    file_path: Path,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "default",
+    document_name: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> IngestResult:
+    """Ingest a spreadsheet: read sheets, serialize to LaTeX, chunk, embed, store.
+
+    Supported: .xlsx, .csv.
+
+    Args:
+        file_path: Path to the spreadsheet file.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: If True, delete existing data for this document first.
+        collection: Collection name for organizing documents.
+        document_name: Override for the stored document name.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        Dict with ingestion results.
+    """
+    progress = _make_progress(progress_callback)
+    document_name = document_name or file_path.name
+
+    progress("Reading: %s", document_name)
+
+    if overwrite:
+        delete_document(db, document_name, collection=collection)
+
+    pages, sheet_count = process_spreadsheet_file(
+        file_path,
+        max_chars=settings.chunk_max_chars,
+        document_name=document_name,
+    )
+    progress("Sheets: %d, sections: %d", sheet_count, len(pages))
+
+    return _chunk_embed_store(
+        pages,
+        document_name,
+        db,
+        settings,
+        progress,
+        collection=collection,
+        source_format=file_path.suffix.lower(),
+        sheets=sheet_count,
     )
 
 
@@ -599,6 +669,7 @@ def _chunk_embed_store(
     image_pages: int | None = None,
     sections: int | None = None,
     definitions: int | None = None,
+    sheets: int | None = None,
     file_format: str | None = None,
 ) -> IngestResult:
     """Shared pipeline: chunk pages, embed, store in LanceDB."""
@@ -640,6 +711,8 @@ def _chunk_embed_store(
         result["sections"] = sections
     if definitions is not None:
         result["definitions"] = definitions
+    if sheets is not None:
+        result["sheets"] = sheets
     if file_format is not None:
         result["format"] = file_format
     return result

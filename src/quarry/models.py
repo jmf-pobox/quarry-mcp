@@ -12,18 +12,21 @@ class PageType(enum.Enum):
     IMAGE = "image"
     SECTION = "section"
     CODE = "code"
+    SPREADSHEET = "spreadsheet"
 
 
 def stored_page_type(pt: PageType) -> str:
     """Map a PageType enum to the string stored in LanceDB.
 
     TEXT, IMAGE, and SECTION all represent prose content and map to
-    ``"text"``.  CODE maps to ``"code"``.  Future values (spreadsheet,
-    presentation, email) will get their own stored strings.
+    ``"text"``.  CODE maps to ``"code"``.  SPREADSHEET maps to
+    ``"spreadsheet"``.
     """
-    if pt is PageType.CODE:
-        return "code"
-    return "text"
+    mapping: dict[PageType, str] = {
+        PageType.CODE: "code",
+        PageType.SPREADSHEET: "spreadsheet",
+    }
+    return mapping.get(pt, "text")
 
 
 @dataclass(frozen=True)
