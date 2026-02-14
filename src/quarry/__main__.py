@@ -344,7 +344,11 @@ def _format_size(size_bytes: int) -> str:
     """Human-readable size string from byte count."""
     if size_bytes >= 1_048_576:
         return f"{size_bytes / 1_048_576:.1f} MB"
-    return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes == 1:
+        return "1 byte"
+    return f"{size_bytes} bytes"
 
 
 def _discover_databases(root: Path) -> list[DatabaseSummary]:
@@ -384,7 +388,7 @@ def databases_cmd(
     databases = _discover_databases(settings.quarry_root)
 
     if output_json:
-        print(json.dumps(databases, indent=2))
+        console.print(json.dumps(databases, indent=2))
         return
 
     if not databases:

@@ -610,7 +610,7 @@ class TestDatabasesCmdSizeFormatting:
         ):
             result = runner.invoke(app, ["databases"])
         assert result.exit_code == 0
-        assert "KB" in result.output
+        assert "512 bytes" in result.output
 
     def test_skips_non_database_dirs(self, tmp_path: Path):
         settings = _mock_settings()
