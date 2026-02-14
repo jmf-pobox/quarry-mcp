@@ -18,6 +18,9 @@ across `transform`, `index`, and `connector`).
 - **XLSX and CSV spreadsheet ingestion** — spreadsheets are serialized to LaTeX tabular format for LLM-native consumption. Large sheets are split into row groups with column headers repeated in each section. New `spreadsheet_processor.py` module; new `openpyxl` dependency.
 - `SPREADSHEET` page type added; `stored_page_type()` maps it to `"spreadsheet"`
 - **HTML ingestion** — HTML files are parsed with BeautifulSoup, boilerplate stripped (nav, footer, scripts, etc.), and converted to Markdown via markdownify. Sections split on headings with paragraph fallback. New `html_processor.py` module; new `beautifulsoup4` and `markdownify` dependencies.
+- **PPTX presentation ingestion** — each slide becomes one chunk containing the title, body text, tables as LaTeX tabular, and speaker notes (after `---` separator). Empty slides are skipped. New `presentation_processor.py` module; new `python-pptx` dependency.
+- `PRESENTATION` page type added; `stored_page_type()` maps it to `"presentation"`
+- LaTeX table utilities (`escape_latex`, `rows_to_latex`) extracted to shared `latex_utils.py` module for reuse by spreadsheet and presentation processors
 
 ### Index
 - **`page_type` and `source_format` chunk metadata** — every chunk now stores its content type (`"text"` or `"code"`) and source format (file extension like `".pdf"`, `".py"`, or `"inline"` for programmatic text). Enables downstream search-by-format filtering.
