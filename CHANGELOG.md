@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Transform
+- **SageMaker embedding backend** — offloads `embed_texts()` to a SageMaker Serverless endpoint for cloud-speed batch ingestion. `embed_query()` stays local via ONNX for sub-millisecond search latency. Same model (snowflake-arctic-embed-m-v1.5) on both paths; vectors are compatible.
+
+### Index
+- **Auto-workers for sync** — `quarry sync` auto-selects 4 parallel workers when a cloud backend (Textract or SageMaker) is active, 1 otherwise. Explicit `--workers` still overrides.
+
+### Infra
+- `EMBEDDING_BACKEND` setting (`onnx` | `sagemaker`) with factory dispatch in `backends.py`
+- `SAGEMAKER_ENDPOINT_NAME` setting for SageMaker endpoint configuration
+- `SageMakerRuntimeClient` and `ReadableBody` protocols in `types.py`
+- `quarry doctor` checks SageMaker endpoint availability when configured
+- CloudFormation template (`infra/sagemaker-embedding.yaml`) for Serverless endpoint deployment
+
 ### Format
 - **XLSX and CSV spreadsheet ingestion** — spreadsheets are serialized to LaTeX tabular format for LLM-native consumption. Large sheets are split into row groups with column headers repeated in each section. New `spreadsheet_processor.py` module; new `openpyxl` dependency.
 - `SPREADSHEET` page type added; `stored_page_type()` maps it to `"spreadsheet"`

@@ -201,6 +201,50 @@ def _check_imports() -> CheckResult:
     )
 
 
+def _check_sagemaker_endpoint() -> CheckResult | None:
+    """Check SageMaker embedding endpoint availability.
+
+    Only runs when EMBEDDING_BACKEND=sagemaker or SAGEMAKER_ENDPOINT_NAME is
+    set.  Returns None when neither is configured (skips check).
+    """
+    embedding_backend = os.environ.get("EMBEDDING_BACKEND", "onnx")
+    endpoint_name = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
+    if embedding_backend != "sagemaker" and not endpoint_name:
+        return None
+    if not endpoint_name:
+        return CheckResult(
+            name="SageMaker endpoint",
+            passed=False,
+            message="SAGEMAKER_ENDPOINT_NAME not set",
+            required=False,
+        )
+    try:
+        import boto3  # noqa: PLC0415
+
+        client = boto3.client("sagemaker")
+        response = client.describe_endpoint(EndpointName=endpoint_name)
+        status = response.get("EndpointStatus", "Unknown")
+        if status == "InService":
+            return CheckResult(
+                name="SageMaker endpoint",
+                passed=True,
+                message=f"{endpoint_name} (InService)",
+            )
+        return CheckResult(
+            name="SageMaker endpoint",
+            passed=False,
+            message=f"{endpoint_name} (status: {status})",
+            required=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            name="SageMaker endpoint",
+            passed=False,
+            message=f"{endpoint_name}: {exc}",
+            required=False,
+        )
+
+
 def _check_storage() -> CheckResult:
     """Report database storage size."""
     data_dir = Path.home() / ".quarry" / "data"
@@ -449,7 +493,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
         print()  # noqa: T201
 
     with _quiet_logging():
-        checks = [
+        all_results: list[CheckResult | None] = [
             _check_python_version(),
             _check_data_directory(),
             _check_local_ocr(),
@@ -458,8 +502,10 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_imports(),
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
+            _check_sagemaker_endpoint(),
             _check_storage(),
         ]
+        checks: list[CheckResult] = [c for c in all_results if c is not None]
 
     for check in checks:
         _print_check(check)

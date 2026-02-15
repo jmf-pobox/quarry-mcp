@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Quarry SageMaker Serverless embedding endpoint.
+  Deploys snowflake-arctic-embed-m-v1.5 on a HuggingFace DLC for
+  batch embedding during ingestion. Serverless: scales to zero when idle.
+
+Parameters:
+  EndpointName:
+    Type: String
+    Default: quarry-embedding
+    Description: Name for the SageMaker endpoint
+  MemorySizeInMB:
+    Type: Number
+    Default: 2048
+    AllowedValues: [1024, 2048, 3072, 4096, 5120, 6144]
+    Description: Memory allocated per serverless invocation (MB)
+  MaxConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 200
+    Description: Maximum concurrent invocations
+
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EndpointName}-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerReadOnly
+      Policies:
+        - PolicyName: SageMakerExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - "arn:aws:s3:::*SageMaker*"
+                  - "arn:aws:s3:::*sagemaker*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:log-group:/aws/sagemaker/*"
+
+  Model:
+    Type: AWS::SageMaker::Model
+    Properties:
+      ModelName: !Sub "${EndpointName}-model"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      PrimaryContainer:
+        Image: !Sub "763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
+        Environment:
+          HF_MODEL_ID: Snowflake/snowflake-arctic-embed-m-v1.5
+          HF_TASK: feature-extraction
+          SAGEMAKER_CONTAINER_LOG_LEVEL: "20"
+
+  EndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      EndpointConfigName: !Sub "${EndpointName}-config"
+      ProductionVariants:
+        - ModelName: !GetAtt Model.ModelName
+          VariantName: AllTraffic
+          ServerlessConfig:
+            MemorySizeInMB: !Ref MemorySizeInMB
+            MaxConcurrency: !Ref MaxConcurrency
+
+  Endpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointName: !Ref EndpointName
+      EndpointConfigName: !GetAtt EndpointConfig.EndpointConfigName
+
+Outputs:
+  EndpointName:
+    Description: SageMaker endpoint name (set as SAGEMAKER_ENDPOINT_NAME)
+    Value: !GetAtt Endpoint.EndpointName
+  EndpointArn:
+    Description: SageMaker endpoint ARN
+    Value: !Ref Endpoint
+  ExecutionRoleArn:
+    Description: IAM execution role ARN
+    Value: !GetAtt ExecutionRole.Arn
