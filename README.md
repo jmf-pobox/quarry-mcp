@@ -162,6 +162,7 @@ All settings via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OCR_BACKEND` | `local` | `local` (RapidOCR, offline) or `textract` (AWS) |
+| `EMBEDDING_BACKEND` | `onnx` | `onnx` (local, offline) or `sagemaker` (AWS) |
 | `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases and logs |
 | `LANCEDB_PATH` | `~/.quarry/data/default/lancedb` | Vector database location (overrides `--db`) |
 | `REGISTRY_PATH` | `~/.quarry/data/default/registry.db` | Directory sync SQLite database |
@@ -192,6 +193,34 @@ Only needed if you want cloud OCR. Set these environment variables:
 | `S3_BUCKET` | | S3 bucket for Textract uploads |
 
 Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDetection`, `textract:GetDocumentTextDetection`, and `s3:PutObject/GetObject/DeleteObject` on your bucket.
+
+### SageMaker Embedding Setup
+
+Only needed if you want cloud-accelerated embedding for large batch ingestion. Search always uses local ONNX regardless of this setting.
+
+1. Deploy the endpoint:
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/sagemaker-embedding.yaml \
+  --stack-name quarry-embedding \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+2. Configure quarry:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBEDDING_BACKEND` | `onnx` | Set to `sagemaker` to use cloud embedding for ingestion |
+| `SAGEMAKER_ENDPOINT_NAME` | | Endpoint name (e.g. `quarry-embedding`) |
+
+3. Verify:
+
+```bash
+quarry doctor  # should show SageMaker endpoint InService
+```
+
+The endpoint uses Serverless inference and scales to zero when idle. `quarry sync` auto-selects 4 parallel workers when a cloud backend is active.
 
 ### Named Databases
 
@@ -231,6 +260,7 @@ Each database resolves to `~/.quarry/data/<name>/lancedb` with its own registry.
 | `TEXTRACT_POLL_MAX` | `30.0` | Max polling interval (1.5x exponential backoff) |
 | `TEXTRACT_MAX_WAIT` | `900` | Max wait for Textract job (seconds) |
 | `TEXTRACT_MAX_IMAGE_BYTES` | `10485760` | Max image size for Textract sync API (10 MB) |
+| `SAGEMAKER_ENDPOINT_NAME` | | SageMaker endpoint for cloud embedding |
 | `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | Embedding model identifier (cache key) |
 | `EMBEDDING_DIMENSION` | `768` | Embedding vector dimension |
 
@@ -261,7 +291,7 @@ Connectors                Formats              Transformations
                                                     │
                                                     ├─ Sentence-aware chunking
                                                     ├─ Chunk metadata (page_type, source_format)
-                                                    ├─ Vector embeddings (768-dim, local ONNX or SageMaker)
+                                                    ├─ Embedding (local ONNX or SageMaker cloud)
                                                     └─ LanceDB storage
                                                          │
                                                   Query
@@ -309,7 +339,6 @@ The public API surface is in `quarry/__init__.py`. Pipeline functions accept a `
 ## Roadmap
 
 - [macOS menu bar companion app](https://github.com/jmf-pobox/quarry-menubar) — native macOS search interface (in development)
-- Cloud embedding backend (SageMaker) — same model on GPU for fast batch ingestion, local ONNX for queries
 - Google Drive connector
 - `quarry sync --watch` for live filesystem monitoring
 - PII detection and redaction
