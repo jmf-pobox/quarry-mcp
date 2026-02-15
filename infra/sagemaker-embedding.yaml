@@ -1,25 +1,37 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Quarry SageMaker Serverless embedding endpoint.
-  Deploys snowflake-arctic-embed-m-v1.5 on a HuggingFace DLC for
-  batch embedding during ingestion. Serverless: scales to zero when idle.
+  Quarry SageMaker real-time embedding endpoint.
+  Deploys snowflake-arctic-embed-m-v1.5 on a HuggingFace DLC with
+  custom CLS-token pooling for compact sentence embeddings.
 
 Parameters:
   EndpointName:
     Type: String
     Default: quarry-embedding
     Description: Name for the SageMaker endpoint
-  MemorySizeInMB:
+  InstanceType:
+    Type: String
+    Default: ml.m5.large
+    AllowedValues:
+      - ml.t2.medium
+      - ml.t2.large
+      - ml.m5.large
+      - ml.m5.xlarge
+      - ml.c5.large
+    Description: Instance type (ml.m5.large = 8 GB, ~$0.12/hr)
+  InstanceCount:
     Type: Number
-    Default: 2048
-    AllowedValues: [1024, 2048, 3072, 4096, 5120, 6144]
-    Description: Memory allocated per serverless invocation (MB)
-  MaxConcurrency:
-    Type: Number
-    Default: 5
+    Default: 1
     MinValue: 1
-    MaxValue: 200
-    Description: Maximum concurrent invocations
+    MaxValue: 4
+    Description: Number of instances behind the endpoint
+  ModelDataBucket:
+    Type: String
+    Description: S3 bucket containing custom inference code (model.tar.gz)
+  ModelDataKey:
+    Type: String
+    Default: sagemaker/quarry-embedding/model.tar.gz
+    Description: S3 key for the model.tar.gz
 
 Resources:
   ExecutionRole:
@@ -55,8 +67,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  - "arn:aws:s3:::*SageMaker*"
-                  - "arn:aws:s3:::*sagemaker*"
+                  - !Sub "arn:aws:s3:::${ModelDataBucket}"
+                  - !Sub "arn:aws:s3:::${ModelDataBucket}/*"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -67,10 +79,10 @@ Resources:
   Model:
     Type: AWS::SageMaker::Model
     Properties:
-      ModelName: !Sub "${EndpointName}-model"
       ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       PrimaryContainer:
         Image: !Sub "763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
+        ModelDataUrl: !Sub "s3://${ModelDataBucket}/${ModelDataKey}"
         Environment:
           HF_MODEL_ID: Snowflake/snowflake-arctic-embed-m-v1.5
           HF_TASK: feature-extraction
@@ -79,13 +91,11 @@ Resources:
   EndpointConfig:
     Type: AWS::SageMaker::EndpointConfig
     Properties:
-      EndpointConfigName: !Sub "${EndpointName}-config"
       ProductionVariants:
         - ModelName: !GetAtt Model.ModelName
           VariantName: AllTraffic
-          ServerlessConfig:
-            MemorySizeInMB: !Ref MemorySizeInMB
-            MaxConcurrency: !Ref MaxConcurrency
+          InstanceType: !Ref InstanceType
+          InitialInstanceCount: !Ref InstanceCount
 
   Endpoint:
     Type: AWS::SageMaker::Endpoint
@@ -103,3 +113,9 @@ Outputs:
   ExecutionRoleArn:
     Description: IAM execution role ARN
     Value: !GetAtt ExecutionRole.Arn
+  InstanceType:
+    Description: Instance type
+    Value: !Ref InstanceType
+  HourlyCost:
+    Description: Approximate hourly cost (destroy when not in use)
+    Value: !Sub "${InstanceType} — see https://aws.amazon.com/sagemaker/pricing/"
