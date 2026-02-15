@@ -1,8 +1,8 @@
 """Application settings and logging configuration.
 
 Settings are grouped by concern: AWS (credentials, region, S3), LanceDB paths,
-embedding model (cache key; OnnxEmbeddingBackend uses fixed model), chunking
-params, OCR backend choice, and Textract/async tuning.
+embedding model and backend, chunking params, OCR backend choice,
+Textract/async tuning, and SageMaker endpoint.
 """
 
 from __future__ import annotations
@@ -31,9 +31,10 @@ class Settings(BaseSettings):
     registry_path: Path = Path.home() / ".quarry" / "data" / "default" / "registry.db"
     log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
     ocr_backend: str = "local"
-    # Cache key for get_embedding_backend(); OnnxEmbeddingBackend ignores it.
+    embedding_backend: str = "onnx"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
+    sagemaker_endpoint_name: str = ""
 
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200

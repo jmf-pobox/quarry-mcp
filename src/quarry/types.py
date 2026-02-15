@@ -101,6 +101,16 @@ class S3Client(Protocol):
     ) -> None: ...
 
 
+class SageMakerRuntimeClient(Protocol):
+    def invoke_endpoint(
+        self,
+        *,
+        EndpointName: str,  # noqa: N803
+        ContentType: str,  # noqa: N803
+        Body: bytes,  # noqa: N803
+    ) -> dict[str, object]: ...
+
+
 # --- Domain: OCR and Embedding backends ---
 
 
