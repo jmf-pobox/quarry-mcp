@@ -91,8 +91,14 @@ class SageMakerEmbeddingBackend:
             # SageMaker returns a StreamingBody; read and parse JSON
             body: ReadableBody = response["Body"]  # type: ignore[assignment]
             raw: bytes = body.read()
-            embeddings: list[list[float]] = json.loads(raw)
-            parts.append(np.array(embeddings, dtype=np.float32))
+            parsed = json.loads(raw)
+            arr = np.array(parsed, dtype=np.float32)
+            # HF feature-extraction may return 3D token-level embeddings
+            # (batch, tokens, dim). Mean-pool over the sequence axis to get
+            # sentence embeddings (batch, dim).
+            if arr.ndim == 3:
+                arr = arr.mean(axis=1)
+            parts.append(arr)
             logger.debug("SageMaker batch %d/%d complete", i + 1, n_batches)
 
         result: NDArray[np.float32] = np.concatenate(parts)
