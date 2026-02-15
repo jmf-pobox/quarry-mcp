@@ -70,12 +70,19 @@ quarry install
 Verify with `quarry doctor`:
 
 ```
+quarry-mcp 0.5.0
+
   ✓ Python version: 3.13.1
-  ✓ Data directory: /Users/you/.quarry/data/lancedb
+  ✓ Data directory: /Users/you/.quarry/data/default/lancedb
   ✓ Local OCR: RapidOCR engine OK
   ○ AWS credentials: Not configured (optional — needed for OCR_BACKEND=textract)
-  ✓ Embedding model: snowflake-arctic-embed-m-v1.5 cached
-  ✓ Core imports: 8 modules OK
+  ✓ Embedding model: snowflake-arctic-embed-m-v1.5 (ONNX INT8) cached (67.73 MB)
+  ✓ Core imports: 9 modules OK
+  ✓ Claude Code MCP: configured
+  ✓ Claude Desktop MCP: configured
+  ✓ Storage: 42.5 MB in /Users/you/.quarry/data
+
+All checks passed.
 ```
 
 ## Usage
