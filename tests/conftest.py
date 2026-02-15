@@ -10,6 +10,36 @@ from quarry.types import LanceDB
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# Environment variables that .envrc / shell may set and that pydantic-settings
+# would otherwise silently inject into Settings instances created in tests.
+_QUARRY_ENV_VARS = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_DEFAULT_REGION",
+    "AWS_SECRET_ACCESS_KEY",
+    "EMBEDDING_BACKEND",
+    "EMBEDDING_DIMENSION",
+    "EMBEDDING_MODEL",
+    "LANCEDB_PATH",
+    "LOG_PATH",
+    "OCR_BACKEND",
+    "QUARRY_ROOT",
+    "REGISTRY_PATH",
+    "S3_BUCKET",
+    "SAGEMAKER_ENDPOINT_NAME",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip quarry-related env vars so tests get deterministic Settings defaults.
+
+    Without this, .envrc exports (e.g. EMBEDDING_BACKEND=sagemaker) leak into
+    every Settings() call, causing spurious failures when the test assumes the
+    code-level default.
+    """
+    for var in _QUARRY_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 @pytest.fixture(scope="session")
 def embedding_model_name() -> str:
@@ -24,6 +54,7 @@ def _warm_embedding_model(embedding_model_name: str) -> None:
     settings = Settings(
         aws_access_key_id="test-not-used",
         aws_secret_access_key="test-not-used",
+        embedding_backend="onnx",
         embedding_model=embedding_model_name,
     )
     get_embedding_backend(settings).embed_texts(["warm up"])
@@ -37,6 +68,7 @@ def integration_settings(
     return Settings(
         aws_access_key_id="test-not-used",
         aws_secret_access_key="test-not-used",
+        embedding_backend="onnx",
         embedding_model=embedding_model_name,
         textract_poll_initial=0,
     )
@@ -57,6 +89,7 @@ def aws_settings(embedding_model_name: str, _warm_embedding_model: None) -> Sett
     return Settings(
         aws_access_key_id=resolved.access_key,
         aws_secret_access_key=resolved.secret_key,
+        embedding_backend="onnx",
         embedding_model=embedding_model_name,
         textract_poll_initial=1,
     )
