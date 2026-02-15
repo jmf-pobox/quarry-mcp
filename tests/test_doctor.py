@@ -19,6 +19,7 @@ from quarry.doctor import (
     _check_imports,
     _check_local_ocr,
     _check_python_version,
+    _check_sagemaker_endpoint,
     _check_storage,
     _configure_claude_code,
     _configure_claude_desktop,
@@ -251,6 +252,58 @@ class TestCheckClaudeDesktopMcp:
         result = _check_claude_desktop_mcp()
         assert result.passed is False
         assert "no config file" in result.message
+
+
+class TestCheckSageMakerEndpoint:
+    def test_skipped_when_not_configured(self, monkeypatch: MP) -> None:
+        monkeypatch.delenv("EMBEDDING_BACKEND", raising=False)
+        monkeypatch.delenv("SAGEMAKER_ENDPOINT_NAME", raising=False)
+        assert _check_sagemaker_endpoint() is None
+
+    def test_missing_endpoint_name(self, monkeypatch: MP) -> None:
+        monkeypatch.setenv("EMBEDDING_BACKEND", "sagemaker")
+        monkeypatch.delenv("SAGEMAKER_ENDPOINT_NAME", raising=False)
+        result = _check_sagemaker_endpoint()
+        assert result is not None
+        assert result.passed is False
+        assert "not set" in result.message
+
+    def test_endpoint_in_service(self, monkeypatch: MP) -> None:
+        monkeypatch.setenv("SAGEMAKER_ENDPOINT_NAME", "test-ep")
+        mock_client = type(
+            "SageMakerClient",
+            (),
+            {"describe_endpoint": lambda self, **kw: {"EndpointStatus": "InService"}},
+        )()
+        with patch("boto3.client", return_value=mock_client):
+            result = _check_sagemaker_endpoint()
+        assert result is not None
+        assert result.passed is True
+        assert "InService" in result.message
+
+    def test_endpoint_creating(self, monkeypatch: MP) -> None:
+        monkeypatch.setenv("SAGEMAKER_ENDPOINT_NAME", "test-ep")
+        mock_client = type(
+            "SageMakerClient",
+            (),
+            {"describe_endpoint": lambda self, **kw: {"EndpointStatus": "Creating"}},
+        )()
+        with patch("boto3.client", return_value=mock_client):
+            result = _check_sagemaker_endpoint()
+        assert result is not None
+        assert result.passed is False
+        assert "Creating" in result.message
+
+    def test_endpoint_error(self, monkeypatch: MP) -> None:
+        monkeypatch.setenv("SAGEMAKER_ENDPOINT_NAME", "test-ep")
+        with patch(
+            "boto3.client",
+            side_effect=RuntimeError("no credentials"),
+        ):
+            result = _check_sagemaker_endpoint()
+        assert result is not None
+        assert result.passed is False
+        assert "no credentials" in result.message
 
 
 class TestHumanSize:
