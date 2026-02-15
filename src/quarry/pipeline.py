@@ -793,10 +793,16 @@ def _fetch_url(url: str, *, timeout: int = 30) -> str:
             "User-Agent": "quarry-mcp/1.0 (+https://github.com/jmf-pobox/quarry-mcp)"
         },
     )
+    _allowed_media_types = {"text/html", "application/xhtml+xml"}
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
+            final_url: str = resp.geturl()
+            if not final_url.startswith(("http://", "https://")):
+                msg = f"Redirect left HTTP(S): {final_url}"
+                raise ValueError(msg)
             content_type: str = resp.headers.get("Content-Type", "")
-            if "html" not in content_type and "text" not in content_type:
+            media_type = content_type.split(";", 1)[0].strip().lower()
+            if media_type and media_type not in _allowed_media_types:
                 msg = f"URL returned non-HTML content: {content_type}"
                 raise ValueError(msg)
             charset = resp.headers.get_content_charset() or "utf-8"
@@ -844,7 +850,7 @@ def ingest_url(
 
     progress("Fetching: %s", url)
     html = _fetch_url(url, timeout=timeout)
-    progress("Fetched %d bytes", len(html))
+    progress("Fetched %d characters", len(html))
 
     if overwrite:
         delete_document(db, document_name, collection=collection)

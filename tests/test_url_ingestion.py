@@ -73,11 +73,7 @@ class TestFetchUrl:
         from quarry.pipeline import _fetch_url
 
         body = b"<html><body><p>Hello</p></body></html>"
-        mock_resp = MagicMock(spec=HTTPResponse)
-        mock_resp.read.return_value = body
-        mock_resp.headers = _make_headers("text/html; charset=utf-8")
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp = _mock_response(body, "text/html; charset=utf-8")
         mock_urlopen.return_value = mock_resp
 
         result = _fetch_url("https://example.com")
@@ -87,15 +83,55 @@ class TestFetchUrl:
     def test_rejects_non_html_content_type(self, mock_urlopen: MagicMock):
         from quarry.pipeline import _fetch_url
 
-        mock_resp = MagicMock(spec=HTTPResponse)
-        mock_resp.read.return_value = b"%PDF-1.4"
-        mock_resp.headers = _make_headers("application/pdf")
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp = _mock_response(b"%PDF-1.4", "application/pdf")
         mock_urlopen.return_value = mock_resp
 
         with pytest.raises(ValueError, match="non-HTML"):
             _fetch_url("https://example.com/report.pdf")
+
+    @patch("urllib.request.urlopen")
+    def test_accepts_xhtml(self, mock_urlopen: MagicMock):
+        from quarry.pipeline import _fetch_url
+
+        body = b"<html><body><p>XHTML</p></body></html>"
+        mock_resp = _mock_response(body, "application/xhtml+xml")
+        mock_urlopen.return_value = mock_resp
+
+        result = _fetch_url("https://example.com")
+        assert "XHTML" in result
+
+    @patch("urllib.request.urlopen")
+    def test_content_type_case_insensitive(self, mock_urlopen: MagicMock):
+        from quarry.pipeline import _fetch_url
+
+        body = b"<html><body><p>OK</p></body></html>"
+        mock_resp = _mock_response(body, "Text/HTML; charset=UTF-8")
+        mock_urlopen.return_value = mock_resp
+
+        result = _fetch_url("https://example.com")
+        assert "OK" in result
+
+    @patch("urllib.request.urlopen")
+    def test_missing_content_type_allowed(self, mock_urlopen: MagicMock):
+        from quarry.pipeline import _fetch_url
+
+        body = b"<html><body><p>No CT</p></body></html>"
+        mock_resp = _mock_response(body, "")
+        mock_urlopen.return_value = mock_resp
+
+        result = _fetch_url("https://example.com")
+        assert "No CT" in result
+
+    @patch("urllib.request.urlopen")
+    def test_rejects_redirect_to_non_http(self, mock_urlopen: MagicMock):
+        from quarry.pipeline import _fetch_url
+
+        mock_resp = _mock_response(b"", "text/html")
+        mock_resp.geturl.return_value = "ftp://evil.com/file"
+        mock_urlopen.return_value = mock_resp
+
+        with pytest.raises(ValueError, match="Redirect left HTTP"):
+            _fetch_url("https://example.com/redirect")
 
     @patch("urllib.request.urlopen")
     def test_http_error_raises_valueerror(self, mock_urlopen: MagicMock):
@@ -125,7 +161,7 @@ class TestFetchUrl:
 
 
 class TestIngestUrl:
-    """Integration test: fetch → process → chunk → embed → store."""
+    """Integration test: fetch -> process -> chunk -> embed -> store."""
 
     @patch("quarry.pipeline._fetch_url")
     def test_end_to_end(self, mock_fetch: MagicMock):
@@ -200,10 +236,26 @@ class TestIngestUrl:
         assert result["document_name"] == "my-page"
 
 
+def _mock_response(
+    body: bytes,
+    content_type: str,
+    final_url: str = "https://example.com",
+) -> MagicMock:
+    """Create a mock HTTP response with headers and context manager."""
+    mock_resp = MagicMock(spec=HTTPResponse)
+    mock_resp.read.return_value = body
+    mock_resp.headers = _make_headers(content_type)
+    mock_resp.geturl.return_value = final_url
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    return mock_resp
+
+
 def _make_headers(content_type: str) -> Any:
     """Create a mock headers object with Content-Type."""
     from email.message import Message
 
     msg = Message()
-    msg["Content-Type"] = content_type
+    if content_type:
+        msg["Content-Type"] = content_type
     return msg
