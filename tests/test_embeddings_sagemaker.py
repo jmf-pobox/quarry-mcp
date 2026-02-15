@@ -164,15 +164,17 @@ class TestSageMakerEmbeddingBackend:
         expected_arr = np.array(expected, dtype=np.float32)
         np.testing.assert_array_almost_equal(result, expected_arr)
 
-    def test_embed_texts_pools_3d_token_embeddings(self) -> None:
-        """HF feature-extraction can return 3D (batch, tokens, dim).
+    def test_embed_texts_extracts_cls_from_3d_token_embeddings(self) -> None:
+        """Defensive fallback: 3D (batch, tokens, dim) takes CLS token [0].
 
-        Mean-pooling over the token axis should produce 2D (batch, dim).
+        The custom server-side handler does CLS pooling, so responses are
+        normally 2D.  If a raw 3D response slips through, the client
+        extracts the first token (CLS) and L2-normalizes it.
         """
         # 2 texts, 4 tokens each, dim=3
         token_embeddings = [
             [[1.0, 2.0, 3.0], [3.0, 4.0, 5.0], [5.0, 6.0, 7.0], [7.0, 8.0, 9.0]],
-            [[0.0, 0.0, 0.0], [2.0, 2.0, 2.0], [4.0, 4.0, 4.0], [6.0, 6.0, 6.0]],
+            [[0.5, 0.5, 0.5], [2.0, 2.0, 2.0], [4.0, 4.0, 4.0], [6.0, 6.0, 6.0]],
         ]
         sm_client = MagicMock()
         sm_client.invoke_endpoint.return_value = _make_sagemaker_response(
@@ -184,6 +186,8 @@ class TestSageMakerEmbeddingBackend:
         result = backend.embed_texts(["a", "b"])
 
         assert result.shape == (2, 3)
-        # Mean of first text: (1+3+5+7)/4=4, (2+4+6+8)/4=5, (3+5+7+9)/4=6
-        expected = np.array([[4.0, 5.0, 6.0], [3.0, 3.0, 3.0]], dtype=np.float32)
+        # CLS token (index 0) of each text, L2-normalized
+        cls = np.array([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5]], dtype=np.float32)
+        norms = np.linalg.norm(cls, axis=1, keepdims=True)
+        expected = cls / norms
         np.testing.assert_array_almost_equal(result, expected)

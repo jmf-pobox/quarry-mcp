@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Quarry SageMaker real-time embedding endpoint.
+  Deploys snowflake-arctic-embed-m-v1.5 on a HuggingFace DLC with
+  custom CLS-token pooling for compact sentence embeddings.
+
+Parameters:
+  EndpointName:
+    Type: String
+    Default: quarry-embedding
+    Description: Name for the SageMaker endpoint
+  InstanceType:
+    Type: String
+    Default: ml.m5.large
+    AllowedValues:
+      - ml.t2.medium
+      - ml.t2.large
+      - ml.m5.large
+      - ml.m5.xlarge
+      - ml.c5.large
+    Description: Instance type (ml.m5.large = 8 GB, ~$0.12/hr)
+  InstanceCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 4
+    Description: Number of instances behind the endpoint
+  ModelDataBucket:
+    Type: String
+    Description: S3 bucket containing custom inference code (model.tar.gz)
+  ModelDataKey:
+    Type: String
+    Default: sagemaker/quarry-embedding/model.tar.gz
+    Description: S3 key for the model.tar.gz
+
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EndpointName}-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSageMakerReadOnly
+      Policies:
+        - PolicyName: SageMakerExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ModelDataBucket}"
+                  - !Sub "arn:aws:s3:::${ModelDataBucket}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:log-group:/aws/sagemaker/*"
+
+  Model:
+    Type: AWS::SageMaker::Model
+    Properties:
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      PrimaryContainer:
+        Image: !Sub "763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
+        ModelDataUrl: !Sub "s3://${ModelDataBucket}/${ModelDataKey}"
+        Environment:
+          HF_MODEL_ID: Snowflake/snowflake-arctic-embed-m-v1.5
+          HF_TASK: feature-extraction
+          SAGEMAKER_CONTAINER_LOG_LEVEL: "20"
+
+  EndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      ProductionVariants:
+        - ModelName: !GetAtt Model.ModelName
+          VariantName: AllTraffic
+          InstanceType: !Ref InstanceType
+          InitialInstanceCount: !Ref InstanceCount
+
+  Endpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointName: !Ref EndpointName
+      EndpointConfigName: !GetAtt EndpointConfig.EndpointConfigName
+
+Outputs:
+  EndpointName:
+    Description: SageMaker endpoint name (set as SAGEMAKER_ENDPOINT_NAME)
+    Value: !GetAtt Endpoint.EndpointName
+  EndpointArn:
+    Description: SageMaker endpoint ARN
+    Value: !Ref Endpoint
+  ExecutionRoleArn:
+    Description: IAM execution role ARN
+    Value: !GetAtt ExecutionRole.Arn
+  InstanceType:
+    Description: Instance type
+    Value: !Ref InstanceType
+  HourlyCost:
+    Description: Approximate hourly cost (destroy when not in use)
+    Value: !Sub "${InstanceType} — see https://aws.amazon.com/sagemaker/pricing/"
