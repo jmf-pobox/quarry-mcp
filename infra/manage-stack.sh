@@ -9,11 +9,25 @@
 set -euo pipefail
 
 STACK_NAME="quarry-embedding"
-REGION="us-west-1"
-PROFILE="admin"
+REGION="${QUARRY_DEPLOY_REGION:-us-west-1}"
+PROFILE="${QUARRY_DEPLOY_PROFILE:-admin}"
 INFRA_DIR="$(cd "$(dirname "$0")" && pwd)"
-S3_BUCKET="quarry-models-975377310343"
 S3_KEY="sagemaker/quarry-embedding/model.tar.gz"
+
+# S3 bucket for model artifacts (must be in the same region as the endpoint).
+# Set QUARRY_MODEL_BUCKET or the script auto-creates one from your account ID.
+if [ -n "${QUARRY_MODEL_BUCKET:-}" ]; then
+  S3_BUCKET="$QUARRY_MODEL_BUCKET"
+else
+  ACCOUNT_ID=$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)
+  S3_BUCKET="quarry-models-${ACCOUNT_ID}"
+  # Ensure the bucket exists
+  if ! aws s3api head-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" 2>/dev/null; then
+    echo "Creating S3 bucket $S3_BUCKET in $REGION..."
+    aws s3api create-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" \
+      --create-bucket-configuration LocationConstraint="$REGION"
+  fi
+fi
 
 upload_inference_code() {
   echo "Packaging custom inference handler..."

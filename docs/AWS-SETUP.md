@@ -72,16 +72,20 @@ Name the policy `quarry-app-policy`, then attach it to the `quarry-app` user via
 
 ## 4. Deploy the SageMaker Endpoint (One-Time)
 
-The CloudFormation deploy creates IAM roles and SageMaker resources. Run this from your **root account** (or a user with `AdministratorAccess`) since the `quarry-app` user intentionally lacks these broad permissions:
+The management script creates IAM roles and SageMaker resources. Run this from your **root account** (or a user with `AdministratorAccess`) since the `quarry-app` user intentionally lacks these broad permissions:
 
 ```bash
-aws cloudformation deploy \
-  --template-file infra/sagemaker-embedding.yaml \
-  --stack-name quarry-embedding \
-  --capabilities CAPABILITY_NAMED_IAM
+./infra/manage-stack.sh deploy              # serverless (default, pay-per-request)
+./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
 ```
 
-After this completes (~5-10 min), the `quarry-app` user can invoke the endpoint.
+The script auto-creates an S3 bucket for model artifacts, packages the custom inference handler, and deploys the CloudFormation stack. After this completes (~5-10 min), the `quarry-app` user can invoke the endpoint.
+
+Tear down when not in use:
+
+```bash
+./infra/manage-stack.sh destroy
+```
 
 ## 5. Verify
 

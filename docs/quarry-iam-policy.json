@@ -19,7 +19,7 @@
         "s3:GetObject",
         "s3:DeleteObject"
       ],
-      "Resource": "arn:aws:s3:::ocr-7f3a1b2e4c5d4e8f9a1b3c5d7e9f2a4b/*"
+      "Resource": "arn:aws:s3:::YOUR-BUCKET-NAME/*"
     },
     {
       "Sid": "SageMakerEmbedding",
@@ -28,7 +28,7 @@
         "sagemaker:DescribeEndpoint",
         "sagemaker:InvokeEndpoint"
       ],
-      "Resource": "arn:aws:sagemaker:us-west-1:975377310343:endpoint/quarry-embedding"
+      "Resource": "arn:aws:sagemaker:YOUR-REGION:YOUR-ACCOUNT-ID:endpoint/quarry-embedding"
     }
   ]
 }
