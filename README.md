@@ -11,9 +11,24 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Code and Clau
 
 ## Quick Start
 
+One-liner install (Python 3.10+ required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jmf-pobox/quarry-mcp/main/install.sh | bash
+```
+
+This installs `uv` (if needed), `quarry-mcp`, downloads the embedding model, and configures Claude Code and Claude Desktop.
+
+Or install manually:
+
 ```bash
 pip install quarry-mcp
 quarry install          # downloads embedding model (~500MB), configures MCP
+```
+
+Then start using it:
+
+```bash
 quarry ingest-file notes.md  # index a file — no cloud account needed
 quarry search "my topic"
 ```
