@@ -25,7 +25,7 @@ def input_fn(request_body, content_type):
     """Deserialize JSON input."""
     if content_type == "application/json":
         data = json.loads(request_body)
-        inputs = data.get("inputs", data)
+        inputs = data.get("inputs", data) if isinstance(data, dict) else data
         if isinstance(inputs, str):
             inputs = [inputs]
         return inputs

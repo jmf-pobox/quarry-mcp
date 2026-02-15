@@ -78,6 +78,12 @@ The management script creates IAM roles and SageMaker resources. Run this from y
 ./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
 ```
 
+The script uses the `QUARRY_DEPLOY_PROFILE` env var to select the AWS CLI profile (default: `admin`). If your admin credentials are in a different profile, set it:
+
+```bash
+QUARRY_DEPLOY_PROFILE=default ./infra/manage-stack.sh deploy
+```
+
 The script:
 - Inherits `AWS_DEFAULT_REGION` from your environment (so it deploys to the same region as Textract)
 - Auto-creates an S3 bucket for model artifacts in that region

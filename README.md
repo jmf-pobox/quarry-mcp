@@ -200,12 +200,14 @@ Your IAM user needs `textract:DetectDocumentText`, `textract:StartDocumentTextDe
 
 Optional cloud embedding for ingestion. Search always uses local ONNX regardless of this setting. Local ONNX embedding sustains ~11 chunks/s on a laptop — sufficient for most workloads. SageMaker is designed for large-scale batch ingestion (thousands of files) where parallelism across workers offsets the network overhead. For small-to-medium collections, local is faster (see [Benchmarks](#benchmarks)).
 
-1. Deploy the endpoint (requires AWS credentials with admin access):
+1. Deploy the endpoint (requires an AWS CLI profile with admin access):
 
 ```bash
 ./infra/manage-stack.sh deploy              # serverless (default, pay-per-request)
 ./infra/manage-stack.sh deploy realtime     # persistent instance (~$0.12/hr)
 ```
+
+The script uses the `QUARRY_DEPLOY_PROFILE` env var (default: `admin`). Set it to match your AWS CLI profile name if different.
 
 2. Configure quarry:
 

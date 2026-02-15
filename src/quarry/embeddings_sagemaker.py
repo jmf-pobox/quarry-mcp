@@ -95,9 +95,13 @@ class SageMakerEmbeddingBackend:
             arr = np.array(parsed, dtype=np.float32)
             # Custom inference handler returns 2D sentence embeddings.
             # Defensive fallback: if raw token-level 3D output slips
-            # through (no custom handler), take the CLS token (first).
+            # through (no custom handler), take the CLS token (first)
+            # and L2-normalize to match the custom handler's output.
             if arr.ndim == 3:
                 arr = arr[:, 0]
+                norms = np.linalg.norm(arr, axis=1, keepdims=True)
+                norms = np.maximum(norms, 1e-12)
+                arr = arr / norms
             parts.append(arr)
             logger.debug("SageMaker batch %d/%d complete", i + 1, n_batches)
 

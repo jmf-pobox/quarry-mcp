@@ -169,7 +169,7 @@ class TestSageMakerEmbeddingBackend:
 
         The custom server-side handler does CLS pooling, so responses are
         normally 2D.  If a raw 3D response slips through, the client
-        extracts the first token (CLS) rather than mean-pooling.
+        extracts the first token (CLS) and L2-normalizes it.
         """
         # 2 texts, 4 tokens each, dim=3
         token_embeddings = [
@@ -186,6 +186,8 @@ class TestSageMakerEmbeddingBackend:
         result = backend.embed_texts(["a", "b"])
 
         assert result.shape == (2, 3)
-        # CLS token (index 0) of each text
-        expected = np.array([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5]], dtype=np.float32)
+        # CLS token (index 0) of each text, L2-normalized
+        cls = np.array([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5]], dtype=np.float32)
+        norms = np.linalg.norm(cls, axis=1, keepdims=True)
+        expected = cls / norms
         np.testing.assert_array_almost_equal(result, expected)

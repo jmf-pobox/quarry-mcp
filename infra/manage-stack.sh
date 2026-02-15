@@ -41,14 +41,15 @@ ensure_bucket() {
 
 upload_inference_code() {
   echo "Packaging custom inference handler..."
-  TMPTAR="$(mktemp /tmp/quarry-model-XXXXXX).tar.gz"
-  trap 'rm -f "$TMPTAR"' EXIT
+  TMPDIR="$(mktemp -d /tmp/quarry-model-XXXXXX)"
+  TMPTAR="$TMPDIR/model.tar.gz"
+  trap 'rm -rf "$TMPDIR"' EXIT
   tar -czf "$TMPTAR" -C "$INFRA_DIR/sagemaker-inference" code/
   echo "Uploading to s3://$S3_BUCKET/$S3_KEY..."
   aws s3 cp "$TMPTAR" "s3://$S3_BUCKET/$S3_KEY" \
     --region "$REGION" \
     --profile "$PROFILE"
-  rm -f "$TMPTAR"
+  rm -rf "$TMPDIR"
   trap - EXIT
 }
 
@@ -77,15 +78,19 @@ case "${1:-}" in
   deploy)
     MODE="${2:-serverless}"
     case "$MODE" in
-      serverless) TEMPLATE="$INFRA_DIR/sagemaker-serverless.yaml" ;;
-      realtime)   TEMPLATE="$INFRA_DIR/sagemaker-realtime.yaml" ;;
+      serverless) TEMPLATE="$INFRA_DIR/sagemaker-serverless.yaml"; shift 2 ;;
+      realtime)   TEMPLATE="$INFRA_DIR/sagemaker-realtime.yaml"; shift 2 ;;
+      *=*)
+        # Arg looks like Key=Value — treat as default mode with overrides.
+        MODE="serverless"
+        TEMPLATE="$INFRA_DIR/sagemaker-serverless.yaml"
+        shift 1
+        ;;
       *)
         echo "Unknown mode: $MODE (expected 'serverless' or 'realtime')"
         exit 1
         ;;
     esac
-    # Extra args start after the mode argument (Key=Value pairs)
-    shift 2 2>/dev/null || shift 1
 
     ensure_bucket
     upload_inference_code
