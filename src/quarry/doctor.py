@@ -309,6 +309,83 @@ def _configure_claude_desktop() -> CheckResult:
     )
 
 
+def _check_claude_code_mcp() -> CheckResult:
+    """Check whether quarry MCP is configured in Claude Code (read-only)."""
+    claude_path = shutil.which("claude")
+    if claude_path is None:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="claude CLI not found on PATH",
+            required=False,
+        )
+    result = subprocess.run(  # noqa: S603
+        [claude_path, "mcp", "list"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="could not list MCP servers (run 'quarry install')",
+            required=False,
+        )
+    if _MCP_SERVER_NAME in result.stdout:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=True,
+            message="configured",
+        )
+    return CheckResult(
+        name="Claude Code MCP",
+        passed=False,
+        message="not configured (run 'quarry install')",
+        required=False,
+    )
+
+
+def _check_claude_desktop_mcp() -> CheckResult:
+    """Check whether quarry MCP is configured in Claude Desktop (read-only)."""
+    config_path = _DESKTOP_CONFIG_PATH
+    if not config_path.parent.exists():
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="Claude Desktop not installed",
+            required=False,
+        )
+    if not config_path.exists():
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="no config file (run 'quarry install')",
+            required=False,
+        )
+    try:
+        config = json.loads(config_path.read_text())
+        servers = config.get("mcpServers", {})
+        if _MCP_SERVER_NAME in servers:
+            return CheckResult(
+                name="Claude Desktop MCP",
+                passed=True,
+                message="configured",
+            )
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message="not configured (run 'quarry install')",
+            required=False,
+        )
+    except (json.JSONDecodeError, OSError) as exc:
+        return CheckResult(
+            name="Claude Desktop MCP",
+            passed=False,
+            message=f"config error: {exc}",
+            required=False,
+        )
+
+
 def _print_check(check: CheckResult) -> None:
     """Print a single check result with appropriate symbol."""
     if check.passed:
@@ -378,6 +455,8 @@ def check_environment() -> int:
             _check_aws_credentials(),
             _check_embedding_model(),
             _check_imports(),
+            _check_claude_code_mcp(),
+            _check_claude_desktop_mcp(),
             _check_storage(),
         ]
 

@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
 from quarry.doctor import (
     _check_aws_credentials,
+    _check_claude_code_mcp,
+    _check_claude_desktop_mcp,
     _check_data_directory,
     _check_embedding_model,
     _check_imports,
@@ -172,6 +174,83 @@ class TestCheckStorage:
         result = _check_storage()
         assert result.passed is True
         assert "no data yet" in result.message
+
+
+class TestCheckClaudeCodeMcp:
+    def test_claude_not_on_path(self, monkeypatch: MP):
+        monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert result.required is False
+        assert "not found" in result.message
+
+    def test_quarry_configured(self, monkeypatch: MP):
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        mock_result = type(
+            "CompletedProcess",
+            (),
+            {"returncode": 0, "stdout": "quarry: uvx quarry mcp", "stderr": ""},
+        )()
+        monkeypatch.setattr(
+            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+        )
+        result = _check_claude_code_mcp()
+        assert result.passed is True
+        assert "configured" in result.message
+
+    def test_quarry_not_configured(self, monkeypatch: MP):
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+        )
+        mock_result = type(
+            "CompletedProcess",
+            (),
+            {"returncode": 0, "stdout": "other-tool: npx other", "stderr": ""},
+        )()
+        monkeypatch.setattr(
+            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
+        )
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert "not configured" in result.message
+
+
+class TestCheckClaudeDesktopMcp:
+    def test_desktop_not_installed(self, tmp_path: Path, monkeypatch: MP):
+        monkeypatch.setattr(
+            "quarry.doctor._DESKTOP_CONFIG_PATH",
+            tmp_path / "nonexistent" / "config.json",
+        )
+        result = _check_claude_desktop_mcp()
+        assert result.passed is False
+        assert "not installed" in result.message
+
+    def test_quarry_configured(self, tmp_path: Path, monkeypatch: MP):
+        config_path = tmp_path / "claude_desktop_config.json"
+        config = {"mcpServers": {"quarry": {"command": "uvx", "args": []}}}
+        config_path.write_text(json.dumps(config))
+        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
+        result = _check_claude_desktop_mcp()
+        assert result.passed is True
+        assert "configured" in result.message
+
+    def test_quarry_not_configured(self, tmp_path: Path, monkeypatch: MP):
+        config_path = tmp_path / "claude_desktop_config.json"
+        config = {"mcpServers": {"other": {"command": "npx", "args": []}}}
+        config_path.write_text(json.dumps(config))
+        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
+        result = _check_claude_desktop_mcp()
+        assert result.passed is False
+        assert "not configured" in result.message
+
+    def test_no_config_file(self, tmp_path: Path, monkeypatch: MP):
+        config_path = tmp_path / "claude_desktop_config.json"
+        monkeypatch.setattr("quarry.doctor._DESKTOP_CONFIG_PATH", config_path)
+        result = _check_claude_desktop_mcp()
+        assert result.passed is False
+        assert "no config file" in result.message
 
 
 class TestHumanSize:
