@@ -2,7 +2,7 @@
 # Manage the quarry-embedding SageMaker CloudFormation stack.
 #
 # Usage:
-#   ./infra/manage-stack.sh deploy [serverless|realtime] [-- extra-cfn-args...]
+#   ./infra/manage-stack.sh deploy [serverless|realtime] [Key=Value ...]
 #   ./infra/manage-stack.sh destroy
 #   ./infra/manage-stack.sh status
 
@@ -14,31 +14,38 @@ PROFILE="${QUARRY_DEPLOY_PROFILE:-admin}"
 INFRA_DIR="$(cd "$(dirname "$0")" && pwd)"
 S3_KEY="sagemaker/quarry-embedding/model.tar.gz"
 
-# S3 bucket for model artifacts (must be in the same region as the endpoint).
-# Set QUARRY_MODEL_BUCKET or the script auto-creates one from your account ID.
-if [ -n "${QUARRY_MODEL_BUCKET:-}" ]; then
-  S3_BUCKET="$QUARRY_MODEL_BUCKET"
-else
-  ACCOUNT_ID=$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)
-  S3_BUCKET="quarry-models-${ACCOUNT_ID}"
-  # Ensure the bucket exists
-  if ! aws s3api head-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" 2>/dev/null; then
-    echo "Creating S3 bucket $S3_BUCKET in $REGION..."
-    aws s3api create-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" \
-      --create-bucket-configuration LocationConstraint="$REGION"
+ensure_bucket() {
+  # S3 bucket for model artifacts (must be in the same region as the endpoint).
+  # Set QUARRY_MODEL_BUCKET or the script auto-creates one from your account ID.
+  if [ -n "${QUARRY_MODEL_BUCKET:-}" ]; then
+    S3_BUCKET="$QUARRY_MODEL_BUCKET"
+  else
+    ACCOUNT_ID=$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)
+    S3_BUCKET="quarry-models-${ACCOUNT_ID}"
+    if ! aws s3api head-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" 2>/dev/null; then
+      echo "Creating S3 bucket $S3_BUCKET in $REGION..."
+      if [ "$REGION" = "us-east-1" ]; then
+        aws s3api create-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE"
+      else
+        aws s3api create-bucket --bucket "$S3_BUCKET" --region "$REGION" --profile "$PROFILE" \
+          --create-bucket-configuration LocationConstraint="$REGION"
+      fi
+    fi
   fi
-fi
+}
 
 upload_inference_code() {
   echo "Packaging custom inference handler..."
   local tmptar
   tmptar="$(mktemp /tmp/quarry-model-XXXXXX.tar.gz)"
+  trap 'rm -f "$tmptar"' EXIT
   tar -czf "$tmptar" -C "$INFRA_DIR/sagemaker-inference" code/
   echo "Uploading to s3://$S3_BUCKET/$S3_KEY..."
   aws s3 cp "$tmptar" "s3://$S3_BUCKET/$S3_KEY" \
     --region "$REGION" \
     --profile "$PROFILE"
   rm -f "$tmptar"
+  trap - EXIT
 }
 
 cleanup_rollback() {
@@ -73,9 +80,10 @@ case "${1:-}" in
         exit 1
         ;;
     esac
-    # Extra args start after the mode argument
+    # Extra args start after the mode argument (Key=Value pairs)
     shift 2 2>/dev/null || shift 1
 
+    ensure_bucket
     upload_inference_code
     echo "Deploying $STACK_NAME ($MODE) in $REGION..."
     cleanup_rollback
@@ -117,13 +125,13 @@ case "${1:-}" in
     echo "  destroy                       Delete the stack and all resources"
     echo "  status                        Show current stack status"
     echo ""
-    echo "Extra args after mode are passed to 'cloudformation deploy'."
+    echo "Extra Key=Value pairs after mode are appended to --parameter-overrides."
     echo ""
     echo "Examples:"
     echo "  $0 deploy                     # serverless, 3072 MB, pay-per-request"
     echo "  $0 deploy serverless          # same as above"
     echo "  $0 deploy realtime            # ml.m5.large, ~\$0.12/hr"
-    echo "  $0 deploy realtime --parameter-overrides InstanceType=ml.t2.large"
+    echo "  $0 deploy realtime InstanceType=ml.t2.large"
     echo "  $0 destroy                    # tear down (do this when not in use)"
     exit 1
     ;;

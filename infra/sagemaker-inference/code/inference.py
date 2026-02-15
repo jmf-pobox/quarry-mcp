@@ -38,6 +38,9 @@ def predict_fn(inputs, model_dict):
     Returns a plain Python list so the default output_fn can
     JSON-serialize it without double-encoding.
     """
+    if not inputs:
+        return []
+
     model = model_dict["model"]
     tokenizer = model_dict["tokenizer"]
 
