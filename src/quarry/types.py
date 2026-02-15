@@ -101,6 +101,12 @@ class S3Client(Protocol):
     ) -> None: ...
 
 
+class ReadableBody(Protocol):
+    """Minimal protocol for streaming response bodies (e.g. SageMaker)."""
+
+    def read(self) -> bytes: ...
+
+
 class SageMakerRuntimeClient(Protocol):
     def invoke_endpoint(
         self,
