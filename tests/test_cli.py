@@ -632,6 +632,40 @@ class TestDatabasesCmdSizeFormatting:
         assert "real" in result.output
 
 
+class TestAutoWorkers:
+    def test_local_backends_default_to_one(self) -> None:
+        from quarry.__main__ import _auto_workers
+        from quarry.config import Settings
+
+        settings = Settings.model_validate(
+            {"ocr_backend": "local", "embedding_backend": "onnx"}
+        )
+        assert _auto_workers(settings) == 1
+
+    def test_textract_ocr_triggers_four(self) -> None:
+        from quarry.__main__ import _auto_workers
+        from quarry.config import Settings
+
+        settings = Settings.model_validate({"ocr_backend": "textract"})
+        assert _auto_workers(settings) == 4
+
+    def test_sagemaker_embedding_triggers_four(self) -> None:
+        from quarry.__main__ import _auto_workers
+        from quarry.config import Settings
+
+        settings = Settings.model_validate({"embedding_backend": "sagemaker"})
+        assert _auto_workers(settings) == 4
+
+    def test_both_cloud_triggers_four(self) -> None:
+        from quarry.__main__ import _auto_workers
+        from quarry.config import Settings
+
+        settings = Settings.model_validate(
+            {"ocr_backend": "textract", "embedding_backend": "sagemaker"}
+        )
+        assert _auto_workers(settings) == 4
+
+
 class TestCliErrors:
     def test_error_exits_with_code_1(self):
         with (

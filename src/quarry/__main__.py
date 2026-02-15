@@ -355,21 +355,40 @@ def registrations_cmd(
         print(f"{reg.collection}: {reg.directory}")
 
 
+_CLOUD_BACKENDS = frozenset({"textract", "sagemaker"})
+
+
+def _auto_workers(settings: Settings) -> int:
+    """Select worker count based on configured backends.
+
+    Cloud backends (Textract, SageMaker) are network-bound and benefit from
+    parallelism.  Local backends are CPU-bound — extra workers just contend.
+    """
+    if (
+        settings.ocr_backend in _CLOUD_BACKENDS
+        or settings.embedding_backend in _CLOUD_BACKENDS
+    ):
+        return 4
+    return 1
+
+
 @app.command(name="sync")
 @_cli_errors
 def sync_cmd(
     workers: Annotated[
-        int,
+        int | None,
         typer.Option(
             "--workers",
             "-w",
-            help="Parallel workers (>1 helps when using cloud OCR)",
+            help="Parallel workers (auto: 4 for cloud backends, 1 for local)",
         ),
-    ] = 1,
+    ] = None,
     database: DbOption = "",
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
     settings = _resolved_settings(database)
+    effective_workers = workers if workers is not None else _auto_workers(settings)
+    logger.info("Using %d sync workers", effective_workers)
     db = get_db(settings.lancedb_path)
 
     with Progress(console=console) as progress:
@@ -379,7 +398,10 @@ def sync_cmd(
             progress.update(task, description=message)
 
         results = sync_all(
-            db, settings, max_workers=workers, progress_callback=on_progress
+            db,
+            settings,
+            max_workers=effective_workers,
+            progress_callback=on_progress,
         )
 
     console.print()
