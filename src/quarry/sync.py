@@ -59,7 +59,7 @@ def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
     for name in (".gitignore", ".quarryignore"):
         ignore_path = directory / name
         if ignore_path.is_file():
-            lines.extend(ignore_path.read_text().splitlines())
+            lines.extend(ignore_path.read_text(encoding="utf-8").splitlines())
     return pathspec.PathSpec.from_lines("gitignore", lines)
 
 
@@ -68,7 +68,7 @@ def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
     gitignore = dirpath / ".gitignore"
     if not gitignore.is_file():
         return None
-    lines = gitignore.read_text().splitlines()
+    lines = gitignore.read_text(encoding="utf-8").splitlines()
     return pathspec.PathSpec.from_lines("gitignore", lines)
 
 
