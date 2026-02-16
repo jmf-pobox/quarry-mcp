@@ -178,12 +178,13 @@ class TestBatching:
 class TestAutoDownloadFallback:
     def test_uses_local_when_cached(self):
         """_load_model_files returns local paths without downloading."""
-        with patch(
-            "quarry.embeddings._load_local_model_files",
-            return_value=("/cached/model.onnx", "/cached/tokenizer.json"),
-        ) as local_mock, patch(
-            "quarry.embeddings._download_model_files"
-        ) as download_mock:
+        with (
+            patch(
+                "quarry.embeddings._load_local_model_files",
+                return_value=("/cached/model.onnx", "/cached/tokenizer.json"),
+            ) as local_mock,
+            patch("quarry.embeddings._download_model_files") as download_mock,
+        ):
             result = _load_model_files()
 
         assert result == ("/cached/model.onnx", "/cached/tokenizer.json")
@@ -192,13 +193,16 @@ class TestAutoDownloadFallback:
 
     def test_downloads_when_not_cached(self):
         """_load_model_files falls back to download when local raises OSError."""
-        with patch(
-            "quarry.embeddings._load_local_model_files",
-            side_effect=OSError("not cached"),
-        ), patch(
-            "quarry.embeddings._download_model_files",
-            return_value=("/downloaded/model.onnx", "/downloaded/tokenizer.json"),
-        ) as download_mock:
+        with (
+            patch(
+                "quarry.embeddings._load_local_model_files",
+                side_effect=OSError("not cached"),
+            ),
+            patch(
+                "quarry.embeddings._download_model_files",
+                return_value=("/downloaded/model.onnx", "/downloaded/tokenizer.json"),
+            ) as download_mock,
+        ):
             result = _load_model_files()
 
         assert result == ("/downloaded/model.onnx", "/downloaded/tokenizer.json")
