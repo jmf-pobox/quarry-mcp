@@ -768,3 +768,15 @@ class TestUseDatabase:
             assert mcp_mod._db_name == "work"
         finally:
             mcp_mod._db_name = original
+
+    def test_invalid_name_does_not_corrupt_state(self, tmp_path: Path):
+        import quarry.mcp_server as mcp_mod
+
+        original = mcp_mod._db_name
+        try:
+            mcp_mod._db_name = "good"
+            result = use_database("../evil")
+            assert "Error" in result
+            assert mcp_mod._db_name == "good"
+        finally:
+            mcp_mod._db_name = original

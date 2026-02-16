@@ -534,13 +534,16 @@ def use_database(name: str) -> str:
     """
     global _db_name
     previous = _db_name or "default"
-    _db_name = name if name != "default" else None
-    settings = _settings()
+    new_name = name if name != "default" else None
+    # Validate before mutating: resolve_db_paths raises ValueError for
+    # names containing path separators or traversal segments.
+    test_settings = resolve_db_paths(load_settings(), new_name)
+    _db_name = new_name
     return json.dumps(
         {
             "previous_database": previous,
             "current_database": name,
-            "database_path": str(settings.lancedb_path),
+            "database_path": str(test_settings.lancedb_path),
         },
         indent=2,
     )
