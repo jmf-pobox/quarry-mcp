@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "quarry-mcp",
   "display_name": "Quarry",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Search your documents by meaning. Index PDFs, images, spreadsheets, presentations, code, and webpages — then ask Claude about them.",
   "long_description": "Quarry extracts knowledge from your files and makes it searchable by meaning. It reads PDFs (text and scanned), images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages.\n\nEverything runs locally — no cloud accounts or API keys required. The embedding model (~500 MB) downloads automatically on first use.\n\nOnce installed, ask Claude to index a file or search your knowledge base. Quarry handles the rest.",
   "author": {
@@ -89,6 +89,14 @@
     {
       "name": "list_registrations",
       "description": "List all registered directories"
+    },
+    {
+      "name": "list_databases",
+      "description": "List all named databases with document counts and storage size"
+    },
+    {
+      "name": "use_database",
+      "description": "Switch to a different named database for subsequent operations"
     },
     {
       "name": "status",

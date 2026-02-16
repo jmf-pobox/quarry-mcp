@@ -426,9 +426,7 @@ def discover_databases(root: Path) -> list[DatabaseSummary]:
             continue
         db = get_db(lance_dir)
         docs = list_documents(db)
-        size_bytes = sum(
-            f.stat().st_size for f in lance_dir.rglob("*") if f.is_file()
-        )
+        size_bytes = sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
         results.append(
             DatabaseSummary(
                 name=entry.name,

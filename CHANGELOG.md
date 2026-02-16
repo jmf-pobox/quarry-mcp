@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-15
+
+### Index
+- **`.gitignore` and `.quarryignore` sync** — directory sync now respects `.gitignore` at every level plus a `.quarryignore` override file. Hardcoded default patterns (`__pycache__/`, `node_modules/`, `.venv/`, etc.) also applied. New `pathspec` dependency.
+
+### Tool
+- **MCP `list_databases` and `use_database` tools** — discover named databases and switch between them mid-session without restarting. Closes the last parity gap between CLI `--db` flag and MCP tools.
+- **Claude Desktop Extension (.mcpb)** — download and double-click to install Quarry in Claude Desktop. Configures the MCP server, downloads the embedding model, and prompts for a data directory.
+- Fixed validate-before-mutate in `use_database` — invalid database names (path traversal) no longer corrupt server state
+
+### Infra
+- README rewritten for user-first experience: Desktop and Menu Bar first, CLI second
+- Menu Bar App section added to README
+- Fixed `read_text()` calls to specify `encoding="utf-8"` explicitly
+- 568 tests across 25 modules
+
 ## [0.6.0] - 2026-02-15
 
 ### Format

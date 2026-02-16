@@ -15,11 +15,11 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Clau
 
 [**Download quarry-mcp.mcpb**](https://github.com/jmf-pobox/quarry-mcp/releases/latest/download/quarry-mcp.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
 
-Then ask Claude to index a file and search it:
+Attach a document to your conversation and ask Claude to index it:
 
-> "Index ~/Documents/report.pdf"
+> "Index this report"
 >
-> "What does the report say about Q3 margins?"
+> "What does it say about Q3 margins?"
 
 That's it. Everything runs locally — no API keys, no cloud accounts. The embedding model (~500 MB) downloads automatically on first use.
 
@@ -125,6 +125,8 @@ Once configured, Claude Code can call these tools on your behalf:
 | `deregister_directory` | Remove a directory registration |
 | `sync_all_registrations` | Re-index all registered directories |
 | `list_registrations` | List registered directories |
+| `list_databases` | List named databases |
+| `use_database` | Switch to a different database |
 | `status` | Database stats |
 
 ## CLI Reference
