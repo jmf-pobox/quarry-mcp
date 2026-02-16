@@ -177,6 +177,37 @@ class TestDiscoverFiles:
         assert len(result) == 1
         assert result[0].name == "main.py"
 
+    def test_nested_gitignore_respected(self, tmp_path: Path):
+        """A .gitignore inside a subdirectory applies to that subtree."""
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / ".gitignore").write_text("data/\n*.log\n")
+        data = project / "data"
+        data.mkdir()
+        (data / "big.csv").touch()
+        (project / "debug.log").touch()
+        (project / "app.py").touch()
+        (tmp_path / "root.py").touch()
+        result = discover_files(tmp_path, frozenset({".py", ".csv", ".log"}))
+        names = sorted(p.name for p in result)
+        assert names == ["app.py", "root.py"]
+
+    def test_nested_gitignore_does_not_leak_to_siblings(self, tmp_path: Path):
+        """Patterns in project-a/.gitignore don't affect project-b."""
+        a = tmp_path / "project-a"
+        b = tmp_path / "project-b"
+        a.mkdir()
+        b.mkdir()
+        (a / ".gitignore").write_text("*.log\n")
+        (a / "debug.log").touch()
+        (b / "debug.log").touch()
+        (a / "app.py").touch()
+        (b / "app.py").touch()
+        result = discover_files(tmp_path, frozenset({".py", ".log"}))
+        names = sorted(p.name for p in result)
+        # project-a/debug.log ignored, project-b/debug.log kept
+        assert names == ["app.py", "app.py", "debug.log"]
+
 
 class TestLoadIgnoreSpec:
     def test_default_patterns_present(self):

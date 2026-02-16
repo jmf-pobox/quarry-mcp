@@ -63,14 +63,23 @@ def _load_ignore_spec(directory: Path) -> pathspec.PathSpec:
     return pathspec.PathSpec.from_lines("gitignore", lines)
 
 
+def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
+    """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
+    gitignore = dirpath / ".gitignore"
+    if not gitignore.is_file():
+        return None
+    lines = gitignore.read_text().splitlines()
+    return pathspec.PathSpec.from_lines("gitignore", lines)
+
+
 def discover_files(
     directory: Path,
     extensions: frozenset[str],
 ) -> list[Path]:
     """Recursively find files matching *extensions* under *directory*.
 
-    Respects ``.gitignore``, ``.quarryignore``, and hardcoded ignore
-    patterns (``venv/``, ``node_modules/``, ``__pycache__/``, etc.).
+    Respects ``.gitignore`` (at every level), ``.quarryignore``, and
+    hardcoded ignore patterns (``venv/``, ``node_modules/``, etc.).
     Skips dotfiles, macOS resource forks (``._*``), and files inside
     hidden directories (``.Trash``, ``.git``, etc.).
 
@@ -78,18 +87,21 @@ def discover_files(
     ``absolute()`` rather than ``resolve()`` so that symlinks within
     the tree keep their in-tree path (``relative_to`` stays valid).
     """
-    spec = _load_ignore_spec(directory)
+    root_spec = _load_ignore_spec(directory)
     result: list[Path] = []
 
     for dirpath_str, dirnames, filenames in os.walk(directory):
         dirpath = Path(dirpath_str)
         rel_dir = dirpath.relative_to(directory)
+        local_spec = _read_local_ignore(dirpath) if dirpath != directory else None
 
         # Prune hidden and ignored directories (in-place for os.walk)
         dirnames[:] = sorted(
             d
             for d in dirnames
-            if not d.startswith(".") and not spec.match_file(str(rel_dir / d) + "/")
+            if not d.startswith(".")
+            and not root_spec.match_file(str(rel_dir / d) + "/")
+            and (local_spec is None or not local_spec.match_file(d + "/"))
         )
 
         for filename in sorted(filenames):
@@ -99,7 +111,9 @@ def discover_files(
             if filepath.suffix.lower() not in extensions:
                 continue
             rel_path = str(filepath.relative_to(directory))
-            if spec.match_file(rel_path):
+            if root_spec.match_file(rel_path):
+                continue
+            if local_spec is not None and local_spec.match_file(filename):
                 continue
             result.append(filepath.absolute())
 
