@@ -7,7 +7,7 @@
 [![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/jmf-pobox/quarry-mcp/graph/badge.svg)](https://codecov.io/gh/jmf-pobox/quarry-mcp)
 
-Unlock the knowledge trapped on your hard drive. Works with Claude Code and Claude Desktop.
+Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
 ## Quick Start
 
@@ -41,7 +41,7 @@ That's it. Quarry works locally out of the box — no API keys, no cloud, no set
 
 **Search by meaning.** "What did the Q3 report say about margins?" finds relevant passages even if they never use the word "margins." This is semantic search — it understands what you mean, not just what you typed.
 
-**Give your LLM access.** As an MCP server, Quarry lets Claude Code and Claude Desktop search your indexed documents directly. Ask Claude about something in your files and it pulls the relevant context automatically.
+**Give your LLM access.** As an MCP server, Quarry lets Claude Desktop and Claude Code search your indexed documents directly. Ask Claude about something in your files and it pulls the relevant context automatically.
 
 **Keep things organized.** Named databases separate work from personal. Directory sync watches your folders and re-indexes when files change. Collections group documents within a database.
 
@@ -57,6 +57,65 @@ That's it. Quarry works locally out of the box — no API keys, no cloud, no set
 | HTML / webpages | Boilerplate stripping, converted to Markdown |
 | Text files (TXT, MD, LaTeX, DOCX) | Split by headings, sections, or paragraphs |
 | Source code (30+ languages) | AST parsing into functions and classes |
+
+## Using with Claude Desktop
+
+`quarry install` configures Claude Desktop automatically. Once configured, Claude can search your indexed documents — just ask it questions about your files.
+
+**Manual setup** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "quarry": {
+      "command": "/path/to/uvx",
+      "args": ["--from", "quarry-mcp", "quarry", "mcp"]
+    }
+  }
+}
+```
+
+Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
+
+**Note:** Uploaded files in Claude Desktop live in a sandbox that Quarry cannot access. Use `ingest_content` for uploaded content, or provide local file paths to `ingest_file`.
+
+### Menu Bar App (macOS)
+
+[Quarry Menu Bar](https://github.com/jmf-pobox/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
+
+- Semantic search with instant results
+- Switch between named databases
+- Syntax-highlighted results for code, Markdown, and prose
+- Detail view with full page context
+
+The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `quarry-mcp` installed.
+
+## Using with Claude Code
+
+`quarry install` configures Claude Code automatically. To set up manually:
+
+```bash
+claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
+```
+
+Once configured, Claude Code can call these tools on your behalf:
+
+| Tool | What it does |
+|------|-------------|
+| `search_documents` | Semantic search with optional filters |
+| `ingest_file` | Index a file by path |
+| `ingest_url` | Fetch and index a webpage |
+| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
+| `get_documents` | List indexed documents |
+| `get_page` | Get raw text for a specific page |
+| `delete_document` | Remove a document |
+| `list_collections` | List collections |
+| `delete_collection` | Remove a collection |
+| `register_directory` | Register a directory for sync |
+| `deregister_directory` | Remove a directory registration |
+| `sync_all_registrations` | Re-index all registered directories |
+| `list_registrations` | List registered directories |
+| `status` | Database stats |
 
 ## CLI Reference
 
@@ -103,7 +162,7 @@ quarry databases                               # list all databases
 
 Each database is fully isolated — its own vector index and sync registry. The default database is called `default`.
 
-You can run separate MCP servers for different databases:
+You can point MCP servers at different databases:
 
 ```json
 {
@@ -115,52 +174,6 @@ You can run separate MCP servers for different databases:
   }
 }
 ```
-
-## MCP Setup
-
-`quarry install` configures Claude Code and Claude Desktop automatically. To set up manually:
-
-**Claude Code:**
-
-```bash
-claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
-```
-
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "quarry": {
-      "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp"]
-    }
-  }
-}
-```
-
-Use the absolute path to `uvx` for Desktop (e.g. `/opt/homebrew/bin/uvx`). `quarry install` resolves this automatically.
-
-**Claude Desktop note:** Uploaded files live in a sandbox that Quarry cannot access. Use `ingest_content` (the MCP tool for inline text) for uploaded content. For files on your Mac, provide the local path to `ingest_file`.
-
-### MCP Tools
-
-| Tool | What it does |
-|------|-------------|
-| `search_documents` | Semantic search with optional filters |
-| `ingest_file` | Index a file by path |
-| `ingest_url` | Fetch and index a webpage |
-| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
-| `get_documents` | List indexed documents |
-| `get_page` | Get raw text for a specific page |
-| `delete_document` | Remove a document |
-| `list_collections` | List collections |
-| `delete_collection` | Remove a collection |
-| `register_directory` | Register a directory for sync |
-| `deregister_directory` | Remove a directory registration |
-| `sync_all_registrations` | Re-index all registered directories |
-| `list_registrations` | List registered directories |
-| `status` | Database stats |
 
 ## Configuration
 
@@ -174,17 +187,6 @@ Quarry works with zero configuration. These environment variables are available 
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
 For advanced settings (Textract polling, embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
-
-## Menu Bar App (macOS)
-
-[Quarry Menu Bar](https://github.com/jmf-pobox/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
-
-- Semantic search with instant results
-- Switch between named databases
-- Syntax-highlighted results for code, Markdown, and prose
-- Detail view with full page context
-
-The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `quarry-mcp` installed.
 
 ## Cloud Backends (Optional)
 
