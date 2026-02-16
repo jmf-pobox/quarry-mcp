@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend
+from quarry.embeddings import _EMBED_BATCH_SIZE, OnnxEmbeddingBackend, _load_model_files
 
 
 def _mock_session() -> MagicMock:
@@ -173,6 +173,40 @@ class TestBatching:
 
         assert result.shape == (n, 768)
         assert session.run.call_count == 1
+
+
+class TestAutoDownloadFallback:
+    def test_uses_local_when_cached(self):
+        """_load_model_files returns local paths without downloading."""
+        with (
+            patch(
+                "quarry.embeddings._load_local_model_files",
+                return_value=("/cached/model.onnx", "/cached/tokenizer.json"),
+            ) as local_mock,
+            patch("quarry.embeddings._download_model_files") as download_mock,
+        ):
+            result = _load_model_files()
+
+        assert result == ("/cached/model.onnx", "/cached/tokenizer.json")
+        local_mock.assert_called_once()
+        download_mock.assert_not_called()
+
+    def test_downloads_when_not_cached(self):
+        """_load_model_files falls back to download when local raises OSError."""
+        with (
+            patch(
+                "quarry.embeddings._load_local_model_files",
+                side_effect=OSError("not cached"),
+            ),
+            patch(
+                "quarry.embeddings._download_model_files",
+                return_value=("/downloaded/model.onnx", "/downloaded/tokenizer.json"),
+            ) as download_mock,
+        ):
+            result = _load_model_files()
+
+        assert result == ("/downloaded/model.onnx", "/downloaded/tokenizer.json")
+        download_mock.assert_called_once()
 
 
 class TestModelName:
