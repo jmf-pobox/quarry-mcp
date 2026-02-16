@@ -11,29 +11,37 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Clau
 
 ## Quick Start
 
-One-liner install (Python 3.10+ required):
+### Claude Desktop
+
+[**Download quarry-mcp.mcpb**](https://github.com/jmf-pobox/quarry-mcp/releases/latest/download/quarry-mcp.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
+
+Then ask Claude to index a file and search it:
+
+> "Index ~/Documents/report.pdf"
+>
+> "What does the report say about Q3 margins?"
+
+That's it. Everything runs locally — no API keys, no cloud accounts. The embedding model (~500 MB) downloads automatically on first use.
+
+### Claude Code / CLI
+
+```bash
+pip install quarry-mcp
+quarry install          # downloads embedding model, configures MCP
+```
+
+Or use the one-liner:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jmf-pobox/quarry-mcp/main/install.sh | bash
 ```
 
-This installs `uv` (if needed), `quarry-mcp`, downloads the embedding model, and configures Claude Code and Claude Desktop.
-
-Or install manually:
-
-```bash
-pip install quarry-mcp
-quarry install          # downloads embedding model (~500MB), configures MCP
-```
-
 Then start using it:
 
 ```bash
-quarry ingest-file notes.md      # index a file — no cloud account needed
+quarry ingest-file notes.md      # index a file
 quarry search "my topic"         # search by meaning, not keywords
 ```
-
-That's it. Quarry works locally out of the box — no API keys, no cloud, no setup beyond `quarry install`.
 
 ## What You Can Do
 
@@ -60,7 +68,9 @@ That's it. Quarry works locally out of the box — no API keys, no cloud, no set
 
 ## Using with Claude Desktop
 
-`quarry install` configures Claude Desktop automatically. Once configured, Claude can search your indexed documents — just ask it questions about your files.
+The easiest way to install is the [**.mcpb file**](https://github.com/jmf-pobox/quarry-mcp/releases/latest/download/quarry-mcp.mcpb) — download and double-click. Claude Desktop handles the rest.
+
+Alternatively, `quarry install` (from the CLI) also configures Claude Desktop automatically.
 
 **Manual setup** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
