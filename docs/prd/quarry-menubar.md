@@ -152,7 +152,7 @@ Automatic dark/light mode.
 
 ### Repository: `quarry-menubar`
 
-New GitHub repository under `jmf-pobox`. Separate from the `ocr` (quarry) repo because:
+New GitHub repository under `punt-labs`. Separate from the `ocr` (quarry) repo because:
 - Different language (Swift vs Python)
 - Different build toolchain (Xcode vs uv/hatch)
 - Different release cadence

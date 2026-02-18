@@ -1,0 +1,23 @@
+{
+  "initialized": false,
+  "topology": "mesh",
+  "workers": [],
+  "consensus": {
+    "pending": [],
+    "history": [
+      {
+        "proposalId": "proposal-1771030934262-3nls43",
+        "type": "prd-approval",
+        "result": "approved",
+        "votes": {
+          "for": 4,
+          "against": 0
+        },
+        "decidedAt": "2026-02-14T01:02:21.189Z"
+      }
+    ]
+  },
+  "sharedMemory": {},
+  "createdAt": "2026-02-14T00:57:36.462Z",
+  "updatedAt": "2026-02-14T01:06:41.630Z"
+}

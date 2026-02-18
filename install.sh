@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # quarry-mcp installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/jmf-pobox/quarry-mcp/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
 #
 # What this does:
 #   1. Checks Python 3.10+ is available

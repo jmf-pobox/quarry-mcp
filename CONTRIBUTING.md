@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/jmf-pobox/quarry-mcp.git
+git clone https://github.com/punt-labs/quarry.git
 cd quarry-mcp
 uv sync --frozen --extra dev
 ```

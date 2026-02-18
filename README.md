@@ -1,11 +1,11 @@
 # quarry-mcp
 
 [![PyPI](https://img.shields.io/pypi/v/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
-[![GitHub release](https://img.shields.io/github/v/release/jmf-pobox/quarry-mcp)](https://github.com/jmf-pobox/quarry-mcp/releases)
+[![GitHub release](https://img.shields.io/github/v/release/punt-labs/quarry)](https://github.com/punt-labs/quarry/releases)
 [![Python 3.13+](https://img.shields.io/pypi/pyversions/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
-[![Tests](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/test.yml)
-[![Lint](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/jmf-pobox/quarry-mcp/actions/workflows/lint.yml)
-[![codecov](https://codecov.io/gh/jmf-pobox/quarry-mcp/graph/badge.svg)](https://codecov.io/gh/jmf-pobox/quarry-mcp)
+[![Tests](https://github.com/punt-labs/quarry/actions/workflows/test.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
+[![Lint](https://github.com/punt-labs/quarry/actions/workflows/lint.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/lint.yml)
+[![codecov](https://codecov.io/gh/punt-labs/quarry/graph/badge.svg)](https://codecov.io/gh/punt-labs/quarry)
 
 Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
@@ -13,7 +13,7 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Clau
 
 ### Claude Desktop
 
-[**Download quarry-mcp.mcpb**](https://github.com/jmf-pobox/quarry-mcp/releases/latest/download/quarry-mcp.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
+[**Download quarry-mcp.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/quarry-mcp.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
 
 Attach a document to your conversation and ask Claude to index it:
 
@@ -33,7 +33,7 @@ quarry install          # downloads embedding model, configures MCP
 Or use the one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jmf-pobox/quarry-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
 ```
 
 Then start using it:
@@ -68,7 +68,7 @@ quarry search "my topic"         # search by meaning, not keywords
 
 ## Using with Claude Desktop
 
-The easiest way to install is the [**.mcpb file**](https://github.com/jmf-pobox/quarry-mcp/releases/latest/download/quarry-mcp.mcpb) — download and double-click. Claude Desktop handles the rest.
+The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/quarry/releases/latest/download/quarry-mcp.mcpb) — download and double-click. Claude Desktop handles the rest.
 
 Alternatively, `quarry install` (from the CLI) also configures Claude Desktop automatically.
 
@@ -91,7 +91,7 @@ Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` 
 
 ### Menu Bar App (macOS)
 
-[Quarry Menu Bar](https://github.com/jmf-pobox/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
+[Quarry Menu Bar](https://github.com/punt-labs/quarry-menubar) is a native macOS companion app that puts your knowledge base one click away. It sits in the menu bar and lets you search across all your indexed documents without switching apps.
 
 - Semantic search with instant results
 - Switch between named databases

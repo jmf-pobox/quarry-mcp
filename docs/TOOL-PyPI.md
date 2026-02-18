@@ -103,7 +103,7 @@ gh release create vX.Y.Z --title "vX.Y.Z" --notes "Release notes here.
 PyPI: https://pypi.org/project/quarry-mcp/X.Y.Z/"
 ```
 
-Verify the release appears on the repo homepage: https://github.com/jmf-pobox/quarry-mcp
+Verify the release appears on the repo homepage: https://github.com/punt-labs/quarry
 
 ---
 

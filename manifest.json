@@ -8,15 +8,15 @@
   "author": {
     "name": "JF",
     "email": "jmf@pobox.com",
-    "url": "https://github.com/jmf-pobox"
+    "url": "https://github.com/punt-labs"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/jmf-pobox/quarry-mcp.git"
+    "url": "https://github.com/punt-labs/quarry.git"
   },
-  "homepage": "https://github.com/jmf-pobox/quarry-mcp",
-  "documentation": "https://github.com/jmf-pobox/quarry-mcp#readme",
-  "support": "https://github.com/jmf-pobox/quarry-mcp/issues",
+  "homepage": "https://github.com/punt-labs/quarry",
+  "documentation": "https://github.com/punt-labs/quarry#readme",
+  "support": "https://github.com/punt-labs/quarry/issues",
   "server": {
     "type": "uv",
     "entry_point": "src/quarry/mcp_server.py",
