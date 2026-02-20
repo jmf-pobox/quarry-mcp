@@ -1,8 +1,8 @@
-# quarry-mcp
+# punt-quarry
 
-[![PyPI](https://img.shields.io/pypi/v/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
+[![PyPI](https://img.shields.io/pypi/v/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![GitHub release](https://img.shields.io/github/v/release/punt-labs/quarry)](https://github.com/punt-labs/quarry/releases)
-[![Python 3.13+](https://img.shields.io/pypi/pyversions/quarry-mcp)](https://pypi.org/project/quarry-mcp/)
+[![Python 3.13+](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Tests](https://github.com/punt-labs/quarry/actions/workflows/test.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
 [![Lint](https://github.com/punt-labs/quarry/actions/workflows/lint.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/punt-labs/quarry/graph/badge.svg)](https://codecov.io/gh/punt-labs/quarry)
@@ -13,7 +13,7 @@ Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Clau
 
 ### Claude Desktop
 
-[**Download quarry-mcp.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/quarry-mcp.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
+[**Download punt-quarry.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) and double-click to install. Claude Desktop will prompt you for a data directory.
 
 Attach a document to your conversation and ask Claude to index it:
 
@@ -26,7 +26,7 @@ That's it. Everything runs locally — no API keys, no cloud accounts. The embed
 ### Claude Code / CLI
 
 ```bash
-pip install quarry-mcp
+pip install punt-quarry
 quarry install          # downloads embedding model, configures MCP
 ```
 
@@ -68,7 +68,7 @@ quarry search "my topic"         # search by meaning, not keywords
 
 ## Using with Claude Desktop
 
-The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/quarry/releases/latest/download/quarry-mcp.mcpb) — download and double-click. Claude Desktop handles the rest.
+The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) — download and double-click. Claude Desktop handles the rest.
 
 Alternatively, `quarry install` (from the CLI) also configures Claude Desktop automatically.
 
@@ -79,7 +79,7 @@ Alternatively, `quarry install` (from the CLI) also configures Claude Desktop au
   "mcpServers": {
     "quarry": {
       "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp"]
+      "args": ["--from", "punt-quarry", "quarry", "mcp"]
     }
   }
 }
@@ -98,14 +98,14 @@ Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` 
 - Syntax-highlighted results for code, Markdown, and prose
 - Detail view with full page context
 
-The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `quarry-mcp` installed.
+The app manages its own `quarry serve` process automatically — no manual server setup needed. Requires macOS 14 (Sonoma) or later and `punt-quarry` installed.
 
 ## Using with Claude Code
 
 `quarry install` configures Claude Code automatically. To set up manually:
 
 ```bash
-claude mcp add quarry -- uvx --from quarry-mcp quarry mcp
+claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 ```
 
 Once configured, Claude Code can call these tools on your behalf:
@@ -181,7 +181,7 @@ You can point MCP servers at different databases:
   "mcpServers": {
     "work": {
       "command": "/path/to/uvx",
-      "args": ["--from", "quarry-mcp", "quarry", "mcp", "--db", "work"]
+      "args": ["--from", "punt-quarry", "quarry", "mcp", "--db", "work"]
     }
   }
 }

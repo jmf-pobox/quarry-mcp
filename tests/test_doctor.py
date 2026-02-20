@@ -457,7 +457,7 @@ class TestConfigureClaudeDesktop:
         assert command.endswith("uvx")
         assert config["mcpServers"]["quarry"]["args"] == [
             "--from",
-            "quarry-mcp",
+            "punt-quarry",
             "quarry",
             "mcp",
         ]

@@ -39,7 +39,7 @@ from quarry.types import LanceDB
 configure_logging(load_settings())
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("quarry-mcp")
+mcp = FastMCP("punt-quarry")
 
 _db_name: str | None = None
 

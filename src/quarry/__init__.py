@@ -7,7 +7,7 @@ from quarry.config import Settings, load_settings
 from quarry.database import get_db, search
 from quarry.pipeline import ingest_content, ingest_document, ingest_url
 
-__version__ = version("quarry-mcp")
+__version__ = version("punt-quarry")
 
 __all__ = [
     "Settings",
