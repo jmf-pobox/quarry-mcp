@@ -187,7 +187,7 @@ Added when backends ship, not before:
 ocr-tesseract = ["pytesseract>=0.3.10"]
 ocr-easyocr = ["easyocr>=1.7.0"]
 transcription = ["faster-whisper>=1.0.0"]
-local = ["quarry-mcp[ocr-tesseract,transcription]"]
+local = ["punt-quarry[ocr-tesseract,transcription]"]
 ```
 
 ---

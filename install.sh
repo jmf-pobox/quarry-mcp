@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# quarry-mcp installer
+# punt-quarry installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
 #
 # What this does:
 #   1. Checks Python 3.10+ is available
 #   2. Installs uv if not present (official installer)
-#   3. Installs quarry-mcp via uv
+#   3. Installs punt-quarry via uv
 #   4. Runs quarry install (downloads model, configures MCP)
 #   5. Runs quarry doctor (verifies everything)
 
@@ -75,19 +75,19 @@ else
     fi
 fi
 
-# --- Step 3: quarry-mcp -----------------------------------------------------
+# --- Step 3: punt-quarry -----------------------------------------------------
 
-info "Installing quarry-mcp..."
+info "Installing punt-quarry..."
 
-INSTALL_OUTPUT=$(uv tool install quarry-mcp 2>&1) || true
+INSTALL_OUTPUT=$(uv tool install punt-quarry 2>&1) || true
 if echo "$INSTALL_OUTPUT" | grep -q "already installed"; then
-    uv tool upgrade quarry-mcp || fail "Failed to upgrade quarry-mcp"
-    ok "quarry-mcp upgraded"
+    uv tool upgrade punt-quarry || fail "Failed to upgrade punt-quarry"
+    ok "punt-quarry upgraded"
 elif echo "$INSTALL_OUTPUT" | grep -q "Installed"; then
-    ok "quarry-mcp installed"
+    ok "punt-quarry installed"
 else
     echo "$INSTALL_OUTPUT"
-    fail "Failed to install quarry-mcp"
+    fail "Failed to install punt-quarry"
 fi
 
 # Verify quarry is on PATH
@@ -95,7 +95,7 @@ if ! command -v quarry &>/dev/null; then
     # uv tool installs to ~/.local/bin by default
     export PATH="$HOME/.local/bin:$PATH"
     if ! command -v quarry &>/dev/null; then
-        fail "quarry-mcp installed but 'quarry' not found on PATH. Run: export PATH=\"\$HOME/.local/bin:\$PATH\""
+        fail "punt-quarry installed but 'quarry' not found on PATH. Run: export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 fi
 
@@ -117,7 +117,7 @@ echo ""
 
 # --- Done --------------------------------------------------------------------
 
-printf '\n%b%bquarry-mcp is ready!%b\n' "$GREEN" "$BOLD" "$NC"
+printf '\n%b%bpunt-quarry is ready!%b\n' "$GREEN" "$BOLD" "$NC"
 echo ""
 echo "Quick start:"
 echo "  quarry ingest-file notes.md      # index a file"

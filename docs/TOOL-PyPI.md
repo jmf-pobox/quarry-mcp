@@ -1,4 +1,4 @@
-# PyPI Publishing Checklist for quarry-mcp
+# PyPI Publishing Checklist for punt-quarry
 
 Build with `uv build`, publish with `twine` (reads `~/.pypirc` for credentials).
 
@@ -10,7 +10,7 @@ Update the version in `pyproject.toml`:
 
 - `version = "X.Y.Z"`
 
-Runtime version is read via `importlib.metadata.version("quarry-mcp")` — no second file to update.
+Runtime version is read via `importlib.metadata.version("punt-quarry")` — no second file to update.
 
 ---
 
@@ -40,7 +40,7 @@ Validates the distribution metadata and README rendering.
 uv pip install -e .
 ```
 
-Installs in editable mode for local development. Uninstall with `uv pip uninstall quarry-mcp`.
+Installs in editable mode for local development. Uninstall with `uv pip uninstall punt-quarry`.
 
 ---
 
@@ -49,7 +49,7 @@ Installs in editable mode for local development. Uninstall with `uv pip uninstal
 ```sh
 uv venv /tmp/quarry-test
 source /tmp/quarry-test/bin/activate
-uv pip install dist/quarry_mcp-*.whl
+uv pip install dist/punt_quarry-*.whl
 quarry doctor
 deactivate
 ```
@@ -65,7 +65,7 @@ uvx twine upload --repository testpypi dist/*
 Install from TestPyPI to verify:
 
 ```sh
-uv pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ quarry-mcp
+uv pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ punt-quarry
 ```
 
 The `--extra-index-url` fallback is needed because dependencies (boto3, lancedb, etc.) are on PyPI, not TestPyPI.
@@ -82,11 +82,11 @@ uvx twine upload dist/*
 
 ## 8. Verify on PyPI
 
-- Check: https://pypi.org/project/quarry-mcp/
+- Check: https://pypi.org/project/punt-quarry/
 - Install in a fresh environment:
 
 ```sh
-uv tool install quarry-mcp
+uv tool install punt-quarry
 quarry doctor
 quarry install
 ```
@@ -100,7 +100,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 gh release create vX.Y.Z --title "vX.Y.Z" --notes "Release notes here.
 
-PyPI: https://pypi.org/project/quarry-mcp/X.Y.Z/"
+PyPI: https://pypi.org/project/punt-quarry/X.Y.Z/"
 ```
 
 Verify the release appears on the repo homepage: https://github.com/punt-labs/quarry

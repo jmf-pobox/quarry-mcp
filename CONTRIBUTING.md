@@ -4,7 +4,7 @@
 
 ```bash
 git clone https://github.com/punt-labs/quarry.git
-cd quarry-mcp
+cd quarry
 uv sync --frozen --extra dev
 ```
 

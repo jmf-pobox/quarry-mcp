@@ -5,7 +5,7 @@
 #
 # Usage: ./scripts/build-mcpb.sh
 #
-# Output: dist/quarry-mcp-<version>.mcpb
+# Output: dist/punt-quarry-<version>.mcpb
 
 set -euo pipefail
 
@@ -32,14 +32,14 @@ if [ "$version" != "$pyproject_version" ]; then
     exit 1
 fi
 
-echo "Building quarry-mcp $version .mcpb bundle..."
+echo "Building punt-quarry $version .mcpb bundle..."
 
 mkdir -p dist
-mcpb pack . "dist/quarry-mcp-${version}.mcpb"
+mcpb pack . "dist/punt-quarry-${version}.mcpb"
 
-# Create stable-named copy for GitHub release (latest/download/quarry-mcp.mcpb).
-cp "dist/quarry-mcp-${version}.mcpb" "dist/quarry-mcp.mcpb"
+# Create stable-named copy for GitHub release (latest/download/punt-quarry.mcpb).
+cp "dist/punt-quarry-${version}.mcpb" "dist/punt-quarry.mcpb"
 
-echo "Built: dist/quarry-mcp-${version}.mcpb"
-echo "       dist/quarry-mcp.mcpb (stable name)"
-echo "Size: $(du -h "dist/quarry-mcp-${version}.mcpb" | cut -f1)"
+echo "Built: dist/punt-quarry-${version}.mcpb"
+echo "       dist/punt-quarry.mcpb (stable name)"
+echo "Size: $(du -h "dist/punt-quarry-${version}.mcpb" | cut -f1)"

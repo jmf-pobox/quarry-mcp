@@ -25,7 +25,7 @@ class CheckResult:
 def _quarry_version() -> str:
     from importlib.metadata import version  # noqa: PLC0415
 
-    return version("quarry-mcp")
+    return version("punt-quarry")
 
 
 @contextlib.contextmanager
@@ -275,7 +275,7 @@ def _human_size(nbytes: int) -> str:
 
 _MCP_SERVER_NAME = "quarry"
 _MCP_COMMAND = "uvx"
-_MCP_ARGS = ["--from", "quarry-mcp", "quarry", "mcp"]
+_MCP_ARGS = ["--from", "punt-quarry", "quarry", "mcp"]
 
 _DESKTOP_CONFIG_PATH = (
     Path.home()
@@ -446,7 +446,7 @@ def run_install() -> int:
 
     Returns 0 on success, 1 on failure.
     """
-    print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
+    print(f"punt-quarry {_quarry_version()}")  # noqa: T201
     print()  # noqa: T201
 
     failed = False
@@ -489,7 +489,7 @@ def run_install() -> int:
 def check_environment(*, _skip_header: bool = False) -> int:
     """Run all environment checks. Returns 0 if all required pass, 1 otherwise."""
     if not _skip_header:
-        print(f"quarry-mcp {_quarry_version()}")  # noqa: T201
+        print(f"punt-quarry {_quarry_version()}")  # noqa: T201
         print()  # noqa: T201
 
     with _quiet_logging():
