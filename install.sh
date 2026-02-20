@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
 #
 # What this does:
-#   1. Checks Python 3.10+ is available
+#   1. Checks Python 3.13+ is available
 #   2. Installs uv if not present (official installer)
 #   3. Installs punt-quarry via uv
 #   4. Runs quarry install (downloads model, configures MCP)
@@ -33,15 +33,15 @@ if command -v python3 &>/dev/null; then
 elif command -v python &>/dev/null; then
     PYTHON=python
 else
-    fail "Python not found. Install Python 3.10+ from https://python.org"
+    fail "Python not found. Install Python 3.13+ from https://python.org"
 fi
 
 PY_VERSION=$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 PY_MAJOR=$($PYTHON -c 'import sys; print(sys.version_info.major)')
 PY_MINOR=$($PYTHON -c 'import sys; print(sys.version_info.minor)')
 
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-    fail "Python $PY_VERSION found, but 3.10+ is required"
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 13 ]; }; then
+    fail "Python $PY_VERSION found, but 3.13+ is required"
 fi
 
 ok "Python $PY_VERSION ($($PYTHON --version 2>&1))"
