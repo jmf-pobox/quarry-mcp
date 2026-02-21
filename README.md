@@ -26,7 +26,7 @@ That's it. Everything runs locally — no API keys, no cloud accounts. The embed
 ### Claude Code / CLI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/79da723/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/0cbb5e3/install.sh | sh
 ```
 
 <details>
@@ -44,7 +44,7 @@ quarry doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/79da723/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/0cbb5e3/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
