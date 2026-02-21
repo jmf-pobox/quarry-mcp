@@ -26,15 +26,31 @@ That's it. Everything runs locally — no API keys, no cloud accounts. The embed
 ### Claude Code / CLI
 
 ```bash
-pip install punt-quarry
-quarry install          # downloads embedding model, configures MCP
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/79da723/install.sh | sh
 ```
 
-Or use the one-liner:
+<details>
+<summary>Manual install (if you already have uv)</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | bash
+uv tool install punt-quarry
+quarry install
+quarry doctor
 ```
+
+</details>
+
+<details>
+<summary>Verify before running</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/79da723/install.sh -o install.sh
+shasum -a 256 install.sh
+cat install.sh
+sh install.sh
+```
+
+</details>
 
 Then start using it:
 
