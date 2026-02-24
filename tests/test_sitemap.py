@@ -1,4 +1,4 @@
-"""Tests for sitemap crawling: parse, discover, filter, dedup, ingest."""
+"""Tests for sitemap crawling: discover, filter, dedup, ingest."""
 
 from __future__ import annotations
 
@@ -7,205 +7,133 @@ from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from quarry.sitemap import (
     SitemapEntry,
+    discover_pages,
     discover_urls,
     filter_entries,
-    parse_sitemap,
 )
 
 # ---------------------------------------------------------------------------
-# Sitemap XML parsing
+# discover_pages via USP sitemap_tree_for_homepage
 # ---------------------------------------------------------------------------
 
 
-class TestParseSitemap:
-    """Test XML parsing of <urlset> and <sitemapindex> documents."""
+class TestDiscoverPages:
+    """Test auto-discovery using USP's sitemap_tree_for_homepage."""
 
-    def test_parse_urlset_with_lastmod(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://example.com/page1</loc>
-    <lastmod>2025-01-15T10:30:00+00:00</lastmod>
-  </url>
-  <url>
-    <loc>https://example.com/page2</loc>
-    <lastmod>2025-02-20</lastmod>
-  </url>
-</urlset>"""
-        entries, children = parse_sitemap(xml)
+    @patch("usp.tree.sitemap_tree_for_homepage")
+    def test_extracts_origin_and_discovers(self, mock_tree_fn: MagicMock) -> None:
+        from usp.objects.page import SitemapPage
+
+        mock_tree = MagicMock()
+        mock_tree.all_pages.return_value = [
+            SitemapPage(url="https://example.com/page1", last_modified=None),
+            SitemapPage(url="https://example.com/page2", last_modified=None),
+        ]
+        mock_tree_fn.return_value = mock_tree
+
+        entries = discover_pages("https://example.com/docs/guide")
         assert len(entries) == 2
-        assert children == []
-        assert entries[0].loc == "https://example.com/page1"
-        assert entries[0].lastmod is not None
-        assert entries[0].lastmod.year == 2025
-        assert entries[0].lastmod.month == 1
-        assert entries[1].loc == "https://example.com/page2"
-        assert entries[1].lastmod is not None
-        assert entries[1].lastmod.day == 20
+        mock_tree_fn.assert_called_once_with("https://example.com/")
 
-    def test_parse_urlset_without_lastmod(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/no-date</loc></url>
-</urlset>"""
-        entries, _ = parse_sitemap(xml)
-        assert len(entries) == 1
-        assert entries[0].loc == "https://example.com/no-date"
-        assert entries[0].lastmod is None
+    @patch("usp.tree.sitemap_tree_for_homepage")
+    def test_returns_empty_when_no_pages(self, mock_tree_fn: MagicMock) -> None:
+        mock_tree = MagicMock()
+        mock_tree.all_pages.return_value = []
+        mock_tree_fn.return_value = mock_tree
 
-    def test_parse_sitemapindex(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/sitemap1.xml</loc></sitemap>
-  <sitemap><loc>https://example.com/sitemap2.xml</loc></sitemap>
-</sitemapindex>"""
-        entries, children = parse_sitemap(xml)
+        entries = discover_pages("https://example.com/")
         assert entries == []
-        assert len(children) == 2
-        assert children[0] == "https://example.com/sitemap1.xml"
 
-    def test_parse_without_namespace(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset>
-  <url><loc>https://example.com/no-ns</loc></url>
-</urlset>"""
-        entries, _ = parse_sitemap(xml)
-        assert len(entries) == 1
-        assert entries[0].loc == "https://example.com/no-ns"
+    @patch("usp.tree.sitemap_tree_for_homepage")
+    def test_preserves_lastmod(self, mock_tree_fn: MagicMock) -> None:
+        from usp.objects.page import SitemapPage
 
-    def test_parse_sitemapindex_without_namespace(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex>
-  <sitemap><loc>https://example.com/child.xml</loc></sitemap>
-</sitemapindex>"""
-        entries, children = parse_sitemap(xml)
-        assert entries == []
-        assert len(children) == 1
+        ts = datetime(2025, 6, 15, 12, 0, 0, tzinfo=UTC)
+        mock_tree = MagicMock()
+        mock_tree.all_pages.return_value = [
+            SitemapPage(url="https://example.com/page", last_modified=ts),
+        ]
+        mock_tree_fn.return_value = mock_tree
 
-    def test_unknown_root_raises(self) -> None:
-        xml = "<html><body>Not a sitemap</body></html>"
-        with pytest.raises(ValueError, match="Unknown sitemap root"):
-            parse_sitemap(xml)
+        entries = discover_pages("https://example.com/")
+        assert entries[0].lastmod == ts
 
-    def test_lastmod_with_z_suffix(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://example.com/z</loc>
-    <lastmod>2025-03-01T12:00:00Z</lastmod>
-  </url>
-</urlset>"""
-        entries, _ = parse_sitemap(xml)
-        assert entries[0].lastmod is not None
-        assert entries[0].lastmod.tzinfo is not None
+    @patch("usp.tree.sitemap_tree_for_homepage")
+    def test_deduplicates_by_url(self, mock_tree_fn: MagicMock) -> None:
+        from usp.objects.page import SitemapPage
 
-    def test_skips_url_without_loc(self) -> None:
-        xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><lastmod>2025-01-01</lastmod></url>
-  <url><loc>https://example.com/valid</loc></url>
-</urlset>"""
-        entries, _ = parse_sitemap(xml)
-        assert len(entries) == 1
-        assert entries[0].loc == "https://example.com/valid"
+        mock_tree = MagicMock()
+        mock_tree.all_pages.return_value = [
+            SitemapPage(url="https://example.com/dup", last_modified=None),
+            SitemapPage(url="https://example.com/dup", last_modified=None),
+            SitemapPage(url="https://example.com/unique", last_modified=None),
+        ]
+        mock_tree_fn.return_value = mock_tree
+
+        entries = discover_pages("https://example.com/")
+        assert len(entries) == 2
+        locs = [e.loc for e in entries]
+        assert locs.count("https://example.com/dup") == 1
 
 
 # ---------------------------------------------------------------------------
-# discover_urls with recursive sitemap indexes
+# discover_urls via USP SitemapFetcher
 # ---------------------------------------------------------------------------
 
 
 class TestDiscoverUrls:
-    """Test recursive sitemap discovery with mocked HTTP."""
+    """Test explicit sitemap URL parsing via USP's SitemapFetcher."""
 
-    @patch("quarry.sitemap.fetch_sitemap")
-    def test_follows_sitemap_index(self, mock_fetch: MagicMock) -> None:
-        index_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>
-</sitemapindex>"""
-        child_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/page1</loc></url>
-  <url><loc>https://example.com/page2</loc></url>
-</urlset>"""
-        mock_fetch.side_effect = [index_xml, child_xml]
+    @patch("usp.fetch_parse.SitemapFetcher")
+    def test_returns_entries_from_sitemap(self, mock_fetcher_cls: MagicMock) -> None:
+        from usp.objects.page import SitemapPage
+
+        mock_sitemap = MagicMock()
+        mock_sitemap.all_pages.return_value = [
+            SitemapPage(url="https://example.com/page1", last_modified=None),
+            SitemapPage(url="https://example.com/page2", last_modified=None),
+        ]
+        mock_fetcher = MagicMock()
+        mock_fetcher.sitemap.return_value = mock_sitemap
+        mock_fetcher_cls.return_value = mock_fetcher
 
         entries = discover_urls("https://example.com/sitemap.xml")
         assert len(entries) == 2
         assert entries[0].loc == "https://example.com/page1"
+        mock_fetcher_cls.assert_called_once_with(
+            url="https://example.com/sitemap.xml", recursion_level=0
+        )
 
-    @patch("quarry.sitemap.fetch_sitemap")
-    def test_respects_max_depth(self, mock_fetch: MagicMock) -> None:
-        index1 = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/index2.xml</loc></sitemap>
-</sitemapindex>"""
-        index2 = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/final.xml</loc></sitemap>
-</sitemapindex>"""
-        mock_fetch.side_effect = [index1, index2]
+    @patch("usp.fetch_parse.SitemapFetcher")
+    def test_deduplicates_pages(self, mock_fetcher_cls: MagicMock) -> None:
+        from usp.objects.page import SitemapPage
 
-        # depth 0 (index1), depth 1 (index2), depth 2 (final) exceeds
-        entries = discover_urls("https://example.com/sitemap.xml", max_depth=1)
-        assert entries == []
-        assert mock_fetch.call_count == 2
-
-    @patch("quarry.sitemap.fetch_sitemap")
-    def test_deduplicates_urls(self, mock_fetch: MagicMock) -> None:
-        index_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://example.com/child1.xml</loc></sitemap>
-  <sitemap><loc>https://example.com/child2.xml</loc></sitemap>
-</sitemapindex>"""
-        child1 = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/shared</loc></url>
-  <url><loc>https://example.com/only1</loc></url>
-</urlset>"""
-        child2 = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/shared</loc></url>
-  <url><loc>https://example.com/only2</loc></url>
-</urlset>"""
-        mock_fetch.side_effect = [index_xml, child1, child2]
-
-        entries = discover_urls("https://example.com/sitemap.xml")
-        locs = [e.loc for e in entries]
-        assert len(locs) == 3
-        assert locs.count("https://example.com/shared") == 1
-
-    @patch("quarry.sitemap.fetch_sitemap")
-    def test_flat_urlset(self, mock_fetch: MagicMock) -> None:
-        urlset_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/a</loc></url>
-  <url><loc>https://example.com/b</loc></url>
-</urlset>"""
-        mock_fetch.return_value = urlset_xml
+        mock_sitemap = MagicMock()
+        mock_sitemap.all_pages.return_value = [
+            SitemapPage(url="https://example.com/shared", last_modified=None),
+            SitemapPage(url="https://example.com/shared", last_modified=None),
+            SitemapPage(url="https://example.com/unique", last_modified=None),
+        ]
+        mock_fetcher = MagicMock()
+        mock_fetcher.sitemap.return_value = mock_sitemap
+        mock_fetcher_cls.return_value = mock_fetcher
 
         entries = discover_urls("https://example.com/sitemap.xml")
         assert len(entries) == 2
+
+    @patch("usp.fetch_parse.SitemapFetcher")
+    def test_returns_empty_for_empty_sitemap(self, mock_fetcher_cls: MagicMock) -> None:
+        mock_sitemap = MagicMock()
+        mock_sitemap.all_pages.return_value = []
+        mock_fetcher = MagicMock()
+        mock_fetcher.sitemap.return_value = mock_sitemap
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        entries = discover_urls("https://example.com/sitemap.xml")
+        assert entries == []
 
 
 # ---------------------------------------------------------------------------
@@ -459,22 +387,19 @@ class TestIngestSitemapDedup:
 class TestIngestSitemapIntegration:
     """End-to-end integration following test_url_ingestion.py pattern."""
 
-    @patch("quarry.sitemap.fetch_sitemap")
+    @patch("quarry.sitemap.discover_urls")
     @patch("quarry.pipeline._fetch_url")
     def test_end_to_end(
         self,
         mock_fetch_url: MagicMock,
-        mock_fetch_sitemap: MagicMock,
+        mock_discover: MagicMock,
     ) -> None:
         from quarry.pipeline import ingest_sitemap
 
-        sitemap_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://docs.example.com/intro</loc></url>
-  <url><loc>https://docs.example.com/setup</loc></url>
-</urlset>"""
-        mock_fetch_sitemap.return_value = sitemap_xml
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://docs.example.com/intro", lastmod=None),
+            SitemapEntry(loc="https://docs.example.com/setup", lastmod=None),
+        ]
         mock_fetch_url.return_value = (
             "<html><head><title>Docs</title></head>"
             "<body><h1>Getting Started</h1>"
@@ -516,23 +441,20 @@ class TestIngestSitemapIntegration:
         assert result["failed"] == 0
         assert result["errors"] == []
 
-    @patch("quarry.sitemap.fetch_sitemap")
+    @patch("quarry.sitemap.discover_urls")
     @patch("quarry.pipeline._fetch_url")
     def test_with_filters(
         self,
         mock_fetch_url: MagicMock,
-        mock_fetch_sitemap: MagicMock,
+        mock_discover: MagicMock,
     ) -> None:
         from quarry.pipeline import ingest_sitemap
 
-        sitemap_xml = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://example.com/docs/api</loc></url>
-  <url><loc>https://example.com/docs/guide</loc></url>
-  <url><loc>https://example.com/blog/post</loc></url>
-</urlset>"""
-        mock_fetch_sitemap.return_value = sitemap_xml
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://example.com/docs/api", lastmod=None),
+            SitemapEntry(loc="https://example.com/docs/guide", lastmod=None),
+            SitemapEntry(loc="https://example.com/blog/post", lastmod=None),
+        ]
         mock_fetch_url.return_value = "<html><body><p>Content.</p></body></html>"
 
         settings = MagicMock()
@@ -631,3 +553,240 @@ class TestIngestSitemapIntegration:
         assert result["failed"] == 1
         assert len(result["errors"]) == 1
         assert "bad" in result["errors"][0]
+
+
+# ---------------------------------------------------------------------------
+# ingest_auto — discovery and routing
+# ---------------------------------------------------------------------------
+
+
+class TestIngestAuto:
+    """Test smart URL ingestion with sitemap auto-discovery."""
+
+    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.sitemap.discover_pages")
+    def test_routes_to_bulk_ingest_when_pages_discovered(
+        self,
+        mock_discover: MagicMock,
+        mock_bulk: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://example.com/docs/a", lastmod=None),
+            SitemapEntry(loc="https://example.com/docs/b", lastmod=None),
+        ]
+        mock_bulk.return_value = {
+            "sitemap_url": "https://example.com/docs",
+            "collection": "example.com",
+            "total_discovered": 2,
+            "after_filter": 2,
+            "ingested": 2,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        result = ingest_auto(
+            "https://example.com/docs",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "sitemap_url" in result
+        assert result["ingested"] == 2  # type: ignore[typeddict-item]
+        # Verify path prefix filter was derived
+        call_kwargs = mock_bulk.call_args
+        assert call_kwargs.kwargs["include"] == ["/docs", "/docs/*"]
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_falls_back_to_single_page(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = []
+        mock_ingest_url.return_value = {
+            "document_name": "https://example.com/page",
+            "collection": "example.com",
+            "chunks": 3,
+        }
+
+        result = ingest_auto(
+            "https://example.com/page",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        assert result["chunks"] == 3  # type: ignore[typeddict-item]
+        mock_ingest_url.assert_called_once()
+
+    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.sitemap.discover_pages")
+    def test_no_path_filter_for_root_url(
+        self,
+        mock_discover: MagicMock,
+        mock_bulk: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://example.com/page1", lastmod=None),
+        ]
+        mock_bulk.return_value = {
+            "sitemap_url": "https://example.com/",
+            "collection": "example.com",
+            "total_discovered": 1,
+            "after_filter": 1,
+            "ingested": 1,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto("https://example.com/", MagicMock(), MagicMock())
+
+        call_kwargs = mock_bulk.call_args
+        assert call_kwargs.kwargs["include"] is None
+
+    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.sitemap.discover_pages")
+    def test_collection_defaults_to_hostname(
+        self,
+        mock_discover: MagicMock,
+        mock_bulk: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://docs.python.org/3/library/os", lastmod=None),
+        ]
+        mock_bulk.return_value = {
+            "sitemap_url": "https://docs.python.org/3/library/",
+            "collection": "docs.python.org",
+            "total_discovered": 0,
+            "after_filter": 0,
+            "ingested": 0,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto("https://docs.python.org/3/library/", MagicMock(), MagicMock())
+
+        call_kwargs = mock_bulk.call_args
+        assert call_kwargs.kwargs["collection"] == "docs.python.org"
+
+    @patch("quarry.pipeline._bulk_ingest_entries")
+    @patch("quarry.sitemap.discover_pages")
+    def test_explicit_collection_passed_through(
+        self,
+        mock_discover: MagicMock,
+        mock_bulk: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://example.com/docs/a", lastmod=None),
+        ]
+        mock_bulk.return_value = {
+            "sitemap_url": "https://example.com/docs",
+            "collection": "my-docs",
+            "total_discovered": 0,
+            "after_filter": 0,
+            "ingested": 0,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto(
+            "https://example.com/docs",
+            MagicMock(),
+            MagicMock(),
+            collection="my-docs",
+        )
+
+        call_kwargs = mock_bulk.call_args
+        assert call_kwargs.kwargs["collection"] == "my-docs"
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    def test_explicit_sitemap_url_skips_discovery(
+        self,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "example.com",
+            "total_discovered": 10,
+            "after_filter": 10,
+            "ingested": 10,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        result = ingest_auto(
+            "https://example.com/sitemap.xml",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "sitemap_url" in result
+        mock_ingest_sitemap.assert_called_once()
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_discovery_error_falls_back_to_single_page(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.side_effect = ConnectionError("network error")
+        mock_ingest_url.return_value = {
+            "document_name": "https://example.com/page",
+            "collection": "example.com",
+            "chunks": 3,
+        }
+
+        result = ingest_auto(
+            "https://example.com/page",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        mock_ingest_url.assert_called_once()
+
+    @patch("quarry.sitemap.discover_pages")
+    def test_sitemap_substring_not_misdetected(
+        self,
+        mock_discover: MagicMock,
+    ) -> None:
+        """A URL like /docs/sitemap-guide should NOT be treated as a sitemap."""
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = []
+
+        with patch("quarry.pipeline.ingest_url") as mock_ingest_url:
+            mock_ingest_url.return_value = {
+                "document_name": "https://example.com/docs/sitemap-guide",
+                "collection": "example.com",
+                "chunks": 2,
+            }
+            result = ingest_auto(
+                "https://example.com/docs/sitemap-guide",
+                MagicMock(),
+                MagicMock(),
+            )
+
+        # Should fall through to single-page, not route to ingest_sitemap
+        assert "document_name" in result

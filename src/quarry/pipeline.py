@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
 
+    from quarry.sitemap import SitemapEntry
+
 from quarry.backends import get_embedding_backend, get_ocr_backend
 from quarry.chunker import chunk_pages
 from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
@@ -901,12 +903,13 @@ def _ingest_url_with_delay(
     )
 
 
-def ingest_sitemap(
-    url: str,
+def _bulk_ingest_entries(
+    entries: list[SitemapEntry],
     db: LanceDB,
     settings: Settings,
     *,
-    collection: str = "",
+    source_url: str,
+    collection: str,
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     limit: int = 0,
@@ -914,47 +917,19 @@ def ingest_sitemap(
     workers: int = 4,
     delay: float = 0.5,
     timeout: int = 30,
-    progress_callback: Callable[[str], None] | None = None,
+    progress: Callable[..., None],
 ) -> SitemapResult:
-    """Crawl a sitemap and ingest all discovered URLs.
+    """Filter, dedup, and parallel-ingest a list of sitemap entries.
 
-    Fetches the sitemap, discovers all URLs (following sitemap indexes),
-    applies include/exclude filters, deduplicates against existing documents
-    via <lastmod>, and ingests new/changed URLs in parallel.
-
-    Args:
-        url: Sitemap URL.
-        db: LanceDB connection.
-        settings: Application settings.
-        collection: Collection name. Defaults to sitemap URL domain.
-        include: URL path glob patterns to include (repeatable).
-        exclude: URL path glob patterns to exclude (repeatable).
-        limit: Max URLs to ingest (0 = no limit).
-        overwrite: Force re-ingest regardless of <lastmod>.
-        workers: Parallel fetch workers (minimum 1).
-        delay: Base delay in seconds between fetches per worker
-            (adds 0-1.0s random jitter). Default 0.5s.
-        timeout: HTTP timeout in seconds.
-        progress_callback: Optional callable for progress messages.
-
-    Returns:
-        SitemapResult with counts and error details.
+    Shared by ``ingest_sitemap`` (explicit sitemap URL) and
+    ``ingest_auto`` (auto-discovered pages).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
-    from urllib.parse import urlparse  # noqa: PLC0415
 
-    from quarry.sitemap import discover_urls, filter_entries  # noqa: PLC0415
+    from quarry.sitemap import filter_entries  # noqa: PLC0415
 
-    progress = _make_progress(progress_callback)
     workers = max(1, workers)
-
-    if not collection:
-        collection = urlparse(url).hostname or "default"
-
-    progress("Discovering URLs from %s", url)
-    entries = discover_urls(url, timeout=timeout)
     total_discovered = len(entries)
-    progress("Discovered %d URLs", total_discovered)
 
     filtered = filter_entries(entries, include=include, exclude=exclude, limit=limit)
     after_filter = len(filtered)
@@ -1002,6 +977,8 @@ def ingest_sitemap(
                     page_url,
                     db,
                     settings,
+                    # Always replace existing chunks for URLs that passed dedup.
+                    # The dedup logic above already skipped unchanged URLs.
                     overwrite=True,
                     collection=collection,
                     document_name=doc_name,
@@ -1035,7 +1012,7 @@ def ingest_sitemap(
     )
 
     return SitemapResult(
-        sitemap_url=url,
+        sitemap_url=source_url,
         collection=collection,
         total_discovered=total_discovered,
         after_filter=after_filter,
@@ -1043,6 +1020,186 @@ def ingest_sitemap(
         skipped=skipped,
         failed=failed,
         errors=errors,
+    )
+
+
+def ingest_sitemap(
+    url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    collection: str = "",
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    limit: int = 0,
+    overwrite: bool = False,
+    workers: int = 4,
+    delay: float = 0.5,
+    timeout: int = 30,
+    progress_callback: Callable[[str], None] | None = None,
+) -> SitemapResult:
+    """Crawl a sitemap and ingest all discovered URLs.
+
+    Fetches the sitemap, discovers all URLs (following sitemap indexes),
+    applies include/exclude filters, deduplicates against existing documents
+    via <lastmod>, and ingests new/changed URLs in parallel.
+
+    Args:
+        url: Sitemap URL.
+        db: LanceDB connection.
+        settings: Application settings.
+        collection: Collection name. Defaults to sitemap URL domain.
+        include: URL path glob patterns to include (repeatable).
+        exclude: URL path glob patterns to exclude (repeatable).
+        limit: Max URLs to ingest (0 = no limit).
+        overwrite: Force re-ingest regardless of <lastmod>.
+        workers: Parallel fetch workers (minimum 1).
+        delay: Base delay in seconds between fetches per worker
+            (adds 0-1.0s random jitter). Default 0.5s.
+        timeout: HTTP timeout in seconds.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        SitemapResult with counts and error details.
+    """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from quarry.sitemap import discover_urls  # noqa: PLC0415
+
+    progress = _make_progress(progress_callback)
+
+    if not collection:
+        collection = urlparse(url).hostname or "default"
+
+    progress("Fetching sitemap: %s", url)
+    entries = discover_urls(url)
+    progress("Discovered %d URLs", len(entries))
+
+    return _bulk_ingest_entries(
+        entries,
+        db,
+        settings,
+        source_url=url,
+        collection=collection,
+        include=include,
+        exclude=exclude,
+        limit=limit,
+        overwrite=overwrite,
+        workers=workers,
+        delay=delay,
+        timeout=timeout,
+        progress=progress,
+    )
+
+
+def ingest_auto(
+    url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "",
+    workers: int = 4,
+    delay: float = 0.5,
+    timeout: int = 30,
+    progress_callback: Callable[[str], None] | None = None,
+) -> IngestResult | SitemapResult:
+    """Smart URL ingestion: discover sitemap, crawl if found, else single page.
+
+    Uses ultimate-sitemap-parser (USP) for robust sitemap discovery via
+    robots.txt, well-known locations, and multiple sitemap formats
+    (XML, RSS, Atom, plain text).
+
+    1. If the URL is itself a sitemap, crawl it directly.
+    2. Otherwise, auto-discover sitemaps for the site origin.
+    3. If pages found, apply path-prefix filter and bulk-ingest.
+    4. If no sitemap found, fall back to single-page ingestion.
+
+    Args:
+        url: Any HTTP(S) URL on the target site.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: Force re-ingest regardless of existing data.
+        collection: Collection name. Defaults to the URL hostname.
+        workers: Parallel fetch workers for sitemap crawl (default 4).
+        delay: Base delay between fetches in seconds (default 0.5).
+        timeout: HTTP timeout in seconds.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        SitemapResult if a sitemap was discovered, IngestResult otherwise.
+    """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from quarry.sitemap import discover_pages  # noqa: PLC0415
+
+    progress = _make_progress(progress_callback)
+    parsed = urlparse(url)
+
+    if not collection:
+        collection = parsed.hostname or "default"
+
+    # If the URL itself is a sitemap, skip discovery and crawl directly.
+    # Match sitemap files (*.xml, *.xml.gz) and /sitemap paths, but not
+    # pages that merely contain "sitemap" as a substring (e.g. /sitemap-guide).
+    path_lower = parsed.path.lower()
+    last_segment = path_lower.rsplit("/", 1)[-1]
+    is_sitemap = last_segment.startswith("sitemap") and (
+        last_segment.endswith((".xml", ".xml.gz", ".txt")) or last_segment == "sitemap"
+    )
+    if is_sitemap:
+        progress("URL is a sitemap, crawling directly")
+        return ingest_sitemap(
+            url,
+            db,
+            settings,
+            collection=collection,
+            overwrite=overwrite,
+            workers=workers,
+            delay=delay,
+            timeout=timeout,
+            progress_callback=progress_callback,
+        )
+
+    progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
+    try:
+        entries = discover_pages(url)
+    except Exception:
+        logger.exception("Sitemap discovery failed for %s", url)
+        entries = []
+
+    if not entries:
+        progress("No sitemap found, ingesting single page")
+        return ingest_url(
+            url,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            timeout=timeout,
+            progress_callback=progress_callback,
+        )
+
+    progress("Discovered %d pages via sitemap", len(entries))
+
+    # Derive include filter from input URL path
+    path = parsed.path.rstrip("/")
+    include: list[str] | None = None
+    if path:
+        include = [path, f"{path}/*"]
+
+    return _bulk_ingest_entries(
+        entries,
+        db,
+        settings,
+        source_url=url,
+        collection=collection,
+        include=include,
+        overwrite=overwrite,
+        workers=workers,
+        delay=delay,
+        timeout=timeout,
+        progress=progress,
     )
 
 

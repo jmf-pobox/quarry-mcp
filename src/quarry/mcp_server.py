@@ -37,6 +37,7 @@ from quarry.formatting import (
     format_sync_summary,
 )
 from quarry.pipeline import (
+    ingest_auto as pipeline_ingest_auto,
     ingest_content as pipeline_ingest_content,
     ingest_document,
     ingest_sitemap as pipeline_ingest_sitemap,
@@ -298,6 +299,49 @@ def ingest_sitemap(
     )
 
     return format_sitemap_summary(result)
+
+
+@mcp.tool()
+@_handle_errors
+def ingest_auto(
+    url: str,
+    overwrite: bool = False,
+    collection: str = "",
+    workers: int = 4,
+    delay: float = 0.5,
+) -> str:
+    """Smart URL ingestion: auto-discovers a sitemap and bulk-crawls, or
+    falls back to single-page ingestion.
+
+    Give this any page URL on a documentation site (e.g.,
+    ``https://docs.example.com/guide``). It will probe for a sitemap via
+    ``robots.txt`` and ``/sitemap.xml``, then crawl the sitemap with a
+    path-prefix filter derived from the input URL. If no sitemap is found,
+    it ingests the single page.
+
+    Args:
+        url: Any HTTP(S) URL on the target site.
+        overwrite: Force re-ingest regardless of existing data.
+        collection: Collection name. Defaults to URL hostname.
+        workers: Parallel fetch workers for sitemap crawl (default 4).
+        delay: Base delay between fetches in seconds (default 0.5).
+    """
+    settings = _settings()
+    db = _db()
+
+    result = pipeline_ingest_auto(
+        url,
+        db,
+        settings,
+        overwrite=overwrite,
+        collection=collection or "",
+        workers=workers,
+        delay=delay,
+    )
+
+    if "sitemap_url" in result:
+        return format_sitemap_summary(result)
+    return format_ingest_summary(result)
 
 
 @mcp.tool()
