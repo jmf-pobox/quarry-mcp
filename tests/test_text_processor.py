@@ -63,6 +63,15 @@ class TestProcessTextFile:
         assert pages[0].total_pages == 2
         assert pages[0].page_type == PageType.SECTION
 
+    def test_document_name_override(self, tmp_path: Path):
+        f = tmp_path / "notes.txt"
+        f.write_text("Hello.\n\nWorld.")
+
+        pages = process_text_file(f, document_name="subdir/notes.txt")
+
+        assert pages[0].document_name == "subdir/notes.txt"
+        assert pages[1].document_name == "subdir/notes.txt"
+
     def test_markdown_splits_on_headings(self, tmp_path: Path):
         f = tmp_path / "doc.md"
         f.write_text("# Intro\nSome text.\n\n## Details\nMore text.")

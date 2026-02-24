@@ -470,6 +470,38 @@ class TestSyncCollection:
         assert files[0].document_name == "new.txt"
         conn.close()
 
+    def test_subdirectory_document_names_match_registry(self, tmp_path: Path):
+        """Regression: sync must use the same document_name in LanceDB and SQLite.
+
+        When syncing a directory with subdirectories, the document_name for
+        each file is a relative path (e.g. "sub/file.txt").  Both the
+        ingest call (which stores in LanceDB) and the registry upsert (which
+        stores in SQLite) must use this relative name.  If they diverge,
+        deregister cannot find the LanceDB chunks to delete.
+
+        See quarry-5sg.
+        """
+        conn, d = self._setup(tmp_path)
+        sub = d / "pkg"
+        sub.mkdir()
+        (sub / "mod.py").write_text("def hello():\n    pass\n")
+
+        db = MagicMock()
+        settings = _mock_settings(tmp_path)
+
+        with patch("quarry.sync.ingest_document", return_value={"chunks": 1}) as mock:
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        # The document_name passed to ingest_document must be the relative path
+        _, kwargs = mock.call_args
+        assert kwargs["document_name"] == "pkg/mod.py"
+
+        # The registry must store the same relative path
+        files = list_files(conn, "col")
+        assert len(files) == 1
+        assert files[0].document_name == "pkg/mod.py"
+        conn.close()
+
 
 class TestSyncAll:
     def test_syncs_all_registered(self, tmp_path: Path):

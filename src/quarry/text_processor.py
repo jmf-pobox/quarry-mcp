@@ -49,7 +49,11 @@ def _read_text_with_fallback(file_path: Path) -> str:
         return file_path.read_text(encoding="latin-1")
 
 
-def process_text_file(file_path: Path) -> list[PageContent]:
+def process_text_file(
+    file_path: Path,
+    *,
+    document_name: str | None = None,
+) -> list[PageContent]:
     """Read a text file and split into sections.
 
     Dispatches to format-specific processor based on file extension.
@@ -57,6 +61,8 @@ def process_text_file(file_path: Path) -> list[PageContent]:
 
     Args:
         file_path: Path to text file.
+        document_name: Override for the stored document name.  Defaults to
+            ``file_path.name``.
 
     Returns:
         List of PageContent objects, one per section.
@@ -71,13 +77,14 @@ def process_text_file(file_path: Path) -> list[PageContent]:
         msg = f"Unsupported text format: {suffix}"
         raise ValueError(msg)
 
-    logger.debug("Processing %s as %s", file_path.name, fmt)
+    resolved_name = document_name or file_path.name
+    logger.debug("Processing %s as %s", resolved_name, fmt)
 
     if fmt == "docx":
-        return _process_docx(file_path)
+        return _process_docx(file_path, document_name=resolved_name)
 
     text = _read_text_with_fallback(file_path)
-    return _split_by_format(text, fmt, file_path.name, str(file_path.resolve()))
+    return _split_by_format(text, fmt, resolved_name, str(file_path.resolve()))
 
 
 def process_raw_text(
@@ -151,7 +158,11 @@ def _split_plain(text: str) -> list[str]:
     return [p for p in parts if p.strip()]
 
 
-def _process_docx(file_path: Path) -> list[PageContent]:
+def _process_docx(
+    file_path: Path,
+    *,
+    document_name: str | None = None,
+) -> list[PageContent]:
     """Extract text from DOCX, splitting on Heading styles."""
     import docx  # noqa: PLC0415
 
@@ -170,8 +181,9 @@ def _process_docx(file_path: Path) -> list[PageContent]:
     if current:
         sections.append("\n".join(current))
 
+    resolved_name = document_name or file_path.name
     document_path = str(file_path.resolve())
-    return _sections_to_pages(sections, file_path.name, document_path, PageType.SECTION)
+    return _sections_to_pages(sections, resolved_name, document_path, PageType.SECTION)
 
 
 def _sections_to_pages(
