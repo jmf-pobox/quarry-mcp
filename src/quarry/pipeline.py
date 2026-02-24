@@ -1002,7 +1002,7 @@ def ingest_sitemap(
                     page_url,
                     db,
                     settings,
-                    overwrite=overwrite,
+                    overwrite=True,
                     collection=collection,
                     document_name=doc_name,
                     timeout=timeout,

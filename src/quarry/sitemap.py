@@ -197,8 +197,12 @@ def discover_urls(
         seen_urls.add(sitemap_url)
 
         logger.info("Fetching sitemap: %s (depth %d)", sitemap_url, depth)
-        xml_text = fetch_sitemap(sitemap_url, timeout=timeout)
-        entries, children = parse_sitemap(xml_text)
+        try:
+            xml_text = fetch_sitemap(sitemap_url, timeout=timeout)
+            entries, children = parse_sitemap(xml_text)
+        except Exception:
+            logger.exception("Failed to fetch/parse sitemap: %s", sitemap_url)
+            return
 
         for entry in entries:
             if entry.loc not in seen_urls:
