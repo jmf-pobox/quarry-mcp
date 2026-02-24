@@ -1,4 +1,4 @@
-"""Sitemap XML parser: fetch, parse, discover URLs, and filter entries."""
+"""Sitemap XML parser: fetch, parse, discover URLs, filter, and auto-discover."""
 
 from __future__ import annotations
 
@@ -250,3 +250,55 @@ def filter_entries(
             break
 
     return result
+
+
+def discover_sitemap(url: str, *, timeout: int = 30) -> list[str]:
+    """Auto-discover sitemap URLs for a website.
+
+    Probes in order:
+    1. ``{origin}/robots.txt`` — parses ``Sitemap:`` directives.
+    2. ``{origin}/sitemap.xml`` — probes the well-known location.
+
+    Returns the first set of sitemap URLs found, or an empty list.
+    """
+    import urllib.request  # noqa: PLC0415
+    from urllib.error import HTTPError, URLError  # noqa: PLC0415
+
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    headers = {"User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)"}
+
+    # Step 1: robots.txt
+    sitemaps: list[str] = []
+    robots_url = f"{origin}/robots.txt"
+    try:
+        req = urllib.request.Request(robots_url, headers=headers)  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            text = resp.read().decode("utf-8", errors="replace")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("sitemap:"):
+                    sitemap_url = stripped.split(":", 1)[1].strip()
+                    if sitemap_url.startswith(("http://", "https://")):
+                        sitemaps.append(sitemap_url)
+    except (HTTPError, URLError, OSError):
+        logger.debug("Could not fetch %s", robots_url)
+
+    if sitemaps:
+        logger.info("Found %d sitemap(s) in robots.txt", len(sitemaps))
+        return sitemaps
+
+    # Step 2: well-known /sitemap.xml
+    well_known = f"{origin}/sitemap.xml"
+    try:
+        req = urllib.request.Request(  # noqa: S310
+            well_known, method="HEAD", headers=headers
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            if resp.status == 200:
+                logger.info("Found sitemap at well-known location: %s", well_known)
+                return [well_known]
+    except (HTTPError, URLError, OSError):
+        logger.debug("No sitemap at %s", well_known)
+
+    return []

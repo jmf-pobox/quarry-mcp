@@ -1046,6 +1046,86 @@ def ingest_sitemap(
     )
 
 
+def ingest_auto(
+    url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool = False,
+    collection: str = "",
+    workers: int = 4,
+    delay: float = 0.5,
+    timeout: int = 30,
+    progress_callback: Callable[[str], None] | None = None,
+) -> IngestResult | SitemapResult:
+    """Smart URL ingestion: discover sitemap, crawl if found, else single page.
+
+    1. Probe the site for a sitemap (robots.txt, then /sitemap.xml).
+    2. If found, derive a path prefix filter from the input URL and bulk-crawl.
+    3. If not found, fall back to single-page ingestion.
+
+    Args:
+        url: Any HTTP(S) URL on the target site.
+        db: LanceDB connection.
+        settings: Application settings.
+        overwrite: Force re-ingest regardless of existing data.
+        collection: Collection name. Defaults to the URL hostname.
+        workers: Parallel fetch workers for sitemap crawl (default 4).
+        delay: Base delay between fetches in seconds (default 0.5).
+        timeout: HTTP timeout in seconds.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        SitemapResult if a sitemap was discovered, IngestResult otherwise.
+    """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from quarry.sitemap import discover_sitemap  # noqa: PLC0415
+
+    progress = _make_progress(progress_callback)
+    parsed = urlparse(url)
+
+    if not collection:
+        collection = parsed.hostname or "default"
+
+    progress("Probing %s://%s for sitemap", parsed.scheme, parsed.netloc)
+    sitemap_urls = discover_sitemap(url, timeout=timeout)
+
+    if not sitemap_urls:
+        progress("No sitemap found, ingesting single page")
+        return ingest_url(
+            url,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            timeout=timeout,
+            progress_callback=progress_callback,
+        )
+
+    # Derive include filter from input URL path
+    path = parsed.path.rstrip("/")
+    include: list[str] | None = None
+    if path and path != "/":
+        include = [path, f"{path}/*"]
+
+    sitemap_url = sitemap_urls[0]
+    progress("Discovered sitemap: %s", sitemap_url)
+
+    return ingest_sitemap(
+        sitemap_url,
+        db,
+        settings,
+        collection=collection,
+        include=include,
+        overwrite=overwrite,
+        workers=workers,
+        delay=delay,
+        timeout=timeout,
+        progress_callback=progress_callback,
+    )
+
+
 def _make_progress(
     callback: Callable[[str], None] | None,
 ) -> Callable[..., None]:

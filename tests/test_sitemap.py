@@ -11,6 +11,7 @@ import pytest
 
 from quarry.sitemap import (
     SitemapEntry,
+    discover_sitemap,
     discover_urls,
     filter_entries,
     parse_sitemap,
@@ -631,3 +632,258 @@ class TestIngestSitemapIntegration:
         assert result["failed"] == 1
         assert len(result["errors"]) == 1
         assert "bad" in result["errors"][0]
+
+
+# ---------------------------------------------------------------------------
+# discover_sitemap: robots.txt and well-known fallback
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """Minimal HTTP response for mocking urlopen."""
+
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self._body = body
+        self.status = status
+
+    def read(self) -> bytes:
+        return self._body
+
+    def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+        return self._body.decode(encoding, errors=errors)
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
+class TestDiscoverSitemap:
+    """Test auto-discovery of sitemap URLs from robots.txt and /sitemap.xml."""
+
+    @patch("urllib.request.urlopen")
+    def test_finds_sitemap_in_robots_txt(self, mock_urlopen: MagicMock) -> None:
+        robots = (
+            "User-agent: *\n"
+            "Disallow: /private/\n"
+            "Sitemap: https://example.com/sitemap.xml\n"
+        )
+        mock_urlopen.return_value = _FakeResponse(robots.encode())
+
+        result = discover_sitemap("https://example.com/docs/guide")
+        assert result == ["https://example.com/sitemap.xml"]
+        # Only one call needed — found in robots.txt
+        assert mock_urlopen.call_count == 1
+
+    @patch("urllib.request.urlopen")
+    def test_finds_multiple_sitemaps_in_robots_txt(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        robots = (
+            "Sitemap: https://example.com/sitemap-docs.xml\n"
+            "Sitemap: https://example.com/sitemap-blog.xml\n"
+        )
+        mock_urlopen.return_value = _FakeResponse(robots.encode())
+
+        result = discover_sitemap("https://example.com/")
+        assert len(result) == 2
+        assert "https://example.com/sitemap-docs.xml" in result
+        assert "https://example.com/sitemap-blog.xml" in result
+
+    @patch("urllib.request.urlopen")
+    def test_falls_back_to_well_known(self, mock_urlopen: MagicMock) -> None:
+        from urllib.error import HTTPError
+
+        # robots.txt returns 404, /sitemap.xml succeeds
+        def _side_effect(req: object, **kwargs: object) -> _FakeResponse:
+            url: str = getattr(req, "full_url", str(req))
+            if "robots.txt" in url:
+                raise HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+            return _FakeResponse(b"", 200)
+
+        mock_urlopen.side_effect = _side_effect
+
+        result = discover_sitemap("https://example.com/docs")
+        assert result == ["https://example.com/sitemap.xml"]
+
+    @patch("urllib.request.urlopen")
+    def test_returns_empty_when_nothing_found(self, mock_urlopen: MagicMock) -> None:
+        from urllib.error import HTTPError
+
+        def _side_effect(req: object, **kwargs: object) -> _FakeResponse:
+            url: str = getattr(req, "full_url", str(req))
+            raise HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+
+        mock_urlopen.side_effect = _side_effect
+
+        result = discover_sitemap("https://example.com/page")
+        assert result == []
+
+    @patch("urllib.request.urlopen")
+    def test_ignores_non_http_sitemap_urls(self, mock_urlopen: MagicMock) -> None:
+        robots = "Sitemap: ftp://example.com/sitemap.xml\n"
+        mock_urlopen.return_value = _FakeResponse(robots.encode())
+
+        discover_sitemap("https://example.com/")
+        # ftp URL rejected, falls through to well-known probe
+        assert mock_urlopen.call_count == 2
+
+    @patch("urllib.request.urlopen")
+    def test_case_insensitive_robots_directive(self, mock_urlopen: MagicMock) -> None:
+        robots = "SITEMAP: https://example.com/sitemap.xml\n"
+        mock_urlopen.return_value = _FakeResponse(robots.encode())
+
+        result = discover_sitemap("https://example.com/")
+        assert result == ["https://example.com/sitemap.xml"]
+
+
+# ---------------------------------------------------------------------------
+# ingest_auto — discovery and routing
+# ---------------------------------------------------------------------------
+
+
+class TestIngestAuto:
+    """Test smart URL ingestion with sitemap auto-discovery."""
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.sitemap.discover_sitemap")
+    def test_routes_to_sitemap_when_discovered(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = ["https://example.com/sitemap.xml"]
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "example.com",
+            "total_discovered": 10,
+            "after_filter": 5,
+            "ingested": 5,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        result = ingest_auto(
+            "https://example.com/docs",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "sitemap_url" in result
+        assert result["ingested"] == 5  # type: ignore[typeddict-item]
+        # Verify path prefix filter was derived
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert call_kwargs.kwargs["include"] == ["/docs", "/docs/*"]
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_sitemap")
+    def test_falls_back_to_single_page(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = []
+        mock_ingest_url.return_value = {
+            "document_name": "https://example.com/page",
+            "collection": "example.com",
+            "chunks": 3,
+        }
+
+        result = ingest_auto(
+            "https://example.com/page",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        assert result["chunks"] == 3  # type: ignore[typeddict-item]
+        mock_ingest_url.assert_called_once()
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.sitemap.discover_sitemap")
+    def test_no_path_filter_for_root_url(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = ["https://example.com/sitemap.xml"]
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "example.com",
+            "total_discovered": 20,
+            "after_filter": 20,
+            "ingested": 20,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto("https://example.com/", MagicMock(), MagicMock())
+
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert call_kwargs.kwargs["include"] is None
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.sitemap.discover_sitemap")
+    def test_collection_defaults_to_hostname(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = ["https://docs.python.org/sitemap.xml"]
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://docs.python.org/sitemap.xml",
+            "collection": "docs.python.org",
+            "total_discovered": 0,
+            "after_filter": 0,
+            "ingested": 0,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto("https://docs.python.org/3/library/", MagicMock(), MagicMock())
+
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert call_kwargs.kwargs["collection"] == "docs.python.org"
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    @patch("quarry.sitemap.discover_sitemap")
+    def test_explicit_collection_passed_through(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = ["https://example.com/sitemap.xml"]
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "my-docs",
+            "total_discovered": 0,
+            "after_filter": 0,
+            "ingested": 0,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto(
+            "https://example.com/docs",
+            MagicMock(),
+            MagicMock(),
+            collection="my-docs",
+        )
+
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert call_kwargs.kwargs["collection"] == "my-docs"
