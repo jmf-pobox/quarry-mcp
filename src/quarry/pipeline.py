@@ -1138,10 +1138,12 @@ def ingest_auto(
         collection = parsed.hostname or "default"
 
     # If the URL itself is a sitemap, skip discovery and crawl directly.
+    # Match sitemap files (*.xml, *.xml.gz) and /sitemap paths, but not
+    # pages that merely contain "sitemap" as a substring (e.g. /sitemap-guide).
     path_lower = parsed.path.lower()
-    is_sitemap = (
-        path_lower.endswith(("sitemap.xml", "sitemap.xml.gz"))
-        or "/sitemap" in path_lower
+    last_segment = path_lower.rsplit("/", 1)[-1]
+    is_sitemap = last_segment.startswith("sitemap") and (
+        last_segment.endswith((".xml", ".xml.gz", ".txt")) or last_segment == "sitemap"
     )
     if is_sitemap:
         progress("URL is a sitemap, crawling directly")
@@ -1158,7 +1160,11 @@ def ingest_auto(
         )
 
     progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
-    entries = discover_pages(url)
+    try:
+        entries = discover_pages(url)
+    except Exception:
+        logger.exception("Sitemap discovery failed for %s", url)
+        entries = []
 
     if not entries:
         progress("No sitemap found, ingesting single page")

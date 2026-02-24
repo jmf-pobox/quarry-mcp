@@ -740,3 +740,53 @@ class TestIngestAuto:
 
         assert "sitemap_url" in result
         mock_ingest_sitemap.assert_called_once()
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_discovery_error_falls_back_to_single_page(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.side_effect = ConnectionError("network error")
+        mock_ingest_url.return_value = {
+            "document_name": "https://example.com/page",
+            "collection": "example.com",
+            "chunks": 3,
+        }
+
+        result = ingest_auto(
+            "https://example.com/page",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        mock_ingest_url.assert_called_once()
+
+    @patch("quarry.sitemap.discover_pages")
+    def test_sitemap_substring_not_misdetected(
+        self,
+        mock_discover: MagicMock,
+    ) -> None:
+        """A URL like /docs/sitemap-guide should NOT be treated as a sitemap."""
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = []
+
+        with patch("quarry.pipeline.ingest_url") as mock_ingest_url:
+            mock_ingest_url.return_value = {
+                "document_name": "https://example.com/docs/sitemap-guide",
+                "collection": "example.com",
+                "chunks": 2,
+            }
+            result = ingest_auto(
+                "https://example.com/docs/sitemap-guide",
+                MagicMock(),
+                MagicMock(),
+            )
+
+        # Should fall through to single-page, not route to ingest_sitemap
+        assert "document_name" in result
