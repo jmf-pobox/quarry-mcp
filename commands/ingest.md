@@ -18,8 +18,8 @@ Parse the argument to determine the ingestion method:
 
 Call the appropriate tool:
 
-- **Sitemap**: `mcp__plugin_quarry-dev_quarry__ingest_sitemap` with `url` set to the argument
-- **URL**: `mcp__plugin_quarry-dev_quarry__ingest_url` with `url` set to the argument
-- **File**: `mcp__plugin_quarry-dev_quarry__ingest_file` with `file_path` set to the argument
+- **Sitemap**: `mcp__plugin_quarry_quarry__ingest_sitemap` with `url` set to the argument
+- **URL**: `mcp__plugin_quarry_quarry__ingest_url` with `url` set to the argument
+- **File**: `mcp__plugin_quarry_quarry__ingest_file` with `file_path` set to the argument
 
 The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

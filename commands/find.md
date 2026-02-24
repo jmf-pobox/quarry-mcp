@@ -12,7 +12,7 @@ Use the full arguments text as the search query.
 
 ## Task
 
-Call `mcp__plugin_quarry-dev_quarry__search_documents` with `query` set to the arguments.
+Call `mcp__plugin_quarry_quarry__search_documents` with `query` set to the arguments.
 
 If the result says "No results", do not emit any text.
 

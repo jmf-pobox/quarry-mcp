@@ -12,11 +12,11 @@ Parse the first token as a subcommand. Default to `status` if empty.
 
 ## Subcommands
 
-- **status** (default): Call `mcp__plugin_quarry-dev_quarry__status`
-- **sync**: Call `mcp__plugin_quarry-dev_quarry__sync_all_registrations`
-- **collections**: Call `mcp__plugin_quarry-dev_quarry__list_collections`
-- **databases**: Call `mcp__plugin_quarry-dev_quarry__list_databases`
-- **registrations**: Call `mcp__plugin_quarry-dev_quarry__list_registrations`
+- **status** (default): Call `mcp__plugin_quarry_quarry__status`
+- **sync**: Call `mcp__plugin_quarry_quarry__sync_all_registrations`
+- **collections**: Call `mcp__plugin_quarry_quarry__list_collections`
+- **databases**: Call `mcp__plugin_quarry_quarry__list_databases`
+- **registrations**: Call `mcp__plugin_quarry_quarry__list_registrations`
 
 ## Output
 
