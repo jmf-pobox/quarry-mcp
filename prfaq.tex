@@ -438,7 +438,7 @@ run \texttt{quarry install}, and start searching.
   contributors and stars, improving discoverability.
 
   A macOS menu bar companion app
-  (\url{https://github.com/jmf-pobox/quarry-menubar}, in development) will
+  (\url{https://github.com/punt-labs/quarry-menubar}, in development) will
   surface Quarry to non-CLI users, expanding reach beyond the developer audience.
   The HTTP API server (\texttt{quarry serve}) is already shipped to support it.
 \end{faqpair}
@@ -491,12 +491,13 @@ run \texttt{quarry install}, and start searching.
 
   \textbf{Shipped:} PDF ingestion (text + OCR), image OCR, spreadsheet
   ingestion (XLSX/CSV via LaTeX serialization), presentation ingestion (PPTX),
-  HTML parsing, text file parsing, source code parsing (30+ languages via
-  Tree-sitter), semantic search with metadata filtering (page type, source
-  format), directory sync, named databases, MCP server, CLI, HTTP API server.
+  HTML parsing, URL and sitemap crawling, text file parsing, source code
+  parsing (30+ languages via Tree-sitter), semantic search with metadata
+  filtering (page type, source format), directory sync, named databases,
+  MCP server, CLI, HTTP API server.
 
   \textbf{In progress:} macOS menu bar companion app
-  (\url{https://github.com/jmf-pobox/quarry-menubar}).
+  (\url{https://github.com/punt-labs/quarry-menubar}).
 
   \textbf{Future:} Google Drive connector, incremental re-indexing on file
   change (\texttt{quarry sync --watch}), PII detection and redaction.
@@ -659,7 +660,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{Feasibility --- Can we build it?}
   \textcolor{RiskGreen}{\textbf{Low risk.}} The product is already built and
   live on PyPI. Core pipeline (ingest, embed, search, MCP server) is shipped
-  across 10 document formats with 497 passing tests and strict type checking.
+  across 10 document formats with 596 passing tests and strict type checking.
   The remaining roadmap items (menu bar app, Google Drive connector,
   \texttt{sync --watch}) are additive features, not architectural risks.
 \end{faqpair}
