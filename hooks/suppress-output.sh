@@ -55,7 +55,7 @@ if [[ "$TOOL_NAME" == "get_documents" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
     jq -n --arg summary "${COUNT} documents" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
@@ -76,7 +76,7 @@ if [[ "$TOOL_NAME" == "list_collections" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
     jq -n --arg summary "${COUNT} collections" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
@@ -97,7 +97,7 @@ if [[ "$TOOL_NAME" == "list_databases" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
     jq -n --arg summary "${COUNT} databases" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
@@ -118,7 +118,7 @@ if [[ "$TOOL_NAME" == "list_registrations" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
+    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
     jq -n --arg summary "${COUNT} registrations" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
