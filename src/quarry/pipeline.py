@@ -868,6 +868,39 @@ def ingest_url(
     )
 
 
+def _ingest_url_with_delay(
+    page_url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool,
+    collection: str,
+    document_name: str | None,
+    timeout: int,
+    delay: float,
+) -> IngestResult:
+    """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
+
+    The delay includes random jitter (0-1.0s) to prevent synchronized
+    bursts when multiple workers start at the same time.
+    """
+    import random  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    jitter = random.uniform(0, 1.0)  # noqa: S311
+    time.sleep(delay + jitter)
+
+    return ingest_url(
+        page_url,
+        db,
+        settings,
+        overwrite=overwrite,
+        collection=collection,
+        document_name=document_name,
+        timeout=timeout,
+    )
+
+
 def ingest_sitemap(
     url: str,
     db: LanceDB,
@@ -879,6 +912,7 @@ def ingest_sitemap(
     limit: int = 0,
     overwrite: bool = False,
     workers: int = 4,
+    delay: float = 0.5,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
 ) -> SitemapResult:
@@ -897,7 +931,9 @@ def ingest_sitemap(
         exclude: URL path glob patterns to exclude (repeatable).
         limit: Max URLs to ingest (0 = no limit).
         overwrite: Force re-ingest regardless of <lastmod>.
-        workers: Parallel fetch workers.
+        workers: Parallel fetch workers (minimum 1).
+        delay: Base delay in seconds between fetches per worker
+            (adds 0-1.0s random jitter). Default 0.5s.
         timeout: HTTP timeout in seconds.
         progress_callback: Optional callable for progress messages.
 
@@ -910,6 +946,7 @@ def ingest_sitemap(
     from quarry.sitemap import discover_urls, filter_entries  # noqa: PLC0415
 
     progress = _make_progress(progress_callback)
+    workers = max(1, workers)
 
     if not collection:
         collection = urlparse(url).hostname or "default"
@@ -930,7 +967,7 @@ def ingest_sitemap(
     }
 
     # Determine which URLs to ingest vs skip
-    to_ingest: list[tuple[str, str | None]] = []  # (url, document_name_or_None)
+    to_ingest: list[tuple[str, str | None]] = []
     skipped = 0
 
     for entry in filtered:
@@ -939,7 +976,6 @@ def ingest_sitemap(
             from datetime import UTC, datetime  # noqa: PLC0415
 
             try:
-                # ingestion_timestamp is ISO format from LanceDB
                 existing_dt = datetime.fromisoformat(
                     str(existing_ts).replace("Z", "+00:00")
                 )
@@ -962,7 +998,7 @@ def ingest_sitemap(
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    ingest_url,
+                    _ingest_url_with_delay,
                     page_url,
                     db,
                     settings,
@@ -970,6 +1006,7 @@ def ingest_sitemap(
                     collection=collection,
                     document_name=doc_name,
                     timeout=timeout,
+                    delay=delay,
                 ): page_url
                 for page_url, doc_name in to_ingest
             }
@@ -978,14 +1015,24 @@ def ingest_sitemap(
                 try:
                     future.result()
                     ingested += 1
-                    progress("Ingested %s (%d/%d)", page_url, ingested, len(to_ingest))
+                    progress(
+                        "Ingested %s (%d/%d)",
+                        page_url,
+                        ingested,
+                        len(to_ingest),
+                    )
                 except Exception as exc:
                     failed += 1
                     errors.append(f"{page_url}: {exc}")
                     logger.exception("Failed to ingest %s", page_url)
                     progress("Failed %s: %s", page_url, exc)
 
-    progress("Done: %d ingested, %d skipped, %d failed", ingested, skipped, failed)
+    progress(
+        "Done: %d ingested, %d skipped, %d failed",
+        ingested,
+        skipped,
+        failed,
+    )
 
     return SitemapResult(
         sitemap_url=url,

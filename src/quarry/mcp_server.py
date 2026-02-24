@@ -257,13 +257,14 @@ def ingest_sitemap(
     limit: int = 0,
     overwrite: bool = False,
     workers: int = 4,
+    delay: float = 0.5,
 ) -> str:
     """Crawl a sitemap and ingest all discovered URLs.
 
     Parses the sitemap XML, discovers all page URLs (following sitemap
     indexes recursively), applies include/exclude filters, skips pages
     unchanged since last ingest (via <lastmod>), and ingests the rest
-    in parallel.
+    in parallel with rate limiting.
 
     Args:
         url: Sitemap URL (e.g., https://docs.example.com/sitemap.xml).
@@ -273,6 +274,7 @@ def ingest_sitemap(
         limit: Max URLs to ingest (0 = no limit).
         overwrite: Force re-ingest regardless of lastmod.
         workers: Parallel fetch workers (default 4).
+        delay: Base delay between fetches in seconds (default 0.5).
     """
     settings = _settings()
     db = _db()
@@ -292,6 +294,7 @@ def ingest_sitemap(
         limit=limit,
         overwrite=overwrite,
         workers=workers,
+        delay=delay,
         progress_callback=progress_lines.append,
     )
 

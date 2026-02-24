@@ -178,6 +178,10 @@ def ingest_sitemap_cmd(
     workers: Annotated[
         int, typer.Option("--workers", "-w", help="Parallel fetch workers")
     ] = 4,
+    delay: Annotated[
+        float,
+        typer.Option("--delay", help="Base delay between fetches in seconds"),
+    ] = 0.5,
     database: DbOption = "",
 ) -> None:
     """Crawl a sitemap and ingest all discovered URLs.
@@ -206,6 +210,7 @@ def ingest_sitemap_cmd(
             limit=limit,
             overwrite=overwrite,
             workers=workers,
+            delay=delay,
             progress_callback=on_progress,
         )
 

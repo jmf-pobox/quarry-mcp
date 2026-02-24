@@ -68,6 +68,10 @@ def fetch_sitemap(url: str, *, timeout: int = 30) -> str:
                 raise ValueError(msg)
             charset = resp.headers.get_content_charset() or "utf-8"
             body: bytes = resp.read()
+            if media_type == "application/x-gzip" or url.endswith(".gz"):
+                import gzip  # noqa: PLC0415
+
+                body = gzip.decompress(body)
             return body.decode(charset, errors="replace")
     except HTTPError as exc:
         msg = f"HTTP {exc.code} fetching {url}"
