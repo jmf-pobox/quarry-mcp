@@ -29,7 +29,7 @@ The high-signal, low-volume sources are: **fetched URLs** and **compaction summa
 
 When Claude fetches a URL via `WebFetch`, a PostToolUse hook sends it to quarry for background ingestion.
 
-```
+```text
 User asks about LanceDB API
   → Claude calls WebFetch("https://lancedb.github.io/lancedb/python/...")
   → PostToolUse hook fires
@@ -51,12 +51,14 @@ User asks about LanceDB API
 ```
 
 The `quarry hooks post-web-fetch` command:
+
 1. Reads tool input from stdin (JSON with `url` field)
 2. Checks if URL is already indexed (dedup by document name)
 3. If new, queues for background ingestion into `web-captures` collection
 4. Returns immediately (fail-open, non-blocking)
 
 **Why this works well:**
+
 - Zero user effort — knowledge accrues by working normally
 - High signal — you only fetch URLs you actually need
 - Low volume — won't overwhelm the index
@@ -64,6 +66,7 @@ The `quarry hooks post-web-fetch` command:
 - USP handles sitemaps if a doc site is fetched
 
 **Concerns:**
+
 - Some fetched URLs are throwaway (error pages, redirect chains)
 - Need a way to exclude patterns (e.g., `*.json`, API endpoints)
 - Collection size grows unbounded — need TTL or manual pruning
@@ -72,7 +75,7 @@ The `quarry hooks post-web-fetch` command:
 
 Before context compaction, Claude generates a summary of the session. This summary contains distilled knowledge — architectural decisions, debugging insights, discovered patterns. A PreCompact hook could capture this.
 
-```
+```text
 Session hits context limit
   → PreCompact hook fires
   → Hook receives the compaction summary text
@@ -94,12 +97,14 @@ Session hits context limit
 ```
 
 **Why this works well:**
+
 - Compaction summaries are high-quality distilled knowledge
 - 1-2 per session — very low volume
 - Captures the "why" that git commits don't
 - Searchable across sessions — "how did we solve X last week?"
 
 **Concerns:**
+
 - PreCompact output format may not include the summary text (needs verification)
 - Session summaries may contain sensitive context (API keys in error output, etc.)
 - Need to verify what data is available in the hook's stdin
@@ -108,7 +113,7 @@ Session hits context limit
 
 When a user pastes a URL in their prompt, it signals explicit interest. A UserPromptSubmit hook could detect URLs and queue them for ingestion.
 
-```
+```text
 User: "Look at https://docs.pydantic.dev/latest/concepts/models/ and tell me..."
   → UserPromptSubmit hook fires
   → Hook extracts URL(s) from prompt text
@@ -116,6 +121,7 @@ User: "Look at https://docs.pydantic.dev/latest/concepts/models/ and tell me..."
 ```
 
 **Why this is lower priority than Layer 1:**
+
 - If Claude fetches the URL, Layer 1 already captures it
 - Adds complexity to UserPromptSubmit (already has hooks from other plugins)
 - URL extraction from free text is imprecise
@@ -124,7 +130,7 @@ User: "Look at https://docs.pydantic.dev/latest/concepts/models/ and tell me..."
 
 The highest-leverage capture is the one closest to home: the current repository. If quarry auto-indexes the working codebase, Claude can `/find` relevant files and code patterns instead of doing multiple rounds of grep/glob exploration. This changes the development loop:
 
-```
+```text
 Session starts
   → SessionStart hook fires
   → Hook checks if current repo is registered with quarry
@@ -148,6 +154,7 @@ Session starts
 ```
 
 The `quarry hooks session-start` command:
+
 1. Detects current git repo root
 2. Checks if it's registered via `list_registrations`
 3. If unregistered, calls `register_directory` for the repo root
@@ -155,12 +162,14 @@ The `quarry hooks session-start` command:
 5. Outputs `additionalContext` telling Claude that quarry is available for codebase search
 
 **Why this is Layer 0 (ship first):**
+
 - Immediate value — every session benefits from indexed codebase
 - Uses existing infrastructure (`register_directory`, `sync`)
 - Reduces grep/glob thrashing that wastes context window
 - The `/find` command already exists — just needs the index populated
 
 **Concerns:**
+
 - Large repos may take time to sync on first registration
 - Need to handle repos already registered by user (don't double-register)
 - Sync on every SessionStart adds latency — may need to be async or throttled
