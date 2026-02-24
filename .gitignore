@@ -48,5 +48,8 @@ htmlcov/
 *.out
 *.synctex.gz
 
+# Claude Flow (deprecated)
+.claude-flow/
+
 # OS
 .DS_Store
