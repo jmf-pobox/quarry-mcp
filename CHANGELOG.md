@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-02-24
+
+### Tool
+
+- **Claude Code plugin** — quarry is now a full Claude Code plugin (`quarry@punt-labs`), with slash commands, MCP server, hooks, and formatted output all bundled together. Install with `claude plugin install quarry@punt-labs`.
+- **Slash commands** — `/find`, `/ingest`, `/explain`, `/source`, `/quarry` provide natural-language access to search, ingestion, and knowledge base management directly from Claude Code.
+- **Formatted MCP output** — All 17 MCP tools return pre-formatted plain text with constrained-width tables instead of raw JSON. PostToolUse hook routes data tools to a compact panel summary while passing full output to the LLM context.
+
+### Infra
+
+- **Plugin scaffold** — `.claude-plugin/plugin.json` manifest, `commands/`, `hooks/` directories following biff's three-layer display architecture (DES-014).
+- **Published to punt-labs marketplace** — quarry is now available in the `punt-labs` Claude Code plugin marketplace alongside biff, dungeon, punt, and prfaq.
+
 ## [0.8.1] - 2026-02-24
 
 ### Infra
