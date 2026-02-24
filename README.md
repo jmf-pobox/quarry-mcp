@@ -131,6 +131,7 @@ Once configured, Claude Code can call these tools on your behalf:
 | `search_documents` | Semantic search with optional filters |
 | `ingest_file` | Index a file by path |
 | `ingest_url` | Fetch and index a webpage |
+| `ingest_sitemap` | Crawl a sitemap and ingest all discovered URLs |
 | `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
 | `get_documents` | List indexed documents |
 | `get_page` | Get raw text for a specific page |
@@ -152,6 +153,8 @@ Once configured, Claude Code can call these tools on your behalf:
 quarry ingest-file report.pdf                  # index a file
 quarry ingest-file report.pdf --overwrite      # replace existing data
 quarry ingest-url https://example.com/page     # index a webpage
+quarry ingest-sitemap https://docs.example.com/sitemap.xml  # crawl a sitemap
+quarry ingest-sitemap URL --include '/docs/*' --exclude '/docs/v1/*' --limit 50
 
 # Search
 quarry search "revenue trends"                 # semantic search

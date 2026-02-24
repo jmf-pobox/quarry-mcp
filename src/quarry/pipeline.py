@@ -14,7 +14,7 @@ from quarry.backends import get_embedding_backend, get_ocr_backend
 from quarry.chunker import chunk_pages
 from quarry.code_processor import SUPPORTED_CODE_EXTENSIONS, process_code_file
 from quarry.config import Settings
-from quarry.database import delete_document, insert_chunks
+from quarry.database import delete_document, insert_chunks, list_documents
 from quarry.html_processor import (
     SUPPORTED_HTML_EXTENSIONS,
     process_html_file,
@@ -30,7 +30,7 @@ from quarry.presentation_processor import (
     SUPPORTED_PRESENTATION_EXTENSIONS,
     process_presentation_file,
 )
-from quarry.results import IngestResult
+from quarry.results import IngestResult, SitemapResult
 from quarry.spreadsheet_processor import (
     SUPPORTED_SPREADSHEET_EXTENSIONS,
     process_spreadsheet_file,
@@ -865,6 +865,184 @@ def ingest_url(
         collection=collection,
         source_format=".html",
         sections=len(pages),
+    )
+
+
+def _ingest_url_with_delay(
+    page_url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    overwrite: bool,
+    collection: str,
+    document_name: str | None,
+    timeout: int,
+    delay: float,
+) -> IngestResult:
+    """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
+
+    The delay includes random jitter (0-1.0s) to prevent synchronized
+    bursts when multiple workers start at the same time.
+    """
+    import random  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    jitter = random.uniform(0, 1.0)  # noqa: S311
+    time.sleep(delay + jitter)
+
+    return ingest_url(
+        page_url,
+        db,
+        settings,
+        overwrite=overwrite,
+        collection=collection,
+        document_name=document_name,
+        timeout=timeout,
+    )
+
+
+def ingest_sitemap(
+    url: str,
+    db: LanceDB,
+    settings: Settings,
+    *,
+    collection: str = "",
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    limit: int = 0,
+    overwrite: bool = False,
+    workers: int = 4,
+    delay: float = 0.5,
+    timeout: int = 30,
+    progress_callback: Callable[[str], None] | None = None,
+) -> SitemapResult:
+    """Crawl a sitemap and ingest all discovered URLs.
+
+    Fetches the sitemap, discovers all URLs (following sitemap indexes),
+    applies include/exclude filters, deduplicates against existing documents
+    via <lastmod>, and ingests new/changed URLs in parallel.
+
+    Args:
+        url: Sitemap URL.
+        db: LanceDB connection.
+        settings: Application settings.
+        collection: Collection name. Defaults to sitemap URL domain.
+        include: URL path glob patterns to include (repeatable).
+        exclude: URL path glob patterns to exclude (repeatable).
+        limit: Max URLs to ingest (0 = no limit).
+        overwrite: Force re-ingest regardless of <lastmod>.
+        workers: Parallel fetch workers (minimum 1).
+        delay: Base delay in seconds between fetches per worker
+            (adds 0-1.0s random jitter). Default 0.5s.
+        timeout: HTTP timeout in seconds.
+        progress_callback: Optional callable for progress messages.
+
+    Returns:
+        SitemapResult with counts and error details.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from quarry.sitemap import discover_urls, filter_entries  # noqa: PLC0415
+
+    progress = _make_progress(progress_callback)
+    workers = max(1, workers)
+
+    if not collection:
+        collection = urlparse(url).hostname or "default"
+
+    progress("Discovering URLs from %s", url)
+    entries = discover_urls(url, timeout=timeout)
+    total_discovered = len(entries)
+    progress("Discovered %d URLs", total_discovered)
+
+    filtered = filter_entries(entries, include=include, exclude=exclude, limit=limit)
+    after_filter = len(filtered)
+    progress("After filtering: %d URLs", after_filter)
+
+    # Build lookup of existing documents for lastmod dedup
+    existing_docs = list_documents(db, collection_filter=collection)
+    existing_timestamps: dict[str, str] = {
+        doc["document_name"]: doc["ingestion_timestamp"] for doc in existing_docs
+    }
+
+    # Determine which URLs to ingest vs skip
+    to_ingest: list[tuple[str, str | None]] = []
+    skipped = 0
+
+    for entry in filtered:
+        existing_ts = existing_timestamps.get(entry.loc)
+        if existing_ts and not overwrite and entry.lastmod is not None:
+            from datetime import UTC, datetime  # noqa: PLC0415
+
+            try:
+                existing_dt = datetime.fromisoformat(
+                    str(existing_ts).replace("Z", "+00:00")
+                )
+                if existing_dt.tzinfo is None:
+                    existing_dt = existing_dt.replace(tzinfo=UTC)
+                if entry.lastmod <= existing_dt:
+                    skipped += 1
+                    continue
+            except (ValueError, TypeError):
+                pass  # Can't parse — re-ingest to be safe
+        to_ingest.append((entry.loc, None))
+
+    progress("%d to ingest, %d up-to-date", len(to_ingest), skipped)
+
+    ingested = 0
+    failed = 0
+    errors: list[str] = []
+
+    if to_ingest:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _ingest_url_with_delay,
+                    page_url,
+                    db,
+                    settings,
+                    overwrite=True,
+                    collection=collection,
+                    document_name=doc_name,
+                    timeout=timeout,
+                    delay=delay,
+                ): page_url
+                for page_url, doc_name in to_ingest
+            }
+            for future in as_completed(futures):
+                page_url = futures[future]
+                try:
+                    future.result()
+                    ingested += 1
+                    progress(
+                        "Ingested %s (%d/%d)",
+                        page_url,
+                        ingested,
+                        len(to_ingest),
+                    )
+                except Exception as exc:
+                    failed += 1
+                    errors.append(f"{page_url}: {exc}")
+                    logger.exception("Failed to ingest %s", page_url)
+                    progress("Failed %s: %s", page_url, exc)
+
+    progress(
+        "Done: %d ingested, %d skipped, %d failed",
+        ingested,
+        skipped,
+        failed,
+    )
+
+    return SitemapResult(
+        sitemap_url=url,
+        collection=collection,
+        total_discovered=total_discovered,
+        after_filter=after_filter,
+        ingested=ingested,
+        skipped=skipped,
+        failed=failed,
+        errors=errors,
     )
 
 

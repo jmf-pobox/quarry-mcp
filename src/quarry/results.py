@@ -66,6 +66,19 @@ class CollectionSummary(TypedDict):
     chunk_count: int
 
 
+class SitemapResult(TypedDict):
+    """Result of sitemap crawl and bulk URL ingestion."""
+
+    sitemap_url: str
+    collection: str
+    total_discovered: int
+    after_filter: int
+    ingested: int
+    skipped: int
+    failed: int
+    errors: list[str]
+
+
 class DatabaseSummary(TypedDict):
     """Summary of a named database from the databases command."""
 
