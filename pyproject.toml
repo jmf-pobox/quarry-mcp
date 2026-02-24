@@ -42,6 +42,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "markdownify>=0.14.0",
     "pathspec>=0.12.0",
+    "ultimate-sitemap-parser>=1.8.0",
 ]
 
 [project.optional-dependencies]

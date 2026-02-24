@@ -1,23 +1,19 @@
-"""Sitemap XML parser: fetch, parse, discover URLs, filter, and auto-discover."""
+"""Sitemap discovery and parsing via ultimate-sitemap-parser (USP).
+
+USP handles robots.txt discovery, well-known sitemap locations, recursive
+sitemap indexes, and multiple formats (XML, RSS, Atom, plain text) with
+error tolerance for malformed content.
+"""
 
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from fnmatch import fnmatch
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
-
-_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
-_SITEMAP_TAG = f"{{{_NS}}}sitemap"
-_SITEMAPINDEX_TAG = f"{{{_NS}}}sitemapindex"
-_URLSET_TAG = f"{{{_NS}}}urlset"
-_URL_TAG = f"{{{_NS}}}url"
-_LOC_TAG = f"{{{_NS}}}loc"
-_LASTMOD_TAG = f"{{{_NS}}}lastmod"
 
 
 @dataclass(frozen=True)
@@ -28,192 +24,69 @@ class SitemapEntry:
     lastmod: datetime | None
 
 
-def fetch_sitemap(url: str, *, timeout: int = 30) -> str:
-    """Fetch a sitemap URL and return the XML body as text.
-
-    Raises:
-        ValueError: If the URL is not HTTP(S) or the response is not XML.
-        OSError: On network errors.
-    """
-    import urllib.request  # noqa: PLC0415
-    from urllib.error import HTTPError, URLError  # noqa: PLC0415
-
-    if not url.startswith(("http://", "https://")):
-        msg = f"Only HTTP(S) URLs are supported: {url}"
-        raise ValueError(msg)
-
-    request = urllib.request.Request(  # noqa: S310
-        url,
-        headers={
-            "User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)",
-            "Accept": "application/xml, text/xml",
-        },
-    )
-    _allowed_media_types = {
-        "application/xml",
-        "text/xml",
-        "application/x-gzip",
-        "text/html",  # some servers serve sitemaps as text/html
-    }
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310
-            final_url: str = resp.geturl()
-            if not final_url.startswith(("http://", "https://")):
-                msg = f"Redirect left HTTP(S): {final_url}"
-                raise ValueError(msg)
-            content_type: str = resp.headers.get("Content-Type", "")
-            media_type = content_type.split(";", 1)[0].strip().lower()
-            if media_type and media_type not in _allowed_media_types:
-                msg = f"URL returned non-XML content: {content_type}"
-                raise ValueError(msg)
-            charset = resp.headers.get_content_charset() or "utf-8"
-            body: bytes = resp.read()
-            if media_type == "application/x-gzip" or url.endswith(".gz"):
-                import gzip  # noqa: PLC0415
-
-                body = gzip.decompress(body)
-            return body.decode(charset, errors="replace")
-    except HTTPError as exc:
-        msg = f"HTTP {exc.code} fetching {url}"
-        raise ValueError(msg) from exc
-    except URLError as exc:
-        msg = f"Cannot reach {url}: {exc.reason}"
-        raise OSError(msg) from exc
-
-
-def _parse_lastmod(text: str) -> datetime | None:
-    """Parse a sitemap <lastmod> value into a timezone-aware datetime.
-
-    Supports ISO 8601 date (YYYY-MM-DD) and datetime formats.
-    Returns None if parsing fails.
-    """
-    text = text.strip()
-    if not text:
-        return None
-
-    # Try full datetime with timezone
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%S.%f%z",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S.%f",
-        "%Y-%m-%d",
-    ):
-        try:
-            dt = datetime.strptime(text, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            return dt
-        except ValueError:
-            continue
-
-    # Handle trailing Z (common in sitemaps)
-    if text.endswith("Z"):
-        return _parse_lastmod(text[:-1] + "+00:00")
-
-    logger.warning("Unparseable <lastmod>: %s", text)
-    return None
-
-
-def _extract_child_urls(root: ET.Element, sitemap_tag: str, loc_tag: str) -> list[str]:
-    """Extract child sitemap URLs from a <sitemapindex> element."""
-    children: list[str] = []
-    for sitemap_el in root.findall(sitemap_tag):
-        loc_el = sitemap_el.find(loc_tag)
-        if loc_el is not None and loc_el.text:
-            children.append(loc_el.text.strip())
-    return children
-
-
-def _extract_entries(
-    root: ET.Element, url_tag: str, loc_tag: str, lastmod_tag: str
+def _pages_to_entries(
+    pages: object,
 ) -> list[SitemapEntry]:
-    """Extract URL entries from a <urlset> element."""
+    """Convert USP SitemapPage objects to SitemapEntry, deduplicating by URL."""
+    from usp.objects.page import SitemapPage  # noqa: PLC0415
+
+    seen: set[str] = set()
     entries: list[SitemapEntry] = []
-    for url_el in root.findall(url_tag):
-        loc_el = url_el.find(loc_tag)
-        if loc_el is None or not loc_el.text:
+    for page in pages:  # type: ignore[attr-defined]
+        if not isinstance(page, SitemapPage):
             continue
-        lastmod: datetime | None = None
-        lastmod_el = url_el.find(lastmod_tag)
-        if lastmod_el is not None and lastmod_el.text:
-            lastmod = _parse_lastmod(lastmod_el.text)
-        entries.append(SitemapEntry(loc=loc_el.text.strip(), lastmod=lastmod))
+        if page.url not in seen:
+            seen.add(page.url)
+            entries.append(SitemapEntry(loc=page.url, lastmod=page.last_modified))
     return entries
 
 
-def parse_sitemap(xml_text: str) -> tuple[list[SitemapEntry], list[str]]:
-    """Parse sitemap XML into URL entries and child sitemap URLs.
+def discover_pages(url: str) -> list[SitemapEntry]:
+    """Discover all pages for a website via sitemap auto-discovery.
 
-    Returns:
-        Tuple of (entries from <urlset>, child sitemap URLs from <sitemapindex>).
-    """
-    root = ET.fromstring(xml_text)  # noqa: S314
-    tag = root.tag
-
-    # With namespace
-    if tag == _SITEMAPINDEX_TAG:
-        return [], _extract_child_urls(root, _SITEMAP_TAG, _LOC_TAG)
-    if tag == _URLSET_TAG:
-        return _extract_entries(root, _URL_TAG, _LOC_TAG, _LASTMOD_TAG), []
-
-    # Without namespace (some sitemaps omit it)
-    if tag == "sitemapindex":
-        return [], _extract_child_urls(root, "sitemap", "loc")
-    if tag == "urlset":
-        return _extract_entries(root, "url", "loc", "lastmod"), []
-
-    msg = f"Unknown sitemap root element: {tag}"
-    raise ValueError(msg)
-
-
-def discover_urls(
-    url: str,
-    *,
-    timeout: int = 30,
-    max_depth: int = 3,
-) -> list[SitemapEntry]:
-    """Fetch and parse a sitemap, recursing into sitemap indexes.
+    Uses USP's ``sitemap_tree_for_homepage`` to probe robots.txt and
+    well-known sitemap locations, then parse all discovered sitemaps
+    (XML, RSS, Atom, plain text) with error tolerance.
 
     Args:
-        url: Sitemap URL.
-        timeout: HTTP timeout in seconds.
-        max_depth: Maximum recursion depth for sitemap indexes.
+        url: Any HTTP(S) URL on the target site. The origin is extracted
+            and used as the homepage for discovery.
+
+    Returns:
+        Deduplicated list of all discovered pages.
+    """
+    from usp.tree import sitemap_tree_for_homepage  # noqa: PLC0415
+
+    parsed = urlparse(url)
+    homepage = f"{parsed.scheme}://{parsed.netloc}/"
+
+    logger.info("Discovering sitemaps for %s", homepage)
+    tree = sitemap_tree_for_homepage(homepage)
+    entries = _pages_to_entries(tree.all_pages())
+    logger.info("Discovered %d pages from %s", len(entries), homepage)
+    return entries
+
+
+def discover_urls(url: str) -> list[SitemapEntry]:
+    """Fetch and parse a specific sitemap URL, recursing into indexes.
+
+    Uses USP's ``SitemapFetcher`` for robust parsing of XML, RSS, Atom,
+    and plain text sitemaps with error tolerance.
+
+    Args:
+        url: Sitemap URL to fetch and parse.
 
     Returns:
         Deduplicated flat list of all SitemapEntry found.
     """
-    seen_urls: set[str] = set()
-    all_entries: list[SitemapEntry] = []
+    from usp.fetch_parse import SitemapFetcher  # noqa: PLC0415
 
-    def _recurse(sitemap_url: str, depth: int) -> None:
-        if depth > max_depth:
-            logger.warning(
-                "Sitemap recursion depth %d exceeded at %s", max_depth, sitemap_url
-            )
-            return
-        if sitemap_url in seen_urls:
-            return
-        seen_urls.add(sitemap_url)
-
-        logger.info("Fetching sitemap: %s (depth %d)", sitemap_url, depth)
-        try:
-            xml_text = fetch_sitemap(sitemap_url, timeout=timeout)
-            entries, children = parse_sitemap(xml_text)
-        except Exception:
-            logger.exception("Failed to fetch/parse sitemap: %s", sitemap_url)
-            return
-
-        for entry in entries:
-            if entry.loc not in seen_urls:
-                seen_urls.add(entry.loc)
-                all_entries.append(entry)
-
-        for child_url in children:
-            _recurse(child_url, depth + 1)
-
-    _recurse(url, 0)
-    return all_entries
+    logger.info("Fetching sitemap: %s", url)
+    fetcher = SitemapFetcher(url=url, recursion_level=0)
+    sitemap = fetcher.sitemap()
+    entries = _pages_to_entries(sitemap.all_pages())
+    logger.info("Parsed %d pages from %s", len(entries), url)
+    return entries
 
 
 def filter_entries(
@@ -250,55 +123,3 @@ def filter_entries(
             break
 
     return result
-
-
-def discover_sitemap(url: str, *, timeout: int = 30) -> list[str]:
-    """Auto-discover sitemap URLs for a website.
-
-    Probes in order:
-    1. ``{origin}/robots.txt`` — parses ``Sitemap:`` directives.
-    2. ``{origin}/sitemap.xml`` — probes the well-known location.
-
-    Returns the first set of sitemap URLs found, or an empty list.
-    """
-    import urllib.request  # noqa: PLC0415
-    from urllib.error import HTTPError, URLError  # noqa: PLC0415
-
-    parsed = urlparse(url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    headers = {"User-Agent": "quarry/1.0 (+https://github.com/punt-labs/quarry)"}
-
-    # Step 1: robots.txt
-    sitemaps: list[str] = []
-    robots_url = f"{origin}/robots.txt"
-    try:
-        req = urllib.request.Request(robots_url, headers=headers)  # noqa: S310
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            text = resp.read().decode("utf-8", errors="replace")
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.lower().startswith("sitemap:"):
-                    sitemap_url = stripped.split(":", 1)[1].strip()
-                    if sitemap_url.startswith(("http://", "https://")):
-                        sitemaps.append(sitemap_url)
-    except (HTTPError, URLError, OSError):
-        logger.debug("Could not fetch %s", robots_url)
-
-    if sitemaps:
-        logger.info("Found %d sitemap(s) in robots.txt", len(sitemaps))
-        return sitemaps
-
-    # Step 2: well-known /sitemap.xml
-    well_known = f"{origin}/sitemap.xml"
-    try:
-        req = urllib.request.Request(  # noqa: S310
-            well_known, method="HEAD", headers=headers
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            if resp.status == 200:
-                logger.info("Found sitemap at well-known location: %s", well_known)
-                return [well_known]
-    except (HTTPError, URLError, OSError):
-        logger.debug("No sitemap at %s", well_known)
-
-    return []

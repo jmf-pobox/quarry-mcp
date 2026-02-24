@@ -1072,7 +1072,7 @@ wheels = [
 
 [[package]]
 name = "punt-quarry"
-version = "0.9.0"
+version = "0.9.1"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1101,6 +1101,7 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
     { name = "typer" },
+    { name = "ultimate-sitemap-parser" },
 ]
 
 [package.optional-dependencies]
@@ -1145,6 +1146,7 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.23.0" },
     { name = "tree-sitter-language-pack", specifier = ">=0.5.0" },
     { name = "typer", specifier = ">=0.15.0" },
+    { name = "ultimate-sitemap-parser", specifier = ">=1.8.0" },
 ]
 provides-extras = ["dev"]
 
@@ -1949,6 +1951,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "ultimate-sitemap-parser"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8e/87/b4767b5181b0a6b7aafa5021b6b37b3eea104ba8ad80d3b527e8f423c85c/ultimate_sitemap_parser-1.8.0.tar.gz", hash = "sha256:b89e173a7a30ae8d3fbf5c51e8b72985f2f1240e338064a315f35652c89442bc", size = 39440, upload-time = "2026-01-25T12:35:48.862Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/96/6d3eee0013dfebd45b2e3650d4db96c27471f30115dbfcb9e0a002406c1a/ultimate_sitemap_parser-1.8.0-py3-none-any.whl", hash = "sha256:438dcfe8aa8efc4e587b567a4abc8b1d2486c52b5ca52d5c81520f08e0434449", size = 44219, upload-time = "2026-01-25T12:35:47.699Z" },
 ]
 
 [[package]]
