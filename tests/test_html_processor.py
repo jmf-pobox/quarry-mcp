@@ -172,6 +172,14 @@ class TestProcessHTMLFile:
         assert pages[0].page_number == 1
         assert pages[0].page_type == PageType.SECTION
 
+    def test_document_name_override(self, tmp_path: Path):
+        f = tmp_path / "article.html"
+        f.write_text("<html><body><h1>Title</h1><p>Content.</p></body></html>")
+
+        pages = process_html_file(f, document_name="subdir/article.html")
+
+        assert pages[0].document_name == "subdir/article.html"
+
     def test_page_numbers_sequential(self, tmp_path: Path):
         f = tmp_path / "multi.html"
         f.write_text(

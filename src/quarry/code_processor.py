@@ -104,7 +104,11 @@ _DEFINITION_NODE_TYPES = frozenset(
 )
 
 
-def process_code_file(file_path: Path) -> list[PageContent]:
+def process_code_file(
+    file_path: Path,
+    *,
+    document_name: str | None = None,
+) -> list[PageContent]:
     """Parse a source code file into semantic sections.
 
     Uses tree-sitter for language-aware splitting. Falls back to
@@ -112,6 +116,8 @@ def process_code_file(file_path: Path) -> list[PageContent]:
 
     Args:
         file_path: Path to source code file.
+        document_name: Override for the stored document name.  Defaults to
+            ``file_path.name``.
 
     Returns:
         List of PageContent objects, one per top-level definition or
@@ -131,14 +137,14 @@ def process_code_file(file_path: Path) -> list[PageContent]:
     if not text.strip():
         return []
 
-    document_name = file_path.name
+    resolved_name = document_name or file_path.name
     document_path = str(file_path.resolve())
 
-    sections = _split_with_treesitter(text, language, document_name)
+    sections = _split_with_treesitter(text, language, resolved_name)
     if sections is None:
         sections = _fallback_split(text)
 
-    return _sections_to_pages(sections, document_name, document_path, PageType.CODE)
+    return _sections_to_pages(sections, resolved_name, document_path, PageType.CODE)
 
 
 def _split_with_treesitter(

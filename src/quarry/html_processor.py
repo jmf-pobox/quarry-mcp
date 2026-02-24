@@ -105,7 +105,11 @@ def process_html_text(
     return _sections_to_pages(sections, document_name, document_path, PageType.SECTION)
 
 
-def process_html_file(file_path: Path) -> list[PageContent]:
+def process_html_file(
+    file_path: Path,
+    *,
+    document_name: str | None = None,
+) -> list[PageContent]:
     """Parse an HTML file into Markdown sections for embedding.
 
     Reads the file with encoding fallback, then delegates to
@@ -113,6 +117,8 @@ def process_html_file(file_path: Path) -> list[PageContent]:
 
     Args:
         file_path: Path to ``.html`` or ``.htm`` file.
+        document_name: Override for the stored document name.  Defaults to
+            ``file_path.name``.
 
     Returns:
         List of PageContent objects, one per section.  Empty list when the
@@ -126,5 +132,6 @@ def process_html_file(file_path: Path) -> list[PageContent]:
         msg = f"Unsupported HTML format: {suffix}"
         raise ValueError(msg)
 
+    resolved_name = document_name or file_path.name
     html_text = _read_text_with_fallback(file_path)
-    return process_html_text(html_text, file_path.name, str(file_path.resolve()))
+    return process_html_text(html_text, resolved_name, str(file_path.resolve()))

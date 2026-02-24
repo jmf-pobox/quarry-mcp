@@ -69,6 +69,14 @@ class TestProcessCodeFile:
         assert pages[0].page_type == PageType.CODE
         assert pages[0].page_number == 1
 
+    def test_document_name_override(self, tmp_path: Path):
+        f = tmp_path / "meta.py"
+        f.write_text("def only():\n    pass\n")
+
+        pages = process_code_file(f, document_name="subdir/meta.py")
+
+        assert pages[0].document_name == "subdir/meta.py"
+
     def test_empty_file(self, tmp_path: Path):
         f = tmp_path / "empty.py"
         f.write_text("")

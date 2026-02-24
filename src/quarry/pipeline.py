@@ -292,7 +292,7 @@ def ingest_text_file(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_text_file(file_path)
+    pages = process_text_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
@@ -341,7 +341,7 @@ def ingest_code_file(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_code_file(file_path)
+    pages = process_code_file(file_path, document_name=document_name)
     progress("Definitions: %d", len(pages))
 
     return _chunk_embed_store(
@@ -443,7 +443,7 @@ def ingest_html_file(
     if overwrite:
         delete_document(db, document_name, collection=collection)
 
-    pages = process_html_file(file_path)
+    pages = process_html_file(file_path, document_name=document_name)
     progress("Sections: %d", len(pages))
 
     return _chunk_embed_store(
