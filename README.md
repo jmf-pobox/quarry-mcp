@@ -5,7 +5,6 @@
 [![Python 3.13+](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Tests](https://github.com/punt-labs/quarry/actions/workflows/test.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/test.yml)
 [![Lint](https://github.com/punt-labs/quarry/actions/workflows/lint.yml/badge.svg)](https://github.com/punt-labs/quarry/actions/workflows/lint.yml)
-[![codecov](https://codecov.io/gh/punt-labs/quarry/graph/badge.svg)](https://codecov.io/gh/punt-labs/quarry)
 
 Unlock the knowledge trapped on your hard drive. Works with Claude Desktop, Claude Code, and the macOS menu bar.
 
