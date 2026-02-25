@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 from quarry.config import Settings, load_settings, resolve_db_paths
@@ -30,6 +31,72 @@ from quarry.sync_registry import (
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
+
+_CONFIG_FILENAME = ".claude/quarry.local.md"
+
+
+@dataclass(frozen=True)
+class HookConfig:
+    """Per-project hook configuration from ``.claude/quarry.local.md``."""
+
+    session_sync: bool = True
+    web_fetch: bool = True
+    compaction: bool = True
+
+
+def load_hook_config(cwd: str) -> HookConfig:
+    """Load hook config from YAML frontmatter in the project's config file.
+
+    Returns defaults (all enabled) if the file is missing or unparseable.
+    """
+    path = Path(cwd) / _CONFIG_FILENAME
+    if not path.is_file():
+        return HookConfig()
+
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return HookConfig()
+
+    # Parse YAML frontmatter between --- delimiter lines.
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return HookConfig()
+
+    end_index = None
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            end_index = i
+            break
+
+    if end_index is None:
+        return HookConfig()
+    frontmatter = "\n".join(lines[1:end_index]).strip()
+
+    import yaml  # noqa: PLC0415
+
+    try:
+        data = yaml.safe_load(frontmatter)
+    except Exception:  # noqa: BLE001
+        logger.warning("hook-config: invalid YAML in %s", path)
+        return HookConfig()
+
+    if not isinstance(data, dict):
+        return HookConfig()
+
+    auto = data.get("auto_capture")
+    if not isinstance(auto, dict):
+        return HookConfig()
+
+    session_sync_val = auto.get("session_sync", True)
+    web_fetch_val = auto.get("web_fetch", True)
+    compaction_val = auto.get("compaction", True)
+
+    return HookConfig(
+        session_sync=session_sync_val if isinstance(session_sync_val, bool) else True,
+        web_fetch=web_fetch_val if isinstance(web_fetch_val, bool) else True,
+        compaction=compaction_val if isinstance(compaction_val, bool) else True,
+    )
 
 
 def _find_registration(
@@ -101,9 +168,15 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     field) with quarry and runs an incremental sync.  Returns
     ``additionalContext`` so Claude knows quarry is available.
     """
-    cwd = str(payload.get("cwd", ""))
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if not cwd:
         logger.debug("session-start: no cwd in payload, skipping")
+        return {}
+
+    config = load_hook_config(cwd)
+    if not config.session_sync:
+        logger.debug("session-start: disabled by config")
         return {}
 
     directory = Path(cwd).resolve()
@@ -164,6 +237,14 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     collection.  Skips URLs that are already ingested (dedup by
     document_name).
     """
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    if cwd:
+        config = load_hook_config(cwd)
+        if not config.web_fetch:
+            logger.debug("post-web-fetch: disabled by config")
+            return {}
+
     url = _extract_url(payload)
     if not url:
         logger.debug("post-web-fetch: no valid URL in payload, skipping")
@@ -263,6 +344,14 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Each compaction creates a new document keyed by session ID and
     timestamp.
     """
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    if cwd:
+        config = load_hook_config(cwd)
+        if not config.compaction:
+            logger.debug("pre-compact: disabled by config")
+            return {}
+
     transcript_path = str(payload.get("transcript_path", ""))
     session_id = str(payload.get("session_id", ""))
     if not transcript_path or not session_id:
