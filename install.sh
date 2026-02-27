@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install quarry — local semantic search for Claude Code and Claude Desktop.
-# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/main/install.sh | sh
+# Install quarry — local semantic search for Claude Code.
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh
 set -eu
 
 # --- Colors (disabled when not a terminal) ---
@@ -15,12 +15,23 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
 
-# TODO: revert to "punt-quarry" once PyPI org prefix is approved
-PACKAGE="punt-quarry@git+https://github.com/punt-labs/quarry.git"
-PACKAGE_SHORT="punt-quarry"
+MARKETPLACE_REPO="punt-labs/claude-plugins"
+MARKETPLACE_NAME="punt-labs"
+PLUGIN_NAME="quarry"
+PACKAGE="punt-quarry"
 BINARY="quarry"
 
-# --- Step 1: Python ---
+# --- Step 1: Claude Code CLI ---
+
+info "Checking Claude Code..."
+
+if command -v claude >/dev/null 2>&1; then
+  ok "claude CLI found"
+else
+  fail "'claude' CLI not found. Install Claude Code first: https://docs.anthropic.com/en/docs/claude-code"
+fi
+
+# --- Step 2: Python + uv ---
 
 info "Checking Python..."
 
@@ -40,8 +51,6 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 13 ]; }
 fi
 
 ok "Python ${PY_MAJOR}.${PY_MINOR}"
-
-# --- Step 2: uv ---
 
 info "Checking uv..."
 
@@ -64,13 +73,12 @@ else
   ok "uv installed"
 fi
 
-# --- Step 3: punt-quarry ---
+# --- Step 3: Install quarry CLI ---
 
-info "Installing $PACKAGE_SHORT..."
+info "Installing $PACKAGE..."
 
-# --force: overwrites existing binary (may exist from old package name or prior install)
-uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE_SHORT"
-ok "$PACKAGE_SHORT installed"
+uv tool install --force "$PACKAGE" || fail "Failed to install $PACKAGE"
+ok "$PACKAGE installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
@@ -81,14 +89,57 @@ fi
 
 ok "$BINARY $(command -v "$BINARY")"
 
-# --- Step 4: quarry install (model download + MCP registration) ---
+# --- Step 4: Download embedding model ---
 
-info "Setting up quarry (downloading model, configuring MCP)..."
+info "Downloading embedding model..."
 printf '\n'
 "$BINARY" install
 printf '\n'
 
-# --- Step 5: quarry doctor ---
+# --- Step 5: Register marketplace ---
+
+info "Registering Punt Labs marketplace..."
+
+if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
+  ok "marketplace already registered"
+  claude plugin marketplace update "$MARKETPLACE_NAME" 2>/dev/null || true
+else
+  claude plugin marketplace add "$MARKETPLACE_REPO" || fail "Failed to register marketplace"
+  ok "marketplace registered"
+fi
+
+# --- Step 6: SSH fallback for plugin install ---
+
+# claude plugin install clones via SSH (git@github.com:...).
+# Users without SSH keys need an HTTPS fallback.
+NEED_HTTPS_REWRITE=0
+cleanup_https_rewrite() {
+  if [ "$NEED_HTTPS_REWRITE" = "1" ]; then
+    git config --global --unset url."https://github.com/".insteadOf 2>/dev/null || true
+    NEED_HTTPS_REWRITE=0
+  fi
+}
+trap cleanup_https_rewrite EXIT INT TERM
+
+if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+  warn "SSH auth to GitHub unavailable, using HTTPS fallback"
+  git config --global url."https://github.com/".insteadOf "git@github.com:"
+  NEED_HTTPS_REWRITE=1
+fi
+
+# --- Step 7: Install plugin ---
+
+info "Installing $PLUGIN_NAME plugin..."
+
+if ! claude plugin install "${PLUGIN_NAME}@${MARKETPLACE_NAME}"; then
+  cleanup_https_rewrite
+  fail "Failed to install $PLUGIN_NAME"
+fi
+ok "$PLUGIN_NAME plugin installed"
+
+cleanup_https_rewrite
+
+# --- Step 8: Verify ---
 
 info "Verifying installation..."
 printf '\n'
@@ -97,10 +148,9 @@ printf '\n'
 
 # --- Done ---
 
-printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PACKAGE" "$NC"
+printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PLUGIN_NAME" "$NC"
+printf 'Restart Claude Code to activate the plugin.\n\n'
 printf 'Quick start:\n'
-printf '  quarry ingest-file notes.md      # index a file\n'
-printf '  quarry search "my topic"          # semantic search\n'
-printf '  quarry ingest-url https://...     # index a webpage\n\n'
-printf 'Claude Code and Claude Desktop are configured automatically.\n'
-printf 'Restart Claude Desktop if it was running during install.\n\n'
+printf '  /find <query>                     # semantic search\n'
+printf '  /ingest <url>                     # index a webpage\n'
+printf '  quarry ingest-file notes.md       # index a file from CLI\n\n'
