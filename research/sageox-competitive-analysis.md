@@ -55,7 +55,7 @@ This is the same problem quarry's learning and recall loops solve. The market ag
 
 **Enterprise vs. open source.** SageOx is a commercial product targeting teams that "build primarily through prompts." Quarry is MIT-licensed, free, and designed for developers who want to own their data.
 
-**Code provenance vs. searchable knowledge.** SageOx links commits to the decisions that produced them (similar to Entire.io). Quarry doesn't track provenance — it builds a searchable knowledge base from the byproducts of work. These are complementary, not competing.
+**Code provenance.** SageOx explicitly links commits to the decisions that produced them. Quarry's session notes capture the same reasoning — adding commit-hash tags would close the gap. The raw material is the same; the difference is how much structure is imposed on it.
 
 ## Quarry's Position
 
@@ -92,14 +92,22 @@ This would not scale to large teams (git repos with thousands of markdown files 
 
 This is not on the roadmap. It is noted here as a potential direction if team sharing becomes a priority.
 
+## Provenance Is Not Hard
+
+The sharp distinction between "knowledge tools" and "provenance tools" is overstated. Provenance is just: save the conversation, save the commit, link them.
+
+Quarry's ambient learning hooks already capture conversation transcripts (PreCompact). Git already tracks commits. If the session note includes the commit hashes from that session — or the commit messages reference the session — you have provenance. The transcript contains the reasoning. The commit contains the code change. The link is a tag.
+
+Entire.io built a product around this. SageOx built a platform. The underlying mechanism is logging with correlation. Quarry's learning loop produces the raw material; adding commit-hash tags to session notes would close the provenance loop with minimal additional work.
+
 ## Relationship to Other Tools
 
-| Tool | What It Tracks | Audience | Model |
-|------|---------------|----------|-------|
-| SageOx | Team decisions, agent sessions, code provenance | Enterprise teams | Hosted platform |
-| Entire.io | Code provenance, session reasoning | Individual developers | Local + shadow branch |
-| Quarry | Searchable knowledge from any source | Individuals, small teams | Local-first, open source |
+| Tool | Audience | Model | Differentiator |
+|------|----------|-------|----------------|
+| SageOx | Enterprise teams | Hosted platform | Structured team context, web UI, decision ledger |
+| Entire.io | Individual developers | Local + shadow branch | Deep Claude Code integration, checkpoint/rewind |
+| Quarry | Individuals, small teams | Local-first, open source | Semantic search over all captured content, 30+ format support |
 
-SageOx and Entire.io both focus on **provenance** — why was this code written, what decisions led here. Quarry focuses on **knowledge** — what do you know, where did you learn it, can you find it again. Provenance answers "why did we do this." Knowledge answers "what do we know about this topic."
+All three solve the same core problem: knowledge evaporates between agent sessions. SageOx solves it for enterprises with a hosted platform. Entire.io solves it for individual developers with git-native session recording. Quarry solves it for individuals and small teams with local semantic search — and because the captured content is searchable by meaning (not just keyword), it compounds in value as the knowledge base grows.
 
-These are complementary. A developer could use Entire.io for code provenance, quarry for searchable knowledge, and SageOx if their team needs shared context infrastructure. None of the three replaces the others.
+The tools are more alike than different. The real differentiators are deployment model (hosted vs. local), audience (enterprise vs. individual), and what you can do with the captured content (structured decisions vs. semantic search).
