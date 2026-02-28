@@ -110,28 +110,34 @@ Use the absolute path to `uvx` (e.g. `/opt/homebrew/bin/uvx`). `quarry install` 
 claude mcp add quarry -- uvx --from punt-quarry quarry mcp
 ```
 
-### Automagic Mode (Plugin)
+### Ambient Knowledge (Plugin)
 
-When installed as a Claude Code plugin (`claude plugin install quarry@punt-labs`), Quarry captures knowledge automatically — no manual indexing needed:
+As an MCP server, Quarry is a tool you call — `/find`, `/ingest`, explicit commands. As a Claude Code plugin, Quarry changes how Claude Code itself works. The host becomes knowledge-aware.
 
-| What happens | When |
-|-------------|------|
-| **Your project is indexed** | Every session starts with an incremental sync of your project directory. Claude knows what's in your codebase. |
-| **Web pages are saved** | Every URL Claude fetches is auto-ingested into a `web-captures` collection for later search. |
-| **Conversations are preserved** | Before context compaction, the transcript is captured into `session-notes` so decisions and discoveries survive across sessions. |
+**Learning.** Knowledge flows through every session and normally evaporates — web research, document reads, debugging discoveries, architectural decisions. The plugin captures this passively. Hooks detect knowledge-generating events, write to a staging queue, and `quarry learn` processes the queue in the background. You work normally; the knowledge base grows.
 
-Each hook can be individually disabled per project by creating `.claude/quarry.local.md`:
+**Recall.** Having the knowledge isn't enough if Claude doesn't know to look there. The plugin injects a knowledge briefing at session start and nudges Claude before web searches that overlap with locally indexed content. The second time you research something, it's instant.
 
-```yaml
----
-auto_capture:
-  session_sync: false
-  web_fetch: false
-  compaction: false
----
+Control how much the plugin captures with `/quarry learn`:
+
+```
+/quarry learn off   — No passive capture (default without plugin)
+/quarry learn on    — Capture web research + compaction transcripts
+/quarry learn all   — Also capture document reads, agent findings, session digests
 ```
 
-All hooks default to enabled. Automagic mode is additive — Quarry works the same way without the plugin, you just manage ingestion manually.
+| What happens | When | Mode |
+|-------------|------|------|
+| **Knowledge briefing** | Session start — Claude knows what's in your knowledge base | Always |
+| **Local-first nudge** | Before web search — suggests checking quarry for familiar topics | Always |
+| **Web pages saved** | URLs Claude fetches are queued for background ingestion | `on` |
+| **Conversations preserved** | Before context compaction, the transcript is captured | `on` |
+| **Documents indexed** | Non-code files Claude reads (PDFs, images) are queued | `all` |
+| **Agent findings saved** | Research subagent results are captured | `all` |
+
+All learning hooks are fail-open (quarry crashing never breaks Claude Code) and non-blocking (hooks write to a staging queue, ingestion is async). Recall hooks are read-only and always active.
+
+For the full architecture, see [research/vision.md](research/vision.md).
 
 ## Menu Bar App (macOS)
 
@@ -275,9 +281,10 @@ Both Claude Desktop and Claude Code access Quarry through these MCP tools. You d
 
 ## Roadmap
 
-- Google Drive connector
+- **Ambient knowledge** — passive learning and active recall via Claude Code plugin hooks ([vision](research/vision.md))
 - `quarry sync --watch` for live filesystem monitoring
 - PII detection and redaction
+- Google Drive connector
 
 For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 

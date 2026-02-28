@@ -1,0 +1,182 @@
+# Quarry Vision: Ambient Knowledge for Claude Code
+
+**Date:** 2026-02-28
+**Status:** Active
+**Builds on:** [Automagic Knowledge Capture](automagic-knowledge-capture.md), [Entire.io Hook Architecture](../../punt-kit/research/entire-io-hook-architecture.md)
+
+## The Distinction
+
+Quarry has four projections of the same core capability — library, CLI, MCP server, HTTP API. Each serves a different caller: Python code imports the library, humans type the CLI, AI agents call the MCP tools, the menu bar app hits the HTTP API. These projections are interfaces. They expose the capability to different contexts.
+
+The Claude Code plugin is not a fifth projection. It is a different category of integration. The four projections let callers *reach* quarry. The plugin makes Claude Code *behave differently because quarry is present*. The host becomes knowledge-aware.
+
+When quarry is installed as a standalone MCP server, Claude Code gains tools — `search_documents`, `ingest_file`, etc. The user still drives: `/find`, `/ingest`, explicit commands. When quarry is installed as a plugin, Claude Code gains *ambient memory* — it learns from every session, recalls relevant knowledge before you ask, and builds a persistent knowledge base from the natural flow of work.
+
+The analogy: tts as a tool speaks when you say `/say`. Tts as a plugin listens to every tool call, accumulates session signals, detects when a task completes, and speaks a summary without being asked. Biff as a tool sends messages when you say `/write`. Biff as a plugin detects branch changes, tracks commits, warns about collisions, and nudges announcements — all without being asked.
+
+Quarry follows the same pattern. The tool indexes and searches. The plugin learns and recalls.
+
+## Two Loops
+
+### The Learning Loop (Knowledge In)
+
+Knowledge flows through every Claude Code session and evaporates:
+
+- **Web research** — Claude fetches documentation, Stack Overflow answers, API references. Read once, gone after compaction.
+- **Document reads** — User opens a PDF, Claude analyzes it, context compressed away.
+- **Research agents** — Explore subagents return findings, then the summary is compressed.
+- **Session reasoning** — Claude connects dots, explains trade-offs, reaches conclusions. The synthesis exists only in the conversation window.
+- **Debugging discoveries** — Root causes found, workarounds identified. Locked in one session's memory.
+
+The learning loop captures this knowledge passively. Hooks detect knowledge-generating events, write to a staging queue, and quarry's CLI processes the queue asynchronously. The user works normally; the knowledge base grows.
+
+### The Recall Loop (Knowledge Out)
+
+The learning loop is necessary but not sufficient. If quarry has the knowledge but Claude doesn't know to look there, the knowledge is useless. Today, Claude Code has two research reflexes: Grep/Glob for local code, WebSearch/WebFetch for external knowledge. Quarry is a third option that Claude only reaches for when explicitly told (`/find`).
+
+The recall loop changes this. Through hooks and session context, quarry tells Claude Code: "You have a local knowledge base. Before searching the web for a topic you've researched before, check locally first."
+
+This is not about replacing web search. It is about eliminating redundant research — the second time you look something up should be instant.
+
+## Hook Architecture
+
+### Learning Hooks
+
+Following the [Entire.io dispatcher pattern](../../punt-kit/research/entire-io-hook-architecture.md#pattern-5-cli-as-hook-dispatcher): all hooks call `quarry hooks <event>`. The CLI binary is the single entry point. Hook scripts are one-liners. All logic lives in testable Python.
+
+Following the [tts config-driven pattern](../tts): behavior controlled by `.quarry/config.md`. Hooks gate on config state — fast skip when disabled.
+
+| Hook Event | Matcher | What It Captures | Config Gate |
+|------------|---------|------------------|-------------|
+| PostToolUse | `WebFetch` | URLs Claude fetched — queue page for ingestion | `learn: on` |
+| PostToolUse | `WebSearch` | Search result URLs — queue top results | `learn: on` |
+| PostToolUse | `Read` | Non-code documents (PDF, PPTX, images) | `learn: all` |
+| PreCompact | `auto` | Conversation transcript before compression | `learn: on` |
+| SubagentStop | `Explore`, `general-purpose` | Research agent findings | `learn: all` |
+| SessionEnd | — | Final session knowledge digest | `learn: all` |
+
+**Design constraints:**
+
+- **Fail-open.** Every learning hook returns 0 on failure. Quarry crashing never breaks Claude Code.
+- **Non-blocking.** Hooks write to `.quarry/staging/` and return immediately. Ingestion is async.
+- **Selective.** `learn: off` disables all passive capture. `learn: on` enables the high-signal, low-volume sources (web research + compaction). `learn: all` adds lower-signal sources (document reads, agent findings, session digests).
+
+### Recall Hooks
+
+| Hook Event | Matcher | What It Does |
+|------------|---------|-------------|
+| SessionStart | `startup` | Injects knowledge briefing into `additionalContext`: database stats, collection topics, recency. Tells Claude that local knowledge exists. |
+| PreToolUse | `WebSearch` | Before Claude searches the web, checks if the query overlaps with indexed collections. If yes, injects `additionalContext` suggesting a local search first. Does not block — Claude decides. |
+
+**The SessionStart briefing** is lightweight — it reads `quarry status` output and formats a one-paragraph summary. "You have 347 documents across 5 collections (web-captures, session-notes, docs, research, codebase). Last synced 2 hours ago. Use /find to search locally before web searching."
+
+**The PreToolUse nudge** is the more interesting hook. It intercepts WebSearch calls and checks the query against known collection names and document titles — a fast keyword match, not a full embedding search. If there's overlap, it injects context: "Quarry has 12 documents about LanceDB indexed locally. Consider /find first." Claude can still search the web (the hook does not block), but it knows to check.
+
+This mirrors how an experienced developer works: before Googling something, they check their notes first.
+
+## Staging Queue
+
+All learning hooks write to `.quarry/staging/`, never ingest directly:
+
+```
+.quarry/staging/
+  urls                  # One URL per line, appended by PostToolUse hooks
+  files                 # One absolute path per line, appended by Read hook
+  content/              # Markdown files from PreCompact, SubagentStop, SessionEnd
+    2026-02-28T14:32-compact.md
+    2026-02-28T15:10-agent-explore.md
+```
+
+Processing the queue is a CLI concern:
+
+- `quarry learn` — Process the staging queue: ingest URLs, ingest files, ingest content. Dedup against existing documents. Report what was learned.
+- `quarry sync` — Could incorporate queue processing as part of the sync cycle.
+- Background: The `quarry learn` command runs via Bash `run_in_background` — the conversation is never blocked.
+
+This is Option A from the original brainstorm: hooks are thin writers, the CLI does the heavy lifting async.
+
+## Config
+
+Following the tts pattern (`.tts/config.md` with YAML frontmatter):
+
+```yaml
+# .quarry/config.md
+---
+learn: "on"              # off | on | all
+---
+```
+
+**`/quarry learn` command** (parallels `/notify y|c|n`):
+
+```
+/quarry learn off   — No passive capture (current behavior)
+/quarry learn on    — Capture web research + compaction transcripts
+/quarry learn all   — Also capture document reads, agent findings, session digests
+/quarry learn       — Show current setting
+```
+
+The recall hooks (SessionStart briefing, PreToolUse nudge) are always active when quarry is installed as a plugin. They are read-only and fast — there is no reason to disable them.
+
+## Signal Accumulation
+
+Parallel to tts's `vibe_signals`, quarry accumulates `learn_signals`:
+
+```yaml
+learn_signals: "web-fetch@14:32:lancedb.github.io,web-fetch@14:35:stackoverflow.com,read-pdf@14:40:report.pdf"
+```
+
+PostToolUse hooks append signals. At PreCompact or SessionEnd, the hook reads signals to determine what knowledge was generated. If signals are empty, no digest is written — nothing was learned.
+
+This prevents empty session notes from accumulating ("In this session, the user asked about X and I responded" — useless filler).
+
+## What This Unlocks
+
+**Week 1:** Developer enables `learn on`. Works normally. Web searches auto-captured. Compaction transcripts saved.
+
+**Week 4:** 200 web pages indexed, 30 session notes captured.
+
+- `/find "NATS authentication patterns"` — returns Stack Overflow answers from a biff debugging session 3 weeks ago, plus the session note recording the root cause.
+- Claude starts a web search for "LanceDB vector index tuning" — PreToolUse hook fires: "Quarry has 8 documents about LanceDB indexed locally." Claude runs `/find` first, gets the answer from cached docs, skips the web search.
+- New team member joins, inherits the quarry database. Searches "why did we choose snowflake-arctic-embed" — gets the session note from the architecture discussion.
+
+**Month 3:** Quarry is the team's institutional memory. Not because anyone decided to build a knowledge base — because the knowledge base built itself from the natural flow of work.
+
+## Relationship to Existing Components
+
+| Component | Role | Changes Needed |
+|-----------|------|----------------|
+| `quarry hooks` CLI subcommand | Dispatcher for all hook events | New — Python module with subcommands per event |
+| `.quarry/config.md` | Per-project config (YAML frontmatter) | New — parallels `.tts/config.md` |
+| `.quarry/staging/` | Queue for async ingestion | New — simple file-based queue |
+| `quarry learn` CLI command | Process staging queue | New — dedup, ingest, report |
+| `hooks/hooks.json` | Plugin hook registration | Expand — add learning + recall hooks |
+| `hooks/session-start.sh` | Plugin initialization | Expand — add knowledge briefing |
+| `commands/quarry.md` | `/quarry` command | Expand — add `learn` subcommand |
+| `quarry ingest-url`, `ingest-file`, `ingest-content` | Existing ingestion | No changes — staging queue feeds these |
+| `quarry search` | Existing search | No changes — recall hooks feed queries here |
+
+## Implementation Sequence
+
+1. **Config layer** — `.quarry/config.md`, `/quarry learn` command, `set_config` MCP tool addition.
+2. **Recall hooks** — SessionStart briefing, PreToolUse WebSearch nudge. Immediate value with zero learning hooks — just makes Claude aware of existing knowledge.
+3. **Learning hooks: web capture** — PostToolUse on WebFetch/WebSearch. Staging queue + `quarry learn` CLI command.
+4. **Learning hooks: compaction** — PreCompact transcript capture to staging.
+5. **Signal accumulation** — `learn_signals` in config, gating for PreCompact/SessionEnd digest.
+6. **Learning hooks: extended** — Read (documents), SubagentStop, SessionEnd. Behind `learn: all`.
+
+## Open Questions
+
+1. **PreCompact data availability.** What exactly is available in the PreCompact hook's stdin? The conversation transcript? A summary? We need the raw transcript — quarry can chunk and embed it directly. If only a summary is available, that works too but with less granularity.
+
+2. **Cross-project knowledge.** Web captures from working on quarry should be available when working on biff. A shared `web-captures` database (not per-project) would be more useful. The `--db` flag already supports this — the config could specify a shared database for auto-captured content.
+
+3. **PreToolUse nudge precision.** The keyword-match approach for the WebSearch nudge is fast but imprecise. A better approach might be to maintain a lightweight topic index (collection names + top-N terms per collection) that the hook checks against. This needs to stay under 50ms.
+
+4. **Dedup strategy.** The staging queue will contain duplicate URLs (same page fetched across sessions). `quarry learn` needs efficient dedup — check document name existence before ingesting. The existing `--overwrite` flag handles re-ingestion, but skipping entirely is faster.
+
+## References
+
+- [Entire.io Hook Architecture Research](../../punt-kit/research/entire-io-hook-architecture.md) — Dual-layer capture, fail-open/fail-closed, CLI dispatcher pattern
+- [Choosing the Right Projection](../../public-website/src/content/blog/choosing-the-right-projection.md) — Tool projections vs. host integration
+- [tts plugin](../../tts/) — Config-driven hooks, signal accumulation, `/notify` command pattern
+- [biff plugin](../../biff/) — Ambient coordination, session awareness, git hook integration
