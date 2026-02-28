@@ -164,6 +164,42 @@ This prevents empty session notes from accumulating ("In this session, the user 
 5. **Signal accumulation** — `learn_signals` in config, gating for PreCompact/SessionEnd digest.
 6. **Learning hooks: extended** — Read (documents), SubagentStop, SessionEnd. Behind `learn: all`.
 
+## Storage: Shadow Branch for Team Sharing
+
+The staging queue (`.quarry/staging/`) is local and gitignored — fine for one person, invisible to teammates. For small-team sharing, captured content could live on a git shadow branch instead.
+
+Entire.io uses this pattern: session metadata lives on `entire/checkpoints/v1`, pushed to remote via a `pre-push` git hook. The code branch stays clean. The provenance travels with the repo on a branch you never check out.
+
+Quarry could do the same:
+
+```
+quarry/knowledge/v1          # shadow branch, never checked out
+  web-captures/
+    2026-02-28-lancedb-api.md
+    2026-02-28-nats-auth.md
+  session-notes/
+    2026-02-28T14:32-quarry-hook-fix.md   # tagged with commit hashes
+    2026-02-28T16:10-biff-transport.md
+```
+
+The flow:
+
+1. Learning hooks write raw content (markdown, URLs) to the shadow branch via `git worktree` or direct tree manipulation
+2. A `pre-push` git hook pushes the shadow branch alongside the code branch (fail-open, like Entire.io)
+3. Teammates pull — their quarry instances detect new content on the shadow branch
+4. Each person's quarry vectorizes locally using their own embedding model
+5. `quarry search` returns results from teammates' captured knowledge
+
+This works because:
+
+- **Git handles sync.** No server, no accounts, no platform.
+- **Raw content is git-friendly.** Markdown files diff and merge cleanly.
+- **Vectorization is local.** No shared embedding infrastructure. Each machine builds its own LanceDB index from the raw content.
+- **The working tree stays clean.** Shadow branch content never appears in `git status` or clutters the project.
+- **Provenance is natural.** Session notes tagged with commit hashes — `quarry search "why did we change the auth flow"` returns the session where those commits were made.
+
+This would not scale to large teams (hundreds of session notes per week, merge traffic on the shadow branch) but works well for 2-5 people. The simplest possible collaboration model.
+
 ## Open Questions
 
 1. **PreCompact data availability.** What exactly is available in the PreCompact hook's stdin? The conversation transcript? A summary? We need the raw transcript — quarry can chunk and embed it directly. If only a summary is available, that works too but with less granularity.
@@ -173,6 +209,8 @@ This prevents empty session notes from accumulating ("In this session, the user 
 3. **PreToolUse nudge precision.** The keyword-match approach for the WebSearch nudge is fast but imprecise. A better approach might be to maintain a lightweight topic index (collection names + top-N terms per collection) that the hook checks against. This needs to stay under 50ms.
 
 4. **Dedup strategy.** The staging queue will contain duplicate URLs (same page fetched across sessions). `quarry learn` needs efficient dedup — check document name existence before ingesting. The existing `--overwrite` flag handles re-ingestion, but skipping entirely is faster.
+
+5. **Shadow branch mechanics.** Writing to a shadow branch from a hook needs to be fast and non-blocking. Options: (a) `git worktree` for the shadow branch, write files, commit — clean but heavyweight; (b) direct `git hash-object` / `git update-index` / `git commit-tree` — fast plumbing commands, no worktree needed; (c) write to staging first, batch-commit to shadow branch during `quarry learn`. Option (c) is simplest and keeps hooks thin.
 
 ## References
 
