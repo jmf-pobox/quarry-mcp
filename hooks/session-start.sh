@@ -5,7 +5,7 @@ PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 # Derive tool pattern from plugin name (supports quarry-dev and quarry)
-PLUGIN_NAME="$(python3 -c "import json; print(json.load(open('${PLUGIN_ROOT}/.claude-plugin/plugin.json'))['name'])")"
+PLUGIN_NAME="$(python3 -c "import json, sys, pathlib; print(json.load(open(pathlib.Path(sys.argv[1]) / '.claude-plugin' / 'plugin.json'))['name'])" "$PLUGIN_ROOT")"
 TOOL_PATTERN="mcp__plugin_${PLUGIN_NAME}_quarry__"
 
 ACTIONS=()
@@ -27,7 +27,7 @@ fi
 
 # ── Allow MCP tools in user settings if not already allowed ──────────
 if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
-  if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+  if ! jq -e --arg pat "$TOOL_PATTERN" '.permissions.allow // [] | map(select(contains($pat))) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp)"
     jq --arg pat "${TOOL_PATTERN}*" '.permissions.allow = (.permissions.allow // []) + [$pat]' "$SETTINGS" > "$TMPFILE"
     mv "$TMPFILE" "$SETTINGS"
