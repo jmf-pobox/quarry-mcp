@@ -14,6 +14,16 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Tool
+
+- **Dev/prod plugin isolation** — plugin installs from `main` now use a `-dev` suffix (`quarry-dev`) so development and marketplace installs don't collide. Session-start hook derives MCP namespace from `plugin.json` name instead of hardcoding. Restore script auto-detects release commits and guards against no-op runs. (#74, #75)
+
+### Infra
+
+- **Installer stdin fix** — `install.sh` no longer consumes stdin when piped via `curl | sh`, preventing silent hangs during interactive prompts
+- **Doctor exit code** — `quarry doctor` no longer aborts the installer when it reports warnings (#71)
+- Development status classifier updated from Alpha to Beta
+
 ## [0.10.1] - 2026-02-28
 
 ### Infra
