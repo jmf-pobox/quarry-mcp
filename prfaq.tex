@@ -250,6 +250,12 @@ indicating the document, page, content type, and source format.
 Because Quarry runs entirely on your machine, your documents never leave your
 laptop. No cloud service, no API key, no subscription.
 
+As a Claude Code plugin, Quarry goes further---it captures knowledge
+automatically. Web pages Claude fetches during a session are ingested into your
+knowledge base. Conversation transcripts are preserved before context compaction.
+Your project directory is registered the moment a session starts. Every hook is
+fail-open and non-blocking: you work normally, and the knowledge base grows.
+
 \prsection{Customer Quote}
 
 \begin{customerquote}
@@ -373,6 +379,17 @@ run \texttt{quarry install}, and start searching.
   even though the words don't overlap. This is the same retrieval approach used
   by commercial RAG systems, running locally with a 768-dimension embedding
   model.
+\end{faqpair}
+
+\begin{faqpair}{Do I have to manually index everything?}\label{faq:passive-capture}
+  No. The CLI and MCP server require explicit commands, but the Claude Code
+  plugin captures knowledge passively through hooks~\cite{claude-code-hooks}.
+  Three hooks ship today: auto-ingesting URLs Claude fetches during a session,
+  preserving conversation transcripts before context compaction, and registering
+  your project directory at session start. All hooks are fail-open (a failure
+  never blocks your session) and per-project configurable via
+  \texttt{.claude/quarry.local.md}. You work normally; the knowledge base grows
+  in the background.
 \end{faqpair}
 
 % ── Internal FAQs (Business-facing) ──────────────────────────────────────────
@@ -502,7 +519,9 @@ run \texttt{quarry install}, and start searching.
   HTML parsing, URL and sitemap crawling, text file parsing, source code
   parsing (30+ languages via Tree-sitter), semantic search with metadata
   filtering (page type, source format), directory sync, named databases,
-  MCP server, CLI, HTTP API server.
+  MCP server, CLI, HTTP API server, Claude Code plugin with ambient knowledge
+  hooks (session start auto-registration, post web fetch auto-ingestion,
+  pre-compact transcript preservation).
 
   \textbf{In progress:} macOS menu bar companion app
   (\href{https://github.com/punt-labs/quarry-menubar}{quarry-menubar}).
@@ -692,7 +711,7 @@ Shipped features that form the core product.
   \featureitem{Local OCR}{Extract text from scanned documents and images on-device with no cloud account required.}\label{feat:local-ocr}
   \featureitem{Named databases}{Organize separate knowledge bases by project or domain to keep search results relevant.}\label{feat:named-databases}
   \featureitem{One-command install}{A single \texttt{quarry install} auto-configures MCP for Claude Code and Claude Desktop with zero manual setup.}\label{feat:one-command-install}
-  \featureitem{Claude Code plugin}{Plugin with ambient knowledge hooks so Quarry context is available in every Claude Code session.}\label{feat:claude-plugin}
+  \featureitem{Claude Code plugin}{Plugin with three ambient knowledge hooks: auto-register project directory on session start, auto-ingest URLs Claude fetches (post web fetch), and preserve conversation transcripts before context compaction (pre-compact). All hooks fail-open, non-blocking, per-project configurable.}\label{feat:claude-plugin}
 \end{enumerate}
 
 \subsection*{Must Do Next}
@@ -709,6 +728,7 @@ Highest-leverage item for addressing adoption risks identified in
 Roadmap features that expand the product but are not required for core value.
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Knowledge recall system}{Knowledge briefing surfaced at session start and local-first nudge before web searches that overlap with already-indexed content. Extends the plugin's passive capture with active recall, closing the learn/recall loop.}\label{feat:knowledge-recall}
   \featureitem{Live filesystem monitoring}{Automatic re-indexing via \texttt{sync --watch} eliminates the manual sync step after file changes.}\label{feat:sync-watch}
   \featureitem{Google Drive connector}{Extends ingestion beyond local files to cloud-hosted documents without requiring manual download.}\label{feat:google-drive}
   \featureitem{PII detection and redaction}{Prevents sensitive personal information from entering the search index, addressing enterprise and privacy-conscious users.}\label{feat:pii-redaction}
