@@ -903,7 +903,10 @@ class TestCliErrors:
 
 
 class TestJsonOutput:
-    """Every user-facing command must produce valid JSON when --json is set."""
+    """Non-interactive commands must produce valid JSON when --json is set.
+
+    Interactive/server commands (install, doctor, serve, mcp) are excluded.
+    """
 
     def test_find_json(self):
         _reset_globals()
