@@ -228,17 +228,52 @@ def remember(
     return format_ingest_summary(result)
 
 
-@mcp.tool()
+@mcp.tool(name="list")
 @_handle_errors
-def get_documents(collection: str = "") -> str:
-    """List all indexed documents with metadata.
+def list_resources(
+    kind: str,
+    collection: str = "",
+) -> str:
+    """List documents, collections, databases, or registrations.
 
     Args:
-        collection: Optional collection name to filter by.
+        kind: What to list — "documents", "collections", "databases",
+              or "registrations".
+        collection: Optional collection filter (only for kind="documents").
     """
-    db = _db()
-    docs = list_documents(db, collection_filter=collection or None)
-    return format_documents(docs)
+    if kind == "documents":
+        db = _db()
+        docs = list_documents(db, collection_filter=collection or None)
+        return format_documents(docs)
+    if kind == "collections":
+        db = _db()
+        cols = db_list_collections(db)
+        return format_collections(cols)
+    if kind == "databases":
+        settings = _settings()
+        databases = discover_databases(settings.quarry_root)
+        return format_databases(databases, current=_db_name or "default")
+    if kind == "registrations":
+        settings = _settings()
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = registry_list(conn)
+        finally:
+            conn.close()
+        return format_registrations(
+            [
+                {
+                    "directory": r.directory,
+                    "collection": r.collection,
+                    "registered_at": r.registered_at,
+                }
+                for r in regs
+            ]
+        )
+    return (
+        f"Error: unknown kind {kind!r}. "
+        "Use documents, collections, databases, or registrations."
+    )
 
 
 @mcp.tool()
@@ -279,15 +314,6 @@ def delete_document(
     db = _db()
     deleted = db_delete_document(db, document_name, collection=collection or None)
     return format_delete_summary("document", document_name, deleted)
-
-
-@mcp.tool()
-@_handle_errors
-def list_collections() -> str:
-    """List all collections with document and chunk counts."""
-    db = _db()
-    cols = db_list_collections(db)
-    return format_collections(cols)
 
 
 @mcp.tool()
@@ -381,28 +407,6 @@ def sync_all_registrations() -> str:
 
 @mcp.tool()
 @_handle_errors
-def list_registrations() -> str:
-    """List all registered directories."""
-    settings = _settings()
-    conn = open_registry(settings.registry_path)
-    try:
-        regs = registry_list(conn)
-    finally:
-        conn.close()
-    return format_registrations(
-        [
-            {
-                "directory": r.directory,
-                "collection": r.collection,
-                "registered_at": r.registered_at,
-            }
-            for r in regs
-        ]
-    )
-
-
-@mcp.tool()
-@_handle_errors
 def status() -> str:
     """Get database status: document/chunk counts, storage size, and model info."""
     settings = _settings()
@@ -438,19 +442,6 @@ def status() -> str:
             "embedding_model": settings.embedding_model,
         }
     )
-
-
-@mcp.tool()
-@_handle_errors
-def list_databases() -> str:
-    """List all named databases with document counts and storage size.
-
-    Discovers databases under the quarry data root directory.
-    Each database is a named directory containing a LanceDB store.
-    """
-    settings = _settings()
-    databases = discover_databases(settings.quarry_root)
-    return format_databases(databases, current=_db_name or "default")
 
 
 @mcp.tool()

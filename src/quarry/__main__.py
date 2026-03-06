@@ -167,9 +167,9 @@ def ingest_cmd(
 
         console.print()
         console.print(json.dumps(result, indent=2))
-        if result.get("errors"):
-            for err in result["errors"]:
-                err_console.print(f"  {err}", style="red")
+        errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
+        for err in errors:
+            err_console.print(f"  {err}", style="red")
     else:
         file_path = Path(source).resolve()
         if file_path.is_dir():
@@ -297,9 +297,28 @@ def find_cmd(
         print(text[:300])
 
 
-@app.command(name="list")
+list_app = typer.Typer(
+    help="List documents, collections, databases, or registrations.",
+    invoke_without_command=True,
+)
+app.add_typer(list_app, name="list")
+
+
+@list_app.callback(invoke_without_command=True)
+def list_callback(ctx: typer.Context) -> None:
+    """List documents, collections, databases, or registrations."""
+    if ctx.invoked_subcommand is None:
+        err_console.print(
+            "Error: specify a noun — documents, collections, "
+            "databases, or registrations.",
+            style="red",
+        )
+        raise typer.Exit(code=1)
+
+
+@list_app.command(name="documents")
 @_cli_errors
-def list_cmd(
+def list_documents_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Filter by collection")
     ] = "",
@@ -340,9 +359,9 @@ def delete_cmd(
         print(f"Deleted {deleted} chunks for {document_name!r}")
 
 
-@app.command(name="collections")
+@list_app.command(name="collections")
 @_cli_errors
-def collections_cmd() -> None:
+def list_collections_cmd() -> None:
     """List all collections with document and chunk counts."""
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
@@ -422,9 +441,9 @@ def deregister(
     print(f"Deregistered collection {collection!r} ({removed} files)")
 
 
-@app.command(name="registrations")
+@list_app.command(name="registrations")
 @_cli_errors
-def registrations_cmd() -> None:
+def list_registrations_cmd() -> None:
     """List all registered directories."""
     settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
@@ -499,9 +518,9 @@ def sync_cmd(
             console.print(f"  error: {err}", style="red")
 
 
-@app.command(name="databases")
+@list_app.command(name="databases")
 @_cli_errors
-def databases_cmd() -> None:
+def list_databases_cmd() -> None:
     """List named databases with document counts and storage size."""
     settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)

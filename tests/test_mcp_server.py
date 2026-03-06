@@ -10,12 +10,9 @@ from quarry.mcp_server import (
     delete_document,
     deregister_directory,
     find,
-    get_documents,
     get_page,
     ingest,
-    list_collections,
-    list_databases,
-    list_registrations,
+    list_resources as mcp_list,
     register_directory,
     remember as mcp_remember,
     status,
@@ -387,7 +384,7 @@ class TestFind:
         assert "def main():" in result
 
 
-class TestGetDocuments:
+class TestListDocuments:
     def test_returns_document_table(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_docs = [
@@ -409,7 +406,7 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=mock_docs),
         ):
-            result = get_documents()
+            result = mcp_list("documents")
 
         assert "a.pdf" in result
         assert "b.pdf" in result
@@ -422,7 +419,7 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
         ):
-            result = get_documents()
+            result = mcp_list("documents")
 
         assert "No documents" in result
 
@@ -433,7 +430,7 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]) as mock_list,
         ):
-            get_documents(collection="math")
+            mcp_list("documents", collection="math")
 
         call_kwargs = mock_list.call_args[1]
         assert call_kwargs["collection_filter"] == "math"
@@ -481,7 +478,7 @@ class TestListCollections:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
         ):
-            result = list_collections()
+            result = mcp_list("collections")
 
         assert "math" in result
         assert "science" in result
@@ -610,17 +607,16 @@ class TestListRegistrations:
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
-        # Register first
         with patch("quarry.mcp_server._settings", return_value=settings):
             register_directory(str(d), "course")
-            result = list_registrations()
+            result = mcp_list("registrations")
         assert "course" in result
         assert "COLLECTION" in result
 
     def test_empty(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with patch("quarry.mcp_server._settings", return_value=settings):
-            result = list_registrations()
+            result = mcp_list("registrations")
         assert "No registered directories" in result
 
 
@@ -680,7 +676,7 @@ class TestListDatabases:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
         ):
-            result = list_databases()
+            result = mcp_list("databases")
 
         assert "default" in result
         assert "coding" in result
@@ -700,7 +696,7 @@ class TestListDatabases:
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = list_databases()
+                result = mcp_list("databases")
             assert "* work" in result
         finally:
             mcp_mod._db_name = original
@@ -719,7 +715,7 @@ class TestListDatabases:
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = list_databases()
+                result = mcp_list("databases")
             assert "* default" in result
         finally:
             mcp_mod._db_name = original
@@ -730,7 +726,7 @@ class TestListDatabases:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=[]),
         ):
-            result = list_databases()
+            result = mcp_list("databases")
         assert "No databases" in result
 
 
