@@ -363,11 +363,20 @@ def _check_claude_code_mcp() -> CheckResult:
             message="claude CLI not found on PATH",
             required=False,
         )
-    result = subprocess.run(  # noqa: S603
-        [claude_path, "mcp", "list"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            [claude_path, "mcp", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message="claude CLI timed out",
+            required=False,
+        )
     if result.returncode != 0:
         return CheckResult(
             name="Claude Code MCP",

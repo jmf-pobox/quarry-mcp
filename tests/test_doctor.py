@@ -359,6 +359,16 @@ class TestCheckEnvironment:
             "_check_embedding_model",
             lambda: _ok(name="Embedding model", passed=True, message="mocked"),
         )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_claude_code_mcp",
+            lambda: _ok(name="Claude Code MCP", passed=True, message="mocked"),
+        )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_claude_desktop_mcp",
+            lambda: _ok(name="Claude Desktop MCP", passed=True, message="mocked"),
+        )
         assert check_environment() == 0
 
     def test_returns_one_when_required_fails(self, tmp_path: Path, monkeypatch: MP):
