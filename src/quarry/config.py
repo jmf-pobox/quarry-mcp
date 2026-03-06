@@ -8,6 +8,7 @@ Textract/async tuning, and SageMaker endpoint.
 from __future__ import annotations
 
 import logging
+import tomllib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -87,13 +88,13 @@ def read_default_db() -> str | None:
     if not _CONFIG_PATH.exists():
         return None
     text = _CONFIG_PATH.read_text()
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("database"):
-            _, _, value = line.partition("=")
-            value = value.strip().strip('"').strip("'")
-            if value and value != "default":
-                return value
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    value = data.get("default", {}).get("database", "")
+    if value and value != "default":
+        return str(value)
     return None
 
 

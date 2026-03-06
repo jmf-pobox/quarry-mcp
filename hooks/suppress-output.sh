@@ -64,10 +64,11 @@ if [[ "$TOOL_NAME" == "list" ]]; then
     COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
     # Detect kind from header line
     LABEL="items"
-    if [[ "$FIRST_LINE" == *"DOCUMENT"* ]]; then LABEL="documents"; fi
-    if [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"; fi
-    if [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"; fi
-    if [[ "$FIRST_LINE" == *"DIRECTORY"* ]]; then LABEL="registrations"; fi
+    if [[ "$FIRST_LINE" == *"DIRECTORY"* ]]; then LABEL="registrations"
+    elif [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"
+    elif [[ "$FIRST_LINE" == *"DOCUMENT"* ]]; then LABEL="documents"
+    elif [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"
+    fi
     jq -n --arg summary "${COUNT} ${LABEL}" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",

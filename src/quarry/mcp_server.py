@@ -453,8 +453,8 @@ def status() -> str:
 def use_database(name: str) -> str:
     """Switch to a different named database for subsequent operations.
 
-    All tools (search, ingest, sync, etc.) will use the selected database
-    until changed again. Use list_databases to see available databases.
+    All tools (find, ingest, sync, etc.) will use the selected database
+    until changed again. Use list(kind="databases") to see available databases.
 
     Args:
         name: Database name (e.g., 'coding', 'work'). Use 'default' for

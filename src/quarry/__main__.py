@@ -90,8 +90,8 @@ def main_callback(
         err_console.print("Error: --verbose and --quiet are mutually exclusive.")
         raise typer.Exit(code=1)
     _json_output = output_json
-    _verbose = verbose
-    _quiet = quiet
+    _verbose = verbose  # reserved: commands will use for extra output
+    _quiet = quiet  # reserved: commands will use to suppress non-essential output
     _global_db = database
     if ctx.invoked_subcommand is None:
         print(ctx.get_help())
@@ -224,11 +224,19 @@ def remember(
         str,
         typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
     ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite/--no-overwrite",
+            help="Replace existing document with same name",
+        ),
+    ] = True,
 ) -> None:
     """Ingest inline content from stdin.
 
     Reads text from stdin and indexes it for semantic search. Requires
-    --name to set the document name.
+    --name to set the document name. Overwrites by default; use
+    --no-overwrite to skip if the document already exists.
 
     Examples:
         echo "meeting notes" | quarry remember --name notes.md
@@ -251,7 +259,7 @@ def remember(
         name,
         db,
         settings,
-        overwrite=True,
+        overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
     )
