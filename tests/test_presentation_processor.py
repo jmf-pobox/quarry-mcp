@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from pptx import Presentation
@@ -18,8 +18,26 @@ from quarry.presentation_processor import (
 
 if TYPE_CHECKING:
     from pptx.presentation import Presentation as PresentationType
+    from pptx.shapes.base import BaseShape
     from pptx.slide import Slide
     from pptx.table import Table
+
+
+class _TextShape(Protocol):
+    """Structural type for pptx shapes that have a writable ``.text`` attribute."""
+
+    text: str
+
+
+def _set_shape_text(shape: BaseShape | None, text: str) -> None:
+    """Set .text on a pptx shape, narrowing away None.
+
+    ``BaseShape`` doesn't expose ``.text`` in its type stubs, but concrete
+    shape subclasses (title placeholders, body placeholders, text-boxes) do
+    have it at runtime.
+    """
+    assert shape is not None, "expected a non-None shape"
+    cast("_TextShape", shape).text = text
 
 
 def _make_pptx(tmp_path: Path, name: str = "test.pptx") -> Path:
@@ -126,8 +144,8 @@ class TestExtractSlideText:
     def test_title_and_body(self):
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "My Title"
-        slide.placeholders[1].text = "Subtitle text"
+        _set_shape_text(slide.shapes.title, "My Title")
+        _set_shape_text(slide.placeholders[1], "Subtitle text")
 
         title, body, _notes = _extract_slide_text(slide)
 
@@ -140,6 +158,7 @@ class TestExtractSlideText:
         txbox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
         txbox.text_frame.text = "Body content"
         notes_slide = slide.notes_slide
+        assert notes_slide.notes_text_frame is not None
         notes_slide.notes_text_frame.text = "These are speaker notes."
 
         _title, _body, notes = _extract_slide_text(slide)
@@ -216,8 +235,8 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Slide One"
-        slide.placeholders[1].text = "Content here"
+        _set_shape_text(slide.shapes.title, "Slide One")
+        _set_shape_text(slide.placeholders[1], "Content here")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -233,8 +252,8 @@ class TestProcessPresentationFile:
         prs = _new_prs()
         for i in range(3):
             slide = prs.slides.add_slide(prs.slide_layouts[0])
-            slide.shapes.title.text = f"Slide {i + 1}"
-            slide.placeholders[1].text = f"Content {i + 1}"
+            _set_shape_text(slide.shapes.title, f"Slide {i + 1}")
+            _set_shape_text(slide.placeholders[1], f"Content {i + 1}")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -249,12 +268,12 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide1 = prs.slides.add_slide(prs.slide_layouts[0])
-        slide1.shapes.title.text = "Real Slide"
-        slide1.placeholders[1].text = "Has content"
+        _set_shape_text(slide1.shapes.title, "Real Slide")
+        _set_shape_text(slide1.placeholders[1], "Has content")
         prs.slides.add_slide(prs.slide_layouts[5])  # blank
         slide3 = prs.slides.add_slide(prs.slide_layouts[0])
-        slide3.shapes.title.text = "Another Slide"
-        slide3.placeholders[1].text = "More content"
+        _set_shape_text(slide3.shapes.title, "Another Slide")
+        _set_shape_text(slide3.placeholders[1], "More content")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -291,9 +310,10 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Slide Title"
-        slide.placeholders[1].text = "Body"
+        _set_shape_text(slide.shapes.title, "Slide Title")
+        _set_shape_text(slide.placeholders[1], "Body")
         notes_slide = slide.notes_slide
+        assert notes_slide.notes_text_frame is not None
         notes_slide.notes_text_frame.text = "Remember to mention X"
         _save(prs, f)
 
@@ -307,8 +327,8 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path, "deck.pptx")
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Title"
-        slide.placeholders[1].text = "Body"
+        _set_shape_text(slide.shapes.title, "Title")
+        _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -319,8 +339,8 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Title"
-        slide.placeholders[1].text = "Body"
+        _set_shape_text(slide.shapes.title, "Title")
+        _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
         pages = process_presentation_file(f, document_name="subdir/deck.pptx")
@@ -331,8 +351,8 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Title"
-        slide.placeholders[1].text = "Body"
+        _set_shape_text(slide.shapes.title, "Title")
+        _set_shape_text(slide.placeholders[1], "Body")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -354,8 +374,8 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Revenue: $4.2M & Growth"
-        slide.placeholders[1].text = "Details"
+        _set_shape_text(slide.shapes.title, "Revenue: $4.2M & Growth")
+        _set_shape_text(slide.placeholders[1], "Details")
         _save(prs, f)
 
         pages = process_presentation_file(f)
@@ -380,9 +400,10 @@ class TestProcessPresentationFile:
         f = _make_pptx(tmp_path)
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
-        slide.shapes.title.text = "Title"
-        slide.placeholders[1].text = "Body"
+        _set_shape_text(slide.shapes.title, "Title")
+        _set_shape_text(slide.placeholders[1], "Body")
         notes_slide = slide.notes_slide
+        assert notes_slide.notes_text_frame is not None
         notes_slide.notes_text_frame.text = "Budget: $500 & costs"
         _save(prs, f)
 
@@ -396,6 +417,7 @@ class TestProcessPresentationFile:
         prs = _new_prs()
         slide = prs.slides.add_slide(prs.slide_layouts[5])
         notes_slide = slide.notes_slide
+        assert notes_slide.notes_text_frame is not None
         notes_slide.notes_text_frame.text = "Hidden context note"
         _save(prs, f)
 

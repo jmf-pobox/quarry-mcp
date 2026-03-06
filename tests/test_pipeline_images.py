@@ -114,8 +114,12 @@ class TestIngestImageSinglePage:
 
         assert result["document_name"] == "photo.png"
         assert result["chunks"] == 1
-        assert result["format"] == "PNG"
-        assert result["image_pages"] == 1
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "PNG"
+        image_pages = result.get("image_pages")
+        assert image_pages is not None
+        assert image_pages == 1
 
     def test_jpeg(self, monkeypatch, tmp_path: Path) -> None:
         jpg_file = tmp_path / "photo.jpg"
@@ -130,7 +134,9 @@ class TestIngestImageSinglePage:
         result = ingest_document(jpg_file, db, _settings())
 
         assert result["document_name"] == "photo.jpg"
-        assert result["format"] == "JPEG"
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "JPEG"
 
     def test_bmp_conversion(self, monkeypatch, tmp_path: Path) -> None:
         bmp_file = tmp_path / "scan.bmp"
@@ -167,7 +173,9 @@ class TestIngestImageSinglePage:
         result = ingest_document(bmp_file, db, _settings())
 
         assert result["document_name"] == "scan.bmp"
-        assert result["format"] == "BMP"
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "BMP"
         # Verify bytes were converted to PNG
         assert len(ocr_calls) == 1
         assert ocr_calls[0][:4] == b"\x89PNG"
@@ -206,7 +214,9 @@ class TestIngestImageSinglePage:
         db = MagicMock()
         result = ingest_document(webp_file, db, _settings())
 
-        assert result["format"] == "WEBP"
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "WEBP"
         assert ocr_calls[0][:4] == b"\x89PNG"
 
     def test_mpo_conversion(self, monkeypatch, tmp_path: Path) -> None:
@@ -243,7 +253,9 @@ class TestIngestImageSinglePage:
         db = MagicMock()
         result = ingest_document(mpo_file, db, _settings())
 
-        assert result["format"] == "MPO"
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "MPO"
         # Verify bytes were converted to JPEG (not PNG)
         assert len(ocr_calls) == 1
         assert ocr_calls[0][:2] == b"\xff\xd8"  # JPEG SOI marker
@@ -333,8 +345,12 @@ class TestIngestImageMultiPage:
         result = ingest_document(tiff_file, db, _settings())
 
         assert result["document_name"] == "scan.tiff"
-        assert result["format"] == "TIFF"
-        assert result["image_pages"] == 3
+        fmt = result.get("format")
+        assert fmt is not None
+        assert fmt == "TIFF"
+        image_pages = result.get("image_pages")
+        assert image_pages is not None
+        assert image_pages == 3
         assert result["chunks"] == 1
         # Verify backend's ocr_document was called with all pages
         ocr_backend.ocr_document.assert_called_once()

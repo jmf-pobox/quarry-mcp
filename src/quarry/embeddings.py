@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE: int = 32
 
 
-def _download_model_files() -> tuple[str, str]:
+def download_model_files() -> tuple[str, str]:
     """Download ONNX model and tokenizer from HuggingFace Hub.
 
     Makes network requests. Used by ``quarry install`` only.
@@ -60,7 +60,7 @@ def _load_model_files() -> tuple[str, str]:
         return _load_local_model_files()
     except OSError:
         logger.info("Embedding model not cached — downloading (~500 MB)")
-        return _download_model_files()
+        return download_model_files()
 
 
 def _load_local_model_files() -> tuple[str, str]:
@@ -155,7 +155,7 @@ class OnnxEmbeddingBackend:
                     "attention_mask": attention_mask,
                 },
             )
-            parts.append(sentence_embedding)
+            parts.append(np.asarray(sentence_embedding, dtype=np.float32))
             logger.debug("Embedded batch %d/%d", i + 1, n_batches)
 
         result: NDArray[np.float32] = np.concatenate(parts)

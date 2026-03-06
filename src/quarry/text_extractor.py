@@ -43,7 +43,8 @@ def extract_text_pages(
         )
         for page_num in page_numbers:
             page = doc[page_num - 1]
-            text = page.get_text().strip()
+            raw = page.get_text()
+            text = str(raw).strip()
             logger.debug("Page %d: %d chars", page_num, len(text))
             results.append(
                 PageContent(

@@ -359,6 +359,16 @@ class TestCheckEnvironment:
             "_check_embedding_model",
             lambda: _ok(name="Embedding model", passed=True, message="mocked"),
         )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_claude_code_mcp",
+            lambda: _ok(name="Claude Code MCP", passed=True, message="mocked"),
+        )
+        monkeypatch.setattr(
+            doctor_mod,
+            "_check_claude_desktop_mcp",
+            lambda: _ok(name="Claude Desktop MCP", passed=True, message="mocked"),
+        )
         assert check_environment() == 0
 
     def test_returns_one_when_required_fails(self, tmp_path: Path, monkeypatch: MP):
@@ -478,7 +488,7 @@ class TestRunInstall:
     def test_creates_data_directory(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
-        with patch("quarry.embeddings._download_model_files") as mock_dl:
+        with patch("quarry.embeddings.download_model_files") as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
@@ -487,7 +497,7 @@ class TestRunInstall:
     def test_downloads_model(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
-        with patch("quarry.embeddings._download_model_files") as mock_dl:
+        with patch("quarry.embeddings.download_model_files") as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             run_install()
         mock_dl.assert_called_once()
@@ -497,7 +507,7 @@ class TestRunInstall:
         _mock_install_deps(monkeypatch)
         data_dir = tmp_path / ".quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
-        with patch("quarry.embeddings._download_model_files") as mock_dl:
+        with patch("quarry.embeddings.download_model_files") as mock_dl:
             mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
             result = run_install()
         assert result == 0
@@ -507,7 +517,7 @@ class TestRunInstall:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
         with patch(
-            "quarry.embeddings._download_model_files",
+            "quarry.embeddings.download_model_files",
             side_effect=RuntimeError("network error"),
         ):
             result = run_install()

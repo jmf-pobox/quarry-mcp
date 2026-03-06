@@ -121,9 +121,15 @@ class TestIngestDocument:
         result = ingest_document(pdf_file, db, _settings())
 
         assert result["document_name"] == "test.pdf"
-        assert result["total_pages"] == 2
-        assert result["text_pages"] == 2
-        assert result["image_pages"] == 0
+        total_pages = result.get("total_pages")
+        assert total_pages is not None
+        assert total_pages == 2
+        text_page_count = result.get("text_pages")
+        assert text_page_count is not None
+        assert text_page_count == 2
+        image_page_count = result.get("image_pages")
+        assert image_page_count is not None
+        assert image_page_count == 0
         assert result["chunks"] == 1
 
     def test_all_image_pages(self, monkeypatch, tmp_path: Path):
@@ -168,8 +174,12 @@ class TestIngestDocument:
         db = MagicMock()
         result = ingest_document(pdf_file, db, _settings())
 
-        assert result["image_pages"] == 1
-        assert result["text_pages"] == 0
+        image_pages = result.get("image_pages")
+        assert image_pages is not None
+        assert image_pages == 1
+        text_pages = result.get("text_pages")
+        assert text_pages is not None
+        assert text_pages == 0
 
     def test_no_text_extracted(self, monkeypatch, tmp_path: Path):
         pdf_file = tmp_path / "test.pdf"
@@ -294,7 +304,9 @@ class TestIngestDocument:
 
         assert result["document_name"] == "notes.txt"
         assert result["chunks"] == 1
-        assert result["sections"] == 2
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections == 2
 
     def test_dispatches_spreadsheet_file(self, monkeypatch, tmp_path: Path):
         csv_file = tmp_path / "data.csv"
@@ -334,7 +346,9 @@ class TestIngestDocument:
 
         assert result["document_name"] == "data.csv"
         assert result["chunks"] == 1
-        assert result["sheets"] == 1
+        sheets = result.get("sheets")
+        assert sheets is not None
+        assert sheets == 1
 
     def test_dispatches_html_file(self, monkeypatch, tmp_path: Path):
         html_file = tmp_path / "article.html"
@@ -422,7 +436,9 @@ class TestIngestText:
 
         assert result["document_name"] == "clip.txt"
         assert result["chunks"] == 1
-        assert result["sections"] == 1
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections == 1
 
     def test_overwrite_deletes_existing(self, monkeypatch):
         monkeypatch.setattr(

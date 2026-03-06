@@ -26,7 +26,8 @@ def analyze_pdf(pdf_path: Path) -> list[PageAnalysis]:
         logger.debug("Opened %s: %d pages", pdf_path.name, len(doc))
         for page_num in range(len(doc)):
             page = doc[page_num]
-            text = page.get_text().strip()
+            raw = page.get_text()
+            text = str(raw).strip()
             text_length = len(text)
 
             page_type = (
