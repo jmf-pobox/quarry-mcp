@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import importlib.metadata
 import json
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated
 
@@ -112,20 +113,25 @@ def _emit(data: object, text: str = "") -> None:
         print(text)
 
 
+@contextlib.contextmanager
 def _progress(
     label: str,
-) -> tuple[Progress | None, Callable[[str], None] | None]:
-    """Return a (progress, callback) pair.  Both are None in JSON mode."""
+) -> Generator[Callable[[str], None] | None]:
+    """Yield a progress callback, or None in JSON mode.
+
+    In human mode the Rich progress bar is started and guaranteed to stop
+    on exit (including exceptions).  In JSON mode nothing is rendered.
+    """
     if _json_output:
-        return None, None
+        yield None
+        return
     p = Progress(console=console)
-    p.start()
     task = p.add_task(label, total=None)
-
-    def on_progress(message: str) -> None:
-        p.update(task, description=message)
-
-    return p, on_progress
+    p.start()
+    try:
+        yield lambda message: p.update(task, description=message)
+    finally:
+        p.stop()
 
 
 def _resolved_settings(db: str = "") -> Settings:
@@ -181,18 +187,15 @@ def ingest_cmd(
     is_url = source.startswith(("http://", "https://"))
 
     if is_url:
-        progress, cb = _progress(f"Fetching {source}")
-        result = ingest_auto(
-            source,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            progress_callback=cb,
-        )
-        if progress is not None:
-            progress.stop()
-            console.print()
+        with _progress(f"Fetching {source}") as cb:
+            result = ingest_auto(
+                source,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=collection,
+                progress_callback=cb,
+            )
 
         _emit(result, json.dumps(result, indent=2))
         errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
@@ -209,18 +212,15 @@ def ingest_cmd(
             raise typer.Exit(code=1)
         col = derive_collection(file_path, explicit=collection or None)
 
-        progress, cb = _progress(f"Processing {file_path.name}")
-        result = ingest_document(
-            file_path,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=col,
-            progress_callback=cb,
-        )
-        if progress is not None:
-            progress.stop()
-            console.print()
+        with _progress(f"Processing {file_path.name}") as cb:
+            result = ingest_document(
+                file_path,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=col,
+                progress_callback=cb,
+            )
 
         _emit(result, json.dumps(result, indent=2))
 
@@ -651,17 +651,13 @@ def sync_cmd(
     logger.info("Using %d sync workers", effective_workers)
     db = get_db(settings.lancedb_path)
 
-    progress, cb = _progress("Syncing")
-    results = sync_all(
-        db,
-        settings,
-        max_workers=effective_workers,
-        progress_callback=cb,
-    )
-
-    if progress is not None:
-        progress.stop()
-        console.print()
+    with _progress("Syncing") as cb:
+        results = sync_all(
+            db,
+            settings,
+            max_workers=effective_workers,
+            progress_callback=cb,
+        )
 
     json_data = {
         col: {
