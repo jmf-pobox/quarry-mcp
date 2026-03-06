@@ -25,7 +25,7 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document, ingest_sitemap, ingest_url
+from quarry.pipeline import ingest_auto, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -123,153 +123,81 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     return wrapper
 
 
-@app.command(name="ingest-file")
+@app.command(name="ingest")
 @_cli_errors
-def ingest_file(
-    file_path: Annotated[Path, typer.Argument(help="Path to document file")],
-    overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Replace existing data")
-    ] = False,
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Collection name")
-    ] = "",
-) -> None:
-    """Ingest a document from a file path.
-
-    Supports PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX),
-    spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source code files.
-    """
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-    resolved = file_path.resolve()
-    col = derive_collection(resolved, explicit=collection or None)
-
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Processing {file_path.name}", total=None)
-
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
-
-        result = ingest_document(
-            resolved,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=col,
-            progress_callback=on_progress,
-        )
-
-    console.print()
-    console.print(json.dumps(result, indent=2))
-
-
-@app.command(name="ingest-url")
-@_cli_errors
-def ingest_url_cmd(
-    url: Annotated[str, typer.Argument(help="HTTP(S) URL to fetch and ingest")],
-    overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Replace existing data")
-    ] = False,
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Collection name")
-    ] = "default",
-    name: Annotated[
-        str, typer.Option("--name", "-n", help="Document name (defaults to URL)")
-    ] = "",
-) -> None:
-    """Fetch a webpage and ingest its content.
-
-    Downloads the HTML from the given URL, strips boilerplate (nav, scripts,
-    etc.), converts to Markdown, and indexes the text for semantic search.
-    """
-    settings = _resolved_settings()
-    db = get_db(settings.lancedb_path)
-
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Fetching {url}", total=None)
-
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
-
-        result = ingest_url(
-            url,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=name or None,
-            progress_callback=on_progress,
-        )
-
-    console.print()
-    console.print(json.dumps(result, indent=2))
-
-
-@app.command(name="ingest-sitemap")
-@_cli_errors
-def ingest_sitemap_cmd(
-    url: Annotated[str, typer.Argument(help="Sitemap URL to crawl")],
-    collection: Annotated[
+def ingest_cmd(
+    source: Annotated[
         str,
-        typer.Option("--collection", "-c", help="Collection name (default: domain)"),
-    ] = "",
-    include: Annotated[
-        list[str] | None,
-        typer.Option("--include", help="URL path glob to include (repeatable)"),
-    ] = None,
-    exclude: Annotated[
-        list[str] | None,
-        typer.Option("--exclude", help="URL path glob to exclude (repeatable)"),
-    ] = None,
-    limit: Annotated[
-        int, typer.Option("--limit", help="Max URLs to ingest (0 = no limit)")
-    ] = 0,
+        typer.Argument(help="File path or URL to ingest"),
+    ],
     overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Force re-ingest regardless of lastmod")
+        bool, typer.Option("--overwrite", help="Replace existing data")
     ] = False,
-    workers: Annotated[
-        int, typer.Option("--workers", "-w", help="Parallel fetch workers")
-    ] = 4,
-    delay: Annotated[
-        float,
-        typer.Option("--delay", help="Base delay between fetches in seconds"),
-    ] = 0.5,
+    collection: Annotated[
+        str, typer.Option("--collection", "-c", help="Collection name")
+    ] = "",
 ) -> None:
-    """Crawl a sitemap and ingest all discovered URLs.
+    """Ingest a file or URL into the knowledge base.
 
-    Parses the sitemap XML, discovers all page URLs (following sitemap
-    indexes recursively), applies include/exclude URL path filters, skips
-    pages unchanged since last ingest (via <lastmod>), and ingests the
-    rest in parallel.
+    Auto-detects the source type: URLs (http/https) use smart sitemap
+    discovery with single-page fallback; local paths are ingested as files.
+
+    Supports PDF, images, PPTX, XLSX, CSV, HTML, TXT, MD, TEX, DOCX, and
+    source code files.
     """
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
+    is_url = source.startswith(("http://", "https://"))
 
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Crawling {url}", total=None)
+    if is_url:
+        with Progress(console=console) as progress:
+            task = progress.add_task(f"Fetching {source}", total=None)
 
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
+            def on_url_progress(message: str) -> None:
+                progress.update(task, description=message)
 
-        result = ingest_sitemap(
-            url,
-            db,
-            settings,
-            collection=collection,
-            include=include,
-            exclude=exclude,
-            limit=limit,
-            overwrite=overwrite,
-            workers=workers,
-            delay=delay,
-            progress_callback=on_progress,
-        )
+            result = ingest_auto(
+                source,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=collection,
+                progress_callback=on_url_progress,
+            )
 
-    console.print()
-    console.print(json.dumps(result, indent=2))
-    if result["errors"]:
-        for err in result["errors"]:
-            err_console.print(f"  {err}", style="red")
+        console.print()
+        console.print(json.dumps(result, indent=2))
+        if result.get("errors"):
+            for err in result["errors"]:
+                err_console.print(f"  {err}", style="red")
+    else:
+        file_path = Path(source).resolve()
+        if file_path.is_dir():
+            err_console.print(
+                f"Error: {source!r} is a directory. "
+                "Use 'quarry register' to track directories.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        col = derive_collection(file_path, explicit=collection or None)
+
+        with Progress(console=console) as progress:
+            task = progress.add_task(f"Processing {file_path.name}", total=None)
+
+            def on_file_progress(message: str) -> None:
+                progress.update(task, description=message)
+
+            result = ingest_document(
+                file_path,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=col,
+                progress_callback=on_file_progress,
+            )
+
+        console.print()
+        console.print(json.dumps(result, indent=2))
 
 
 @app.command(name="find")

@@ -536,7 +536,7 @@ class TestDbOption:
 
 
 class TestIngestCmd:
-    def test_ingests_document(self, tmp_path: Path):
+    def test_ingests_file(self, tmp_path: Path):
         f = tmp_path / "doc.txt"
         f.write_text("hello")
         mock_result = {"document_name": "doc.txt", "chunks": 1}
@@ -551,9 +551,43 @@ class TestIngestCmd:
                 return_value=mock_result,
             ),
         ):
-            result = runner.invoke(app, ["ingest-file", str(f)])
+            result = runner.invoke(app, ["ingest", str(f)])
         assert result.exit_code == 0
         assert "doc.txt" in result.output
+
+    def test_ingest_url_uses_auto(self):
+        mock_result = {
+            "document_name": "example.com",
+            "chunks": 5,
+            "collection": "default",
+        }
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_auto",
+                return_value=mock_result,
+            ),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/docs"])
+        assert result.exit_code == 0
+
+    def test_ingest_directory_errors(self, tmp_path: Path):
+        d = tmp_path / "subdir"
+        d.mkdir()
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+        ):
+            result = runner.invoke(app, ["ingest", str(d)])
+        assert result.exit_code == 1
+        assert "directory" in result.output.lower()
 
     def test_ingest_passes_db(self, tmp_path: Path):
         _reset_globals()
@@ -571,7 +605,7 @@ class TestIngestCmd:
                 return_value={"chunks": 1},
             ),
         ):
-            result = runner.invoke(app, ["--db", "work", "ingest-file", str(f)])
+            result = runner.invoke(app, ["--db", "work", "ingest", str(f)])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 

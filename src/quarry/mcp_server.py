@@ -40,8 +40,6 @@ from quarry.pipeline import (
     ingest_auto as pipeline_ingest_auto,
     ingest_content as pipeline_ingest_content,
     ingest_document,
-    ingest_sitemap as pipeline_ingest_sitemap,
-    ingest_url as pipeline_ingest_url,
 )
 from quarry.sync import sync_all as engine_sync_all
 from quarry.sync_registry import (
@@ -147,26 +145,42 @@ def find(
 
 @mcp.tool()
 @_handle_errors
-def ingest_file(
-    file_path: str,
+def ingest(
+    source: str,
     overwrite: bool = False,
     collection: str = "",
 ) -> str:
-    """Ingest a document from a file path: OCR, chunk, embed, and index for search.
+    """Ingest a file or URL into the knowledge base.
 
-    Supported formats: PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX),
-    spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source code files.
+    Auto-detects the source type: URLs (http/https) use smart sitemap
+    discovery with single-page fallback; local paths are ingested as files.
+
+    Supported formats: PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations
+    (PPTX), spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source
+    code files.
 
     Args:
-        file_path: Path to the document file.
-        overwrite: If true, replace existing data for this document.
-        collection: Collection name. Auto-derived from parent directory if empty.
+        source: File path or HTTP(S) URL to ingest.
+        overwrite: If true, replace existing data.
+        collection: Collection name. Auto-derived if empty.
     """
-    path = Path(file_path)
     settings = _settings()
     db = _db()
-    col = derive_collection(path, explicit=collection or None)
 
+    if source.startswith(("http://", "https://")):
+        result = pipeline_ingest_auto(
+            source,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection or "",
+        )
+        if "sitemap_url" in result:
+            return format_sitemap_summary(result)
+        return format_ingest_summary(result)
+
+    path = Path(source)
+    col = derive_collection(path, explicit=collection or None)
     result = ingest_document(
         path,
         db,
@@ -174,7 +188,6 @@ def ingest_file(
         overwrite=overwrite,
         collection=col,
     )
-
     return format_ingest_summary(result)
 
 
@@ -189,7 +202,7 @@ def ingest_content(
 ) -> str:
     """Ingest inline text content: chunk, embed, and index for search.
 
-    Use this instead of ingest_file when you have the text content directly
+    Use this instead of ingest when you have the text content directly
     (e.g., clipboard, API response, or sandbox-uploaded files in Claude Desktop).
 
     Args:
@@ -212,135 +225,6 @@ def ingest_content(
         format_hint=format_hint,
     )
 
-    return format_ingest_summary(result)
-
-
-@mcp.tool()
-@_handle_errors
-def ingest_url(
-    url: str,
-    overwrite: bool = False,
-    collection: str = "default",
-    document_name: str = "",
-) -> str:
-    """Fetch a webpage and ingest its content for search.
-
-    Downloads the HTML, strips boilerplate (nav, scripts, etc.), converts to
-    Markdown, and indexes the text. Use this for documentation pages, blog
-    posts, or any web content you want to search semantically.
-
-    Args:
-        url: HTTP(S) URL to fetch.
-        overwrite: If true, replace existing data for this URL.
-        collection: Collection name (default: 'default').
-        document_name: Override for stored name. Defaults to the URL.
-    """
-    settings = _settings()
-    db = _db()
-
-    result = pipeline_ingest_url(
-        url,
-        db,
-        settings,
-        overwrite=overwrite,
-        collection=collection,
-        document_name=document_name or None,
-    )
-
-    return format_ingest_summary(result)
-
-
-@mcp.tool()
-@_handle_errors
-def ingest_sitemap(
-    url: str,
-    collection: str = "",
-    include_patterns: str = "",
-    exclude_patterns: str = "",
-    limit: int = 0,
-    overwrite: bool = False,
-    workers: int = 4,
-    delay: float = 0.5,
-) -> str:
-    """Crawl a sitemap and ingest all discovered URLs.
-
-    Parses the sitemap XML, discovers all page URLs (following sitemap
-    indexes recursively), applies include/exclude filters, skips pages
-    unchanged since last ingest (via <lastmod>), and ingests the rest
-    in parallel with rate limiting.
-
-    Args:
-        url: Sitemap URL (e.g., https://docs.example.com/sitemap.xml).
-        collection: Collection name. Defaults to sitemap URL domain.
-        include_patterns: Comma-separated URL path globs to include.
-        exclude_patterns: Comma-separated URL path globs to exclude.
-        limit: Max URLs to ingest (0 = no limit).
-        overwrite: Force re-ingest regardless of lastmod.
-        workers: Parallel fetch workers (default 4).
-        delay: Base delay between fetches in seconds (default 0.5).
-    """
-    settings = _settings()
-    db = _db()
-
-    include = [p.strip() for p in include_patterns.split(",") if p.strip()] or None
-    exclude = [p.strip() for p in exclude_patterns.split(",") if p.strip()] or None
-
-    result = pipeline_ingest_sitemap(
-        url,
-        db,
-        settings,
-        collection=collection,
-        include=include,
-        exclude=exclude,
-        limit=limit,
-        overwrite=overwrite,
-        workers=workers,
-        delay=delay,
-    )
-
-    return format_sitemap_summary(result)
-
-
-@mcp.tool()
-@_handle_errors
-def ingest_auto(
-    url: str,
-    overwrite: bool = False,
-    collection: str = "",
-    workers: int = 4,
-    delay: float = 0.5,
-) -> str:
-    """Smart URL ingestion: auto-discovers a sitemap and bulk-crawls, or
-    falls back to single-page ingestion.
-
-    Give this any page URL on a documentation site (e.g.,
-    ``https://docs.example.com/guide``). It will probe for a sitemap via
-    ``robots.txt`` and ``/sitemap.xml``, then crawl the sitemap with a
-    path-prefix filter derived from the input URL. If no sitemap is found,
-    it ingests the single page.
-
-    Args:
-        url: Any HTTP(S) URL on the target site.
-        overwrite: Force re-ingest regardless of existing data.
-        collection: Collection name. Defaults to URL hostname.
-        workers: Parallel fetch workers for sitemap crawl (default 4).
-        delay: Base delay between fetches in seconds (default 0.5).
-    """
-    settings = _settings()
-    db = _db()
-
-    result = pipeline_ingest_auto(
-        url,
-        db,
-        settings,
-        overwrite=overwrite,
-        collection=collection or "",
-        workers=workers,
-        delay=delay,
-    )
-
-    if "sitemap_url" in result:
-        return format_sitemap_summary(result)
     return format_ingest_summary(result)
 
 

@@ -12,8 +12,8 @@ from quarry.mcp_server import (
     find,
     get_documents,
     get_page,
+    ingest,
     ingest_content as mcp_ingest_content,
-    ingest_file,
     list_collections,
     list_databases,
     list_registrations,
@@ -516,7 +516,7 @@ class TestHandleErrors:
                 side_effect=FileNotFoundError("no such file: bad.pdf"),
             ),
         ):
-            result = ingest_file("/tmp/bad.pdf")
+            result = ingest("/tmp/bad.pdf")
 
         assert result.startswith("Error:")
         assert "FileNotFoundError" in result
