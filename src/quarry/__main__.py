@@ -17,6 +17,7 @@ from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
 from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
 from quarry.database import (
+    count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
     discover_databases,
@@ -26,7 +27,7 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.formatting import format_document_detail
+from quarry.formatting import format_document_detail, format_status
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -379,6 +380,47 @@ def show_cmd(
         err_console.print(f"Document {document_name!r} not found", style="red")
         raise typer.Exit(code=1)
     print(format_document_detail(match[0]))
+
+
+@app.command(name="status")
+@_cli_errors
+def status_cmd() -> None:
+    """Show database status: documents, chunks, storage, model info."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    docs = list_documents(db)
+    chunks = count_chunks(db)
+    cols = db_list_collections(db)
+
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = list_registrations(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
+
+    db_size_bytes = (
+        sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
+        if settings.lancedb_path.exists()
+        else 0
+    )
+
+    print(
+        format_status(
+            {
+                "document_count": len(docs),
+                "collection_count": len(cols),
+                "chunk_count": chunks,
+                "registered_directories": len(regs),
+                "database_path": str(settings.lancedb_path),
+                "database_size_bytes": db_size_bytes,
+                "embedding_model": settings.embedding_model,
+            }
+        )
+    )
 
 
 @app.command(name="delete")

@@ -128,6 +128,25 @@ class TestShowCmd:
         assert "not found" in result.output
 
 
+class TestStatusCmd:
+    def test_shows_status(self):
+        mock_settings = _mock_settings()
+        mock_settings.registry_path.exists.return_value = False
+        mock_settings.lancedb_path.exists.return_value = False
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=mock_settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.__main__.count_chunks", return_value=0),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0
+        assert "Documents" in result.output
+        assert "Chunks" in result.output
+
+
 class TestDeleteCmd:
     def test_deletes_document(self):
         with (
