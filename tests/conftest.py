@@ -81,7 +81,7 @@ def aws_settings(embedding_model_name: str, _warm_embedding_model: None) -> Sett
 
     session = botocore.session.get_session()
     creds = session.get_credentials()
-    if creds is None:
+    if creds is None:  # pyright: ignore[reportUnnecessaryComparison]  # botocore stubs lie
         pytest.skip("No AWS credentials available")
     resolved = creds.get_frozen_credentials()
     if not resolved.access_key or not resolved.secret_key:

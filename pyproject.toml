@@ -185,6 +185,17 @@ ignore_missing_imports = true
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
+# Third-party libs without stubs (pyarrow, boto3, lancedb, RapidOCR, ONNX, PyMuPDF)
+reportMissingTypeStubs = false
+reportUnknownLambdaType = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportMissingParameterType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+# Internal cross-module imports use _-prefixed helpers
+reportPrivateUsage = false
+reportUnusedFunction = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"

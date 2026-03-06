@@ -89,7 +89,9 @@ class TestTextFileIngestAndSearch:
         result = ingest_document(path, lance_db, integration_settings)
 
         assert result["document_name"] == "photosynthesis.txt"
-        assert int(str(result.get("sections"))) >= 3
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections >= 3
         assert int(str(result["chunks"])) >= 3
 
 
@@ -105,7 +107,9 @@ class TestMarkdownIngestAndSearch:
         result = ingest_document(
             FIXTURES_DIR / "guide.md", lance_db, integration_settings
         )
-        assert int(str(result.get("sections"))) == 3
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections == 3
 
         results = _search(lance_db, "SQL relational databases", integration_settings)
         assert len(results) > 0
@@ -139,7 +143,9 @@ class TestLatexIngestion:
         result = ingest_document(
             FIXTURES_DIR / "calculus.tex", lance_db, integration_settings
         )
-        assert int(str(result.get("sections"))) >= 2
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections >= 2
 
 
 # ── PDF tests ────────────────────────────────────────────────────────
@@ -153,8 +159,12 @@ class TestPdfIngestion:
         pdf_fixture: Path,
     ) -> None:
         result = ingest_document(pdf_fixture, lance_db, integration_settings)
-        assert int(str(result.get("total_pages"))) == 2
-        assert int(str(result.get("text_pages"))) == 2
+        total_pages = result.get("total_pages")
+        assert total_pages is not None
+        assert total_pages == 2
+        text_pages = result.get("text_pages")
+        assert text_pages is not None
+        assert text_pages == 2
 
         results = _search(
             lance_db, "software engineering testing", integration_settings
@@ -187,7 +197,9 @@ class TestDocxIngestion:
         docx_fixture: Path,
     ) -> None:
         result = ingest_document(docx_fixture, lance_db, integration_settings)
-        assert int(str(result.get("sections"))) == 2
+        sections = result.get("sections")
+        assert sections is not None
+        assert sections == 2
 
         results = _search(
             lance_db, "virtual memory process scheduling", integration_settings
