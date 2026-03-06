@@ -146,3 +146,31 @@ git status                  # Must show "up to date with origin"
 ```
 
 Work is NOT complete until `git push` succeeds.
+
+# Agent Instructions
+
+This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit).
+
+## Quality Gates
+
+Run before every commit. Zero violations, zero errors, all tests green.
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy src/ tests/ && uv run pyright && uv run pytest
+```
+
+## Standards References
+- [Python](https://github.com/punt-labs/punt-kit/blob/main/standards/python.md)
+- [Plugins](https://github.com/punt-labs/punt-kit/blob/main/standards/plugins.md)
+- [GitHub](https://github.com/punt-labs/punt-kit/blob/main/standards/github.md)
+- [Workflow](https://github.com/punt-labs/punt-kit/blob/main/standards/workflow.md)
+- [CLI](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
+
+## Available Tooling
+
+| Tool | What It Does |
+|------|-------------|
+| `punt init` | Scaffold missing files (CI, config, permissions, beads) |
+| `punt audit` | Check compliance against Punt Labs standards |
+| `punt audit --fix` | Auto-create missing mechanical files |
+| `/punt reconcile` | LLM-powered contextual reconciliation (workflows, CLAUDE.md, permissions) |
