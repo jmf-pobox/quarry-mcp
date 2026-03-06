@@ -94,8 +94,7 @@ def main_callback(
     _quiet = quiet
     _global_db = database
     if ctx.invoked_subcommand is None:
-        # No subcommand → show help
-        ctx.get_help()
+        print(ctx.get_help())
         raise typer.Exit(code=0)
 
 
@@ -467,7 +466,7 @@ def delete_cmd(
         label = f"collection {name!r}"
     elif kind == "document":
         deleted = db_delete_document(db, name, collection=collection or None)
-        label = name
+        label = f"{name!r}"
     else:
         err_console.print(
             f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
@@ -476,9 +475,9 @@ def delete_cmd(
         raise typer.Exit(code=1)
 
     if deleted == 0:
-        print(f"No data found for {label!r}")
+        print(f"No data found for {label}")
     else:
-        print(f"Deleted {deleted} chunks for {label!r}")
+        print(f"Deleted {deleted} chunks for {label}")
 
 
 @list_app.command(name="collections")
