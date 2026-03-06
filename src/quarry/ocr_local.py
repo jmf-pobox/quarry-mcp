@@ -7,7 +7,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 import fitz
 from PIL import Image
@@ -44,14 +44,17 @@ def _get_engine() -> _OcrEngine:
     (~17 MB) and loaded on first call.
     """
     global _engine
-    if _engine is None:
+    engine = _engine
+    if engine is None:
         with _engine_lock:
-            if _engine is None:
+            engine = _engine
+            if engine is None:
                 from rapidocr import RapidOCR  # noqa: PLC0415
 
-                _engine = RapidOCR()
+                engine = cast("_OcrEngine", RapidOCR())
+                _engine = engine
                 logger.info("RapidOCR engine initialized")
-    return _engine
+    return engine
 
 
 def _extract_text(result: _OcrResult) -> str:

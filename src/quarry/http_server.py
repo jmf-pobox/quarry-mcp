@@ -68,7 +68,7 @@ class _QuarryContext:
 class QuarryHTTPHandler(BaseHTTPRequestHandler):
     """Handle GET requests for Quarry search, documents, collections, status."""
 
-    server: QuarryHTTPServer
+    server: QuarryHTTPServer  # pyright: ignore[reportIncompatibleVariableOverride]
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)

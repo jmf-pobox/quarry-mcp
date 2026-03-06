@@ -155,7 +155,7 @@ class OnnxEmbeddingBackend:
                     "attention_mask": attention_mask,
                 },
             )
-            parts.append(sentence_embedding)
+            parts.append(np.asarray(sentence_embedding, dtype=np.float32))
             logger.debug("Embedded batch %d/%d", i + 1, n_batches)
 
         result: NDArray[np.float32] = np.concatenate(parts)

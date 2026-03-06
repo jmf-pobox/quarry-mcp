@@ -1,0 +1,13 @@
+{
+  "include": ["src/", "tests/"],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "standard",
+  "reportMissingTypeStubs": false,
+  "reportUnknownLambdaType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownParameterType": false,
+  "reportMissingParameterType": false,
+  "reportUnknownVariableType": false,
+  "reportPrivateUsage": false,
+  "reportUnusedFunction": false
+}

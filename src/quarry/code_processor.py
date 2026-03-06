@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import cast
 
-from tree_sitter_language_pack import get_parser
+from tree_sitter_language_pack import SupportedLanguage, get_parser
 
 from quarry.models import PageContent, PageType
 from quarry.text_processor import _read_text_with_fallback, _sections_to_pages
@@ -158,7 +159,7 @@ def _split_with_treesitter(
     signaling the caller to use fallback splitting.
     """
     try:
-        parser = get_parser(language)
+        parser = get_parser(cast("SupportedLanguage", language))
     except (KeyError, ValueError, LookupError):
         logger.info(
             "tree-sitter language %r not available for %s; "

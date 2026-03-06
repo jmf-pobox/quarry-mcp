@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 import fitz
@@ -19,6 +20,9 @@ from quarry.ocr_local import (
     _render_pdf_page,
 )
 
+if TYPE_CHECKING:
+    from quarry.ocr_local import _OcrResult
+
 
 def _settings(**overrides: object) -> Settings:
     defaults: dict[str, object] = {
@@ -31,12 +35,12 @@ def _settings(**overrides: object) -> Settings:
     return Settings.model_validate(defaults)
 
 
-def _mock_ocr_result(texts: list[str] | None) -> SimpleNamespace:
+def _mock_ocr_result(texts: list[str] | None) -> _OcrResult:
     """Create a mock RapidOCROutput with the given text lines."""
     if texts is None:
-        return SimpleNamespace(txts=None, scores=None)
+        return cast("_OcrResult", SimpleNamespace(txts=None, scores=None))
     scores = tuple(0.95 for _ in texts)
-    return SimpleNamespace(txts=tuple(texts), scores=scores)
+    return cast("_OcrResult", SimpleNamespace(txts=tuple(texts), scores=scores))
 
 
 def _create_pdf(tmp_path: Path, text: str, num_pages: int = 1) -> Path:

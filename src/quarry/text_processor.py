@@ -171,7 +171,9 @@ def _process_docx(
     current: list[str] = []
 
     for para in doc.paragraphs:
-        is_heading = para.style is not None and para.style.name.startswith("Heading")
+        style = para.style
+        style_name = style.name if style is not None else None
+        is_heading = style_name is not None and style_name.startswith("Heading")
         if is_heading and current:
             sections.append("\n".join(current))
             current = []
