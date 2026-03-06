@@ -94,7 +94,7 @@ def _db() -> LanceDB:
 
 @mcp.tool()
 @_handle_errors
-def search_documents(
+def find(
     query: str,
     limit: int = 10,
     document_filter: str = "",

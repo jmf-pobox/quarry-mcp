@@ -9,6 +9,7 @@ from quarry.mcp_server import (
     delete_collection,
     delete_document,
     deregister_directory,
+    find,
     get_documents,
     get_page,
     ingest_content as mcp_ingest_content,
@@ -17,7 +18,6 @@ from quarry.mcp_server import (
     list_databases,
     list_registrations,
     register_directory,
-    search_documents,
     status,
     sync_all_registrations,
     use_database,
@@ -219,7 +219,7 @@ def _mock_embedding_backend(mock_vector: np.ndarray) -> MagicMock:
     return backend
 
 
-class TestSearchDocuments:
+class TestFind:
     def test_returns_results(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
@@ -244,7 +244,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = search_documents("revenue growth")
+            result = find("revenue growth")
 
         assert "revenue growth" in result
         assert "1 result" in result
@@ -265,7 +265,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
-            search_documents("test", limit=100)
+            find("test", limit=100)
 
         call_kwargs = mock_search.call_args[1]
         assert call_kwargs["limit"] == 50
@@ -290,7 +290,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
-            search_documents("test", **{tool_kwarg: tool_value})
+            find("test", **{tool_kwarg: tool_value})
 
         assert mock_search.call_args[1][expected_key] == expected_value
 
@@ -381,7 +381,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = search_documents("test")
+            result = find("test")
 
         assert "script.py" in result
         assert "def main():" in result

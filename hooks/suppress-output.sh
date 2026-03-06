@@ -25,7 +25,7 @@ RESULT=$(echo "$INPUT" | jq -r '.tool_response' | jq -r '.result // .')
 
 # Data tools: summary in panel, full output via additionalContext.
 
-if [[ "$TOOL_NAME" == "search_documents" ]]; then
+if [[ "$TOOL_NAME" == "find" ]]; then
   FIRST_LINE=$(printf '%s' "$RESULT" | head -1)
   if [[ "$FIRST_LINE" == "No results"* ]]; then
     jq -n --arg r "$FIRST_LINE" '{

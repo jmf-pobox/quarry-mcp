@@ -272,9 +272,9 @@ def ingest_sitemap_cmd(
             err_console.print(f"  {err}", style="red")
 
 
-@app.command(name="search")
+@app.command(name="find")
 @_cli_errors
-def search_cmd(
+def find_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
     document: Annotated[

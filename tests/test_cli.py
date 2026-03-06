@@ -99,7 +99,7 @@ class TestDeleteCmd:
         assert "No data found" in result.output
 
 
-class TestSearchCmd:
+class TestFindCmd:
     def test_prints_results(self):
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
@@ -123,7 +123,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=mock_results),
         ):
-            result = runner.invoke(app, ["search", "revenue growth"])
+            result = runner.invoke(app, ["find", "revenue growth"])
 
         assert result.exit_code == 0
         assert "report.pdf" in result.output
@@ -144,7 +144,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]),
         ):
-            result = runner.invoke(app, ["search", "nonexistent topic"])
+            result = runner.invoke(app, ["find", "nonexistent topic"])
 
         assert result.exit_code == 0
 
@@ -155,7 +155,7 @@ class TestSearchCmd:
         expected_key: str,
         expected_value: str | None,
     ) -> None:
-        """Invoke search with one CLI flag and assert it reaches search()."""
+        """Invoke find with one CLI flag and assert it reaches search()."""
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
@@ -168,7 +168,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]) as mock_search,
         ):
-            result = runner.invoke(app, ["search", "query", cli_flag, cli_value])
+            result = runner.invoke(app, ["find", "query", cli_flag, cli_value])
 
         assert result.exit_code == 0
         assert mock_search.call_args[1][expected_key] == expected_value
@@ -210,7 +210,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]) as mock_search,
         ):
-            result = runner.invoke(app, ["search", "query"])
+            result = runner.invoke(app, ["find", "query"])
 
         assert result.exit_code == 0
         call_kwargs = mock_search.call_args[1]
@@ -486,7 +486,7 @@ class TestDbOption:
             ),
             patch("quarry.__main__.search", return_value=[]),
         ):
-            result = runner.invoke(app, ["--db", "work", "search", "query"])
+            result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
