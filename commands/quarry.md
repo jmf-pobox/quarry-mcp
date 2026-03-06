@@ -13,10 +13,10 @@ Parse the first token as a subcommand. Default to `status` if empty.
 ## Subcommands
 
 - **status** (default): Call `mcp__plugin_quarry_quarry__status`
-- **sync**: Run `quarry sync` via the Bash tool with `run_in_background: true`. This avoids blocking the conversation during long syncs. You will be notified when it completes. If a non-default database was selected via `use_database`, pass `--db <name>` to the CLI command.
-- **collections**: Call `mcp__plugin_quarry_quarry__list_collections`
-- **databases**: Call `mcp__plugin_quarry_quarry__list_databases`
-- **registrations**: Call `mcp__plugin_quarry_quarry__list_registrations`
+- **sync**: Run `quarry sync` via the Bash tool with `run_in_background: true`. This avoids blocking the conversation during long syncs. You will be notified when it completes. If a non-default database was selected via `use`, pass `--db <name>` to the CLI command.
+- **collections**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"collections"`
+- **databases**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"databases"`
+- **registrations**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"registrations"`
 
 ## Output
 
