@@ -16,6 +16,17 @@ across `transform`, `index`, and `connector`).
 
 ### Tool
 
+- **CLI/MCP surface rework** — unified verbs across CLI, MCP tools, and slash commands:
+  - `search` → `find` (CLI and MCP)
+  - `ingest-file`, `ingest-url`, `ingest-sitemap` → unified `ingest` with auto-detection
+  - New `remember` command for inline text content (CLI + MCP + `/remember` slash command)
+  - New `show` command for document metadata and page text (replaces `get_page`)
+  - New `status` CLI command (database dashboard)
+  - New `use` CLI command with persistent default database (`~/.quarry/config.toml`)
+  - `list` requires a noun: `list documents|collections|databases|registrations`
+  - `delete` and `delete-collection` → unified `delete` with `--type` flag
+  - Global flags: `--json`, `--verbose`, `--quiet`, `--db`
+  - `version` command
 - **Dev/prod plugin isolation** — plugin installs from `main` now use a `-dev` suffix (`quarry-dev`) so development and marketplace installs don't collide. Session-start hook derives MCP namespace from `plugin.json` name instead of hardcoding. Restore script auto-detects release commits and guards against no-op runs. (#74, #75)
 
 ### Infra

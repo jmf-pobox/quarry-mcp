@@ -6,18 +6,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from quarry.mcp_server import (
-    delete_collection,
-    delete_document,
+    delete,
     deregister_directory,
-    get_documents,
-    get_page,
-    ingest_content as mcp_ingest_content,
-    ingest_file,
-    list_collections,
-    list_databases,
-    list_registrations,
+    find,
+    ingest,
+    list_resources as mcp_list,
     register_directory,
-    search_documents,
+    remember as mcp_remember,
+    show,
     status,
     sync_all_registrations,
     use_database,
@@ -34,7 +30,7 @@ def _settings(tmp_path: Path) -> MagicMock:
     return s
 
 
-class TestIngestText:
+class TestRemember:
     def test_calls_pipeline_and_returns_summary(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_result = {
@@ -51,7 +47,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            result = mcp_ingest_content("# Hello\nWorld", "notes.md")
+            result = mcp_remember("# Hello\nWorld", "notes.md")
 
         mock_ingest.assert_called_once()
         call_args = mock_ingest.call_args
@@ -76,7 +72,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_content("text", "a.txt", format_hint="markdown")
+            mcp_remember("text", "a.txt", format_hint="markdown")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["format_hint"] == "markdown"
@@ -97,7 +93,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_content("text", "a.txt", collection="ml-101")
+            mcp_remember("text", "a.txt", collection="ml-101")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["collection"] == "ml-101"
@@ -111,7 +107,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=5) as mock_del,
         ):
-            result = delete_document("report.pdf")
+            result = delete("report.pdf")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection=None
@@ -126,7 +122,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_delete_document", return_value=0),
         ):
-            result = delete_document("nonexistent.pdf")
+            result = delete("nonexistent.pdf")
 
         assert "0 chunks" in result
 
@@ -137,7 +133,7 @@ class TestDeleteDocument:
             patch("quarry.mcp_server._db") as mock_db,
             patch("quarry.mcp_server.db_delete_document", return_value=2) as mock_del,
         ):
-            result = delete_document("report.pdf", collection="math")
+            result = delete("report.pdf", collection="math")
 
         mock_del.assert_called_once_with(
             mock_db.return_value, "report.pdf", collection="math"
@@ -219,7 +215,7 @@ def _mock_embedding_backend(mock_vector: np.ndarray) -> MagicMock:
     return backend
 
 
-class TestSearchDocuments:
+class TestFind:
     def test_returns_results(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_vector = np.zeros(768, dtype=np.float32)
@@ -244,7 +240,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = search_documents("revenue growth")
+            result = find("revenue growth")
 
         assert "revenue growth" in result
         assert "1 result" in result
@@ -265,7 +261,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
-            search_documents("test", limit=100)
+            find("test", limit=100)
 
         call_kwargs = mock_search.call_args[1]
         assert call_kwargs["limit"] == 50
@@ -290,7 +286,7 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=[]) as mock_search,
         ):
-            search_documents("test", **{tool_kwarg: tool_value})
+            find("test", **{tool_kwarg: tool_value})
 
         assert mock_search.call_args[1][expected_key] == expected_value
 
@@ -381,13 +377,13 @@ class TestSearchDocuments:
             ),
             patch("quarry.mcp_server.search", return_value=mock_results),
         ):
-            result = search_documents("test")
+            result = find("test")
 
         assert "script.py" in result
         assert "def main():" in result
 
 
-class TestGetDocuments:
+class TestListDocuments:
     def test_returns_document_table(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_docs = [
@@ -409,7 +405,7 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=mock_docs),
         ):
-            result = get_documents()
+            result = mcp_list("documents")
 
         assert "a.pdf" in result
         assert "b.pdf" in result
@@ -422,7 +418,7 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]),
         ):
-            result = get_documents()
+            result = mcp_list("documents")
 
         assert "No documents" in result
 
@@ -433,13 +429,13 @@ class TestGetDocuments:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.list_documents", return_value=[]) as mock_list,
         ):
-            get_documents(collection="math")
+            mcp_list("documents", collection="math")
 
         call_kwargs = mock_list.call_args[1]
         assert call_kwargs["collection_filter"] == "math"
 
 
-class TestGetPage:
+class TestShow:
     def test_returns_page_text(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with (
@@ -450,7 +446,7 @@ class TestGetPage:
                 return_value="The quick brown fox",
             ),
         ):
-            result = get_page("report.pdf", 3)
+            result = show("report.pdf", page_number=3)
 
         assert "report.pdf" in result
         assert "Page: 3" in result
@@ -463,10 +459,43 @@ class TestGetPage:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.get_page_text", return_value=None),
         ):
-            result = get_page("missing.pdf", 99)
+            result = show("missing.pdf", page_number=99)
 
         assert "No data found" in result
         assert "missing.pdf" in result
+
+    def test_returns_metadata_without_page(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        mock_doc = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[mock_doc]),
+        ):
+            result = show("report.pdf")
+
+        assert "report.pdf" in result
+        assert "math" in result
+        assert "10" in result
+
+    def test_metadata_not_found(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server.list_documents", return_value=[]),
+        ):
+            result = show("missing.pdf")
+
+        assert "not found" in result
 
 
 class TestListCollections:
@@ -481,7 +510,7 @@ class TestListCollections:
             patch("quarry.mcp_server._db"),
             patch("quarry.mcp_server.db_list_collections", return_value=mock_cols),
         ):
-            result = list_collections()
+            result = mcp_list("collections")
 
         assert "math" in result
         assert "science" in result
@@ -498,7 +527,7 @@ class TestDeleteCollection:
                 "quarry.mcp_server.db_delete_collection", return_value=50
             ) as mock_del,
         ):
-            result = delete_collection("math")
+            result = delete("math", kind="collection")
 
         mock_del.assert_called_once_with(mock_db.return_value, "math")
         assert "math" in result
@@ -516,7 +545,7 @@ class TestHandleErrors:
                 side_effect=FileNotFoundError("no such file: bad.pdf"),
             ),
         ):
-            result = ingest_file("/tmp/bad.pdf")
+            result = ingest("/tmp/bad.pdf")
 
         assert result.startswith("Error:")
         assert "FileNotFoundError" in result
@@ -532,7 +561,7 @@ class TestHandleErrors:
                 side_effect=ValueError("bad format hint"),
             ),
         ):
-            result = mcp_ingest_content("text", "doc.txt")
+            result = mcp_remember("text", "doc.txt")
 
         assert "ValueError" in result
         assert "bad format hint" in result
@@ -610,17 +639,16 @@ class TestListRegistrations:
         settings = _settings(tmp_path)
         d = tmp_path / "course"
         d.mkdir()
-        # Register first
         with patch("quarry.mcp_server._settings", return_value=settings):
             register_directory(str(d), "course")
-            result = list_registrations()
+            result = mcp_list("registrations")
         assert "course" in result
         assert "COLLECTION" in result
 
     def test_empty(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         with patch("quarry.mcp_server._settings", return_value=settings):
-            result = list_registrations()
+            result = mcp_list("registrations")
         assert "No registered directories" in result
 
 
@@ -680,7 +708,7 @@ class TestListDatabases:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
         ):
-            result = list_databases()
+            result = mcp_list("databases")
 
         assert "default" in result
         assert "coding" in result
@@ -700,7 +728,7 @@ class TestListDatabases:
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = list_databases()
+                result = mcp_list("databases")
             assert "* work" in result
         finally:
             mcp_mod._db_name = original
@@ -719,7 +747,7 @@ class TestListDatabases:
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
             ):
-                result = list_databases()
+                result = mcp_list("databases")
             assert "* default" in result
         finally:
             mcp_mod._db_name = original
@@ -730,7 +758,7 @@ class TestListDatabases:
             patch("quarry.mcp_server._settings", return_value=settings),
             patch("quarry.mcp_server.discover_databases", return_value=[]),
         ):
-            result = list_databases()
+            result = mcp_list("databases")
         assert "No databases" in result
 
 

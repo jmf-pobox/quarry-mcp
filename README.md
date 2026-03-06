@@ -80,7 +80,7 @@ The easiest way to install is the [**.mcpb file**](https://github.com/punt-labs/
 
 Once installed, Claude can search, index, and manage your documents through conversation. Ask it to index a file, search your knowledge base, or crawl a documentation site — Quarry handles the rest behind the scenes.
 
-**Note:** Uploaded files in Claude Desktop live in a sandbox that Quarry cannot access. Use `ingest_content` for uploaded content, or provide local file paths to `ingest_file`.
+**Note:** Uploaded files in Claude Desktop live in a sandbox that Quarry cannot access. Use `remember` for uploaded content, or provide local file paths to `ingest`.
 
 <details>
 <summary>Manual MCP setup</summary>
@@ -163,33 +163,37 @@ The CLI gives you direct control over indexing and search. Everything Claude can
 
 ```bash
 # Ingest
-quarry ingest-file report.pdf                  # index a file
-quarry ingest-file report.pdf --overwrite      # replace existing data
-quarry ingest-url https://example.com/page     # index a webpage
-quarry ingest-sitemap https://docs.example.com/sitemap.xml  # crawl a sitemap
-quarry ingest-sitemap URL --include '/docs/*' --exclude '/docs/v1/*' --limit 50
+quarry ingest report.pdf                       # index a file
+quarry ingest report.pdf --overwrite           # replace existing data
+quarry ingest https://example.com/page         # index a webpage (auto-detects sitemaps)
+echo "meeting notes" | quarry remember --name notes.md  # index inline text
 
 # Search
-quarry search "revenue trends"                 # semantic search
-quarry search "revenue" --limit 5              # limit results
-quarry search "tests" --page-type code         # only code results
-quarry search "revenue" --source-format .xlsx  # only spreadsheet results
-quarry search "deploy" --document README.md    # search within one document
+quarry find "revenue trends"                   # semantic search
+quarry find "revenue" --limit 5                # limit results
+quarry find "tests" --page-type code           # only code results
+quarry find "revenue" --source-format .xlsx    # only spreadsheet results
+quarry find "deploy" --document README.md      # search within one document
 
 # Manage documents
-quarry list                                    # list indexed documents
+quarry list documents                          # list indexed documents
+quarry list collections                        # list collections
+quarry show report.pdf                         # document metadata
+quarry show report.pdf --page 1               # page text
 quarry delete report.pdf                       # remove a document
-quarry collections                             # list collections
+quarry delete math --type collection           # remove a collection
 
 # Directory sync
 quarry register ~/Documents/notes              # watch a directory
 quarry sync                                    # re-index all registered directories
-quarry registrations                           # list registered directories
+quarry list registrations                      # list registered directories
 quarry deregister notes                        # stop watching
 
 # System
+quarry status                                  # database dashboard
+quarry version                                 # show version
+quarry list databases                          # list all databases
 quarry doctor                                  # health check
-quarry databases                               # list all databases with stats
 quarry serve                                   # start HTTP API server
 ```
 
@@ -198,10 +202,11 @@ quarry serve                                   # start HTTP API server
 Keep separate databases for different purposes:
 
 ```bash
-quarry ingest-file report.pdf --db work
-quarry ingest-file recipe.md --db personal
-quarry search "revenue" --db work
-quarry databases                               # list all databases
+quarry use work                                # set persistent default
+quarry ingest report.pdf                       # uses 'work' database
+quarry ingest recipe.md --db personal          # override per-call
+quarry find "revenue"                          # searches 'work' database
+quarry list databases                          # list all databases
 ```
 
 Each database is fully isolated — its own vector index and sync registry. The default database is called `default`.
@@ -267,23 +272,16 @@ Both Claude Desktop and Claude Code access Quarry through these MCP tools. You d
 
 | Tool | What it does |
 |------|-------------|
-| `search_documents` | Semantic search with optional filters |
-| `ingest_file` | Index a file by path |
-| `ingest_url` | Fetch and index a webpage |
-| `ingest_auto` | Smart URL ingestion: auto-discovers sitemaps, bulk-crawls or single-page |
-| `ingest_sitemap` | Crawl a specific sitemap URL |
-| `ingest_content` | Index inline text (for uploads, clipboard, etc.) |
-| `get_documents` | List indexed documents |
-| `get_page` | Get raw text for a specific page |
-| `delete_document` | Remove a document |
-| `list_collections` | List collections |
-| `delete_collection` | Remove a collection |
+| `find` | Semantic search with optional filters |
+| `ingest` | Index a file or URL (auto-detects type) |
+| `remember` | Index inline text (for uploads, clipboard, etc.) |
+| `show` | Show document metadata or a specific page's text |
+| `list` | List documents, collections, databases, or registrations |
+| `delete` | Remove a document or collection |
 | `register_directory` | Register a directory for sync |
 | `deregister_directory` | Remove a directory registration |
 | `sync_all_registrations` | Re-index all registered directories |
-| `list_registrations` | List registered directories |
-| `list_databases` | List named databases |
-| `use_database` | Switch to a different database |
+| `use` | Switch to a different database |
 | `status` | Database stats |
 
 ## Roadmap

@@ -8,6 +8,7 @@ Textract/async tuning, and SageMaker endpoint.
 from __future__ import annotations
 
 import logging
+import tomllib
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -77,6 +78,31 @@ def resolve_db_paths(settings: Settings, db_name: str | None = None) -> Settings
             "registry_path": settings.quarry_root / name / "registry.db",
         },
     )
+
+
+_CONFIG_PATH = Path.home() / ".quarry" / "config.toml"
+
+
+def read_default_db() -> str | None:
+    """Read the persistent default database name from config file."""
+    if not _CONFIG_PATH.exists():
+        return None
+    text = _CONFIG_PATH.read_text()
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    value = data.get("default", {}).get("database", "")
+    if value and value != "default":
+        return str(value)
+    return None
+
+
+def write_default_db(name: str) -> None:
+    """Write the persistent default database name to config file."""
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    content = f'[default]\ndatabase = "{name}"\n'
+    _CONFIG_PATH.write_text(content)
 
 
 def load_settings() -> Settings:

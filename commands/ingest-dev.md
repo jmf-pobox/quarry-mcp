@@ -20,8 +20,8 @@ Expand `~` to the user's home directory before calling any tool.
 
 Call the appropriate tool(s):
 
-- **URL**: `mcp__plugin_quarry-dev_quarry__ingest_auto` with `url` set to the argument
+- **URL**: `mcp__plugin_quarry-dev_quarry__ingest` with `source` set to the argument
 - **Directory**: Call `mcp__plugin_quarry-dev_quarry__register_directory` with `directory` set to the absolute path, then call `mcp__plugin_quarry-dev_quarry__sync_all_registrations`
-- **File**: `mcp__plugin_quarry-dev_quarry__ingest_file` with `file_path` set to the argument
+- **File**: `mcp__plugin_quarry-dev_quarry__ingest` with `source` set to the argument
 
 The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

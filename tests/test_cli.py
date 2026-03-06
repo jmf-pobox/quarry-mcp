@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from typer.testing import CliRunner
 
+import quarry.__main__ as cli_mod
 from quarry.__main__ import app
 
 runner = CliRunner()
@@ -18,7 +19,15 @@ def _mock_settings() -> MagicMock:
     return s
 
 
-class TestListCmd:
+def _reset_globals() -> None:
+    """Reset CLI globals between tests."""
+    cli_mod._json_output = False
+    cli_mod._verbose = False
+    cli_mod._quiet = False
+    cli_mod._global_db = ""
+
+
+class TestListDocumentsCmd:
     def test_lists_documents(self):
         mock_docs = [
             {
@@ -34,7 +43,7 @@ class TestListCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=mock_docs),
         ):
-            result = runner.invoke(app, ["list"])
+            result = runner.invoke(app, ["list", "documents"])
 
         assert result.exit_code == 0
         assert "[default]" in result.output
@@ -48,7 +57,7 @@ class TestListCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]) as mock_list,
         ):
-            runner.invoke(app, ["list", "--collection", "math"])
+            runner.invoke(app, ["list", "documents", "--collection", "math"])
 
         call_kwargs = mock_list.call_args[1]
         assert call_kwargs["collection_filter"] == "math"
@@ -59,10 +68,105 @@ class TestListCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["list"])
+            result = runner.invoke(app, ["list", "documents"])
 
         assert result.exit_code == 0
         assert "No documents indexed" in result.output
+
+    def test_bare_list_errors(self):
+        result = runner.invoke(app, ["list"])
+        assert result.exit_code == 1
+
+
+class TestShowCmd:
+    def test_show_page(self):
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.get_page_text",
+                return_value="Hello world",
+            ),
+        ):
+            result = runner.invoke(app, ["show", "report.pdf", "--page", "2"])
+
+        assert result.exit_code == 0
+        assert "report.pdf" in result.output
+        assert "Page: 2" in result.output
+        assert "Hello world" in result.output
+
+    def test_show_metadata(self):
+        mock_doc = {
+            "document_name": "report.pdf",
+            "document_path": "/docs/report.pdf",
+            "collection": "math",
+            "total_pages": 10,
+            "chunk_count": 42,
+            "indexed_pages": 10,
+            "ingestion_timestamp": "2026-01-01T00:00:00",
+        }
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[mock_doc]),
+        ):
+            result = runner.invoke(app, ["show", "report.pdf"])
+
+        assert result.exit_code == 0
+        assert "report.pdf" in result.output
+        assert "math" in result.output
+
+    def test_show_not_found(self):
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["show", "missing.pdf"])
+
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+
+class TestStatusCmd:
+    def test_shows_status(self):
+        mock_settings = _mock_settings()
+        mock_settings.registry_path.exists.return_value = False
+        mock_settings.lancedb_path.exists.return_value = False
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=mock_settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.__main__.count_chunks", return_value=0),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0
+        assert "Documents" in result.output
+        assert "Chunks" in result.output
+
+
+class TestUseCmd:
+    def test_sets_default_db(self):
+        with (
+            patch("quarry.__main__.resolve_db_paths", return_value=_mock_settings()),
+            patch("quarry.__main__.write_default_db") as mock_write,
+        ):
+            result = runner.invoke(app, ["use", "work"])
+
+        assert result.exit_code == 0
+        assert "work" in result.output
+        mock_write.assert_called_once_with("work")
+
+    def test_invalid_db_name(self):
+        with patch(
+            "quarry.__main__.resolve_db_paths",
+            side_effect=ValueError("Invalid database name"),
+        ):
+            result = runner.invoke(app, ["use", "../escape"])
+
+        assert result.exit_code == 1
 
 
 class TestDeleteCmd:
@@ -90,7 +194,7 @@ class TestDeleteCmd:
         assert "No data found" in result.output
 
 
-class TestSearchCmd:
+class TestFindCmd:
     def test_prints_results(self):
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
@@ -114,7 +218,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=mock_results),
         ):
-            result = runner.invoke(app, ["search", "revenue growth"])
+            result = runner.invoke(app, ["find", "revenue growth"])
 
         assert result.exit_code == 0
         assert "report.pdf" in result.output
@@ -135,7 +239,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]),
         ):
-            result = runner.invoke(app, ["search", "nonexistent topic"])
+            result = runner.invoke(app, ["find", "nonexistent topic"])
 
         assert result.exit_code == 0
 
@@ -146,7 +250,7 @@ class TestSearchCmd:
         expected_key: str,
         expected_value: str | None,
     ) -> None:
-        """Invoke search with one CLI flag and assert it reaches search()."""
+        """Invoke find with one CLI flag and assert it reaches search()."""
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = mock_vector
@@ -159,7 +263,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]) as mock_search,
         ):
-            result = runner.invoke(app, ["search", "query", cli_flag, cli_value])
+            result = runner.invoke(app, ["find", "query", cli_flag, cli_value])
 
         assert result.exit_code == 0
         assert mock_search.call_args[1][expected_key] == expected_value
@@ -201,7 +305,7 @@ class TestSearchCmd:
             ),
             patch("quarry.__main__.search", return_value=[]) as mock_search,
         ):
-            result = runner.invoke(app, ["search", "query"])
+            result = runner.invoke(app, ["find", "query"])
 
         assert result.exit_code == 0
         call_kwargs = mock_search.call_args[1]
@@ -217,7 +321,7 @@ class TestDeleteCollectionCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=50),
         ):
-            result = runner.invoke(app, ["delete-collection", "math"])
+            result = runner.invoke(app, ["delete", "math", "--type", "collection"])
 
         assert result.exit_code == 0
         assert "Deleted 50 chunks" in result.output
@@ -229,13 +333,13 @@ class TestDeleteCollectionCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_collection", return_value=0),
         ):
-            result = runner.invoke(app, ["delete-collection", "unknown"])
+            result = runner.invoke(app, ["delete", "unknown", "--type", "collection"])
 
         assert result.exit_code == 0
         assert "No data found" in result.output
 
 
-class TestCollectionsCmd:
+class TestListCollectionsCmd:
     def test_lists_collections(self):
         mock_cols = [
             {"collection": "math", "document_count": 5, "chunk_count": 100},
@@ -246,7 +350,7 @@ class TestCollectionsCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=mock_cols),
         ):
-            result = runner.invoke(app, ["collections"])
+            result = runner.invoke(app, ["list", "collections"])
 
         assert result.exit_code == 0
         assert "math" in result.output
@@ -260,7 +364,7 @@ class TestCollectionsCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
-            result = runner.invoke(app, ["collections"])
+            result = runner.invoke(app, ["list", "collections"])
 
         assert result.exit_code == 0
         assert "No collections found" in result.output
@@ -320,16 +424,15 @@ class TestDeregisterCmd:
         mock_del.assert_not_called()
 
 
-class TestRegistrationsCmd:
+class TestListRegistrationsCmd:
     def test_lists_registrations(self, tmp_path: Path):
         d = tmp_path / "course"
         d.mkdir()
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
-        # First register, then list
         with patch("quarry.__main__._resolved_settings", return_value=settings):
             runner.invoke(app, ["register", str(d), "--collection", "course"])
-            result = runner.invoke(app, ["registrations"])
+            result = runner.invoke(app, ["list", "registrations"])
         assert result.exit_code == 0
         assert "course" in result.output
 
@@ -337,7 +440,7 @@ class TestRegistrationsCmd:
         settings = _mock_settings()
         settings.registry_path = tmp_path / "registry.db"
         with patch("quarry.__main__._resolved_settings", return_value=settings):
-            result = runner.invoke(app, ["registrations"])
+            result = runner.invoke(app, ["list", "registrations"])
         assert result.exit_code == 0
         assert "No registered directories" in result.output
 
@@ -387,7 +490,7 @@ class TestDatabasesCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases"])
+            result = runner.invoke(app, ["list", "databases"])
 
         assert result.exit_code == 0
         assert "default" in result.output
@@ -400,11 +503,12 @@ class TestDatabasesCmd:
             "quarry.__main__._resolved_settings",
             return_value=settings,
         ):
-            result = runner.invoke(app, ["databases"])
+            result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
         assert "No databases found" in result.output
 
     def test_json_output(self, tmp_path: Path):
+        _reset_globals()
         settings = self._setup_databases(tmp_path)
         with (
             patch(
@@ -414,7 +518,7 @@ class TestDatabasesCmd:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases", "--json"])
+            result = runner.invoke(app, ["--json", "list", "databases"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -427,22 +531,24 @@ class TestDatabasesCmd:
         assert "size_description" in data[0]
 
     def test_json_empty(self, tmp_path: Path):
+        _reset_globals()
         settings = _mock_settings()
         settings.quarry_root = tmp_path / "nonexistent"
         with patch(
             "quarry.__main__._resolved_settings",
             return_value=settings,
         ):
-            result = runner.invoke(app, ["databases", "--json"])
+            result = runner.invoke(app, ["--json", "list", "databases"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data == []
 
 
 class TestDbOption:
-    """Verify --db flag is parsed and forwarded to resolve_db_paths."""
+    """Verify --db global flag is parsed and forwarded to resolve_db_paths."""
 
     def test_list_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -452,12 +558,13 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["list", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "list", "documents"])
         assert result.exit_code == 0
         mock_resolve.assert_called_once()
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_search_passes_db_to_resolver(self):
+        _reset_globals()
         mock_backend = MagicMock()
         mock_backend.embed_query.return_value = np.zeros(768, dtype=np.float32)
         with (
@@ -473,11 +580,12 @@ class TestDbOption:
             ),
             patch("quarry.__main__.search", return_value=[]),
         ):
-            result = runner.invoke(app, ["search", "query", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_delete_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -487,11 +595,12 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_delete_document", return_value=0),
         ):
-            result = runner.invoke(app, ["delete", "x.pdf", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "delete", "x.pdf"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_collections_passes_db_to_resolver(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
@@ -501,41 +610,28 @@ class TestDbOption:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.db_list_collections", return_value=[]),
         ):
-            result = runner.invoke(app, ["collections", "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "list", "collections"])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
 
     def test_default_db_passes_none(self):
+        _reset_globals()
         with (
             patch("quarry.__main__.load_settings", return_value=_mock_settings()),
             patch(
                 "quarry.__main__.resolve_db_paths",
                 return_value=_mock_settings(),
             ) as mock_resolve,
+            patch("quarry.__main__.read_default_db", return_value=None),
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            runner.invoke(app, ["list"])
+            runner.invoke(app, ["list", "documents"])
         assert mock_resolve.call_args[0][1] is None
-
-    def test_db_after_subcommand_works(self):
-        """Regression: --db must work after the subcommand name."""
-        with (
-            patch("quarry.__main__.load_settings", return_value=_mock_settings()),
-            patch(
-                "quarry.__main__.resolve_db_paths",
-                return_value=_mock_settings(),
-            ) as mock_resolve,
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.list_documents", return_value=[]),
-        ):
-            result = runner.invoke(app, ["list", "--db", "personal"])
-        assert result.exit_code == 0
-        assert mock_resolve.call_args[0][1] == "personal"
 
 
 class TestIngestCmd:
-    def test_ingests_document(self, tmp_path: Path):
+    def test_ingests_file(self, tmp_path: Path):
         f = tmp_path / "doc.txt"
         f.write_text("hello")
         mock_result = {"document_name": "doc.txt", "chunks": 1}
@@ -550,11 +646,46 @@ class TestIngestCmd:
                 return_value=mock_result,
             ),
         ):
-            result = runner.invoke(app, ["ingest-file", str(f)])
+            result = runner.invoke(app, ["ingest", str(f)])
         assert result.exit_code == 0
         assert "doc.txt" in result.output
 
+    def test_ingest_url_uses_auto(self):
+        mock_result = {
+            "document_name": "example.com",
+            "chunks": 5,
+            "collection": "default",
+        }
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_auto",
+                return_value=mock_result,
+            ),
+        ):
+            result = runner.invoke(app, ["ingest", "https://example.com/docs"])
+        assert result.exit_code == 0
+
+    def test_ingest_directory_errors(self, tmp_path: Path):
+        d = tmp_path / "subdir"
+        d.mkdir()
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+        ):
+            result = runner.invoke(app, ["ingest", str(d)])
+        assert result.exit_code == 1
+        assert "directory" in result.output.lower()
+
     def test_ingest_passes_db(self, tmp_path: Path):
+        _reset_globals()
         f = tmp_path / "doc.txt"
         f.write_text("hello")
         with (
@@ -569,9 +700,54 @@ class TestIngestCmd:
                 return_value={"chunks": 1},
             ),
         ):
-            result = runner.invoke(app, ["ingest-file", str(f), "--db", "work"])
+            result = runner.invoke(app, ["--db", "work", "ingest", str(f)])
         assert result.exit_code == 0
         assert mock_resolve.call_args[0][1] == "work"
+
+
+class TestRememberCmd:
+    def test_remember_from_stdin(self):
+        mock_result = {
+            "document_name": "notes.md",
+            "chunks": 2,
+            "collection": "default",
+        }
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["remember", "--name", "notes.md"],
+                input="some content here",
+            )
+        assert result.exit_code == 0
+        assert "notes.md" in result.output
+
+    def test_remember_requires_name(self):
+        result = runner.invoke(
+            app,
+            ["remember"],
+            input="some content",
+        )
+        assert result.exit_code == 1
+        assert "--name" in result.output
+
+    def test_remember_rejects_empty_stdin(self):
+        result = runner.invoke(
+            app,
+            ["remember", "--name", "test.md"],
+            input="",
+        )
+        assert result.exit_code == 1
+        assert "no content" in result.output.lower()
 
 
 class TestDatabasesCmdSizeFormatting:
@@ -590,7 +766,7 @@ class TestDatabasesCmdSizeFormatting:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases"])
+            result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
         assert "MB" in result.output
 
@@ -608,7 +784,7 @@ class TestDatabasesCmdSizeFormatting:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases"])
+            result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
         assert "512 bytes" in result.output
 
@@ -626,7 +802,7 @@ class TestDatabasesCmdSizeFormatting:
             patch("quarry.__main__.get_db"),
             patch("quarry.__main__.list_documents", return_value=[]),
         ):
-            result = runner.invoke(app, ["databases"])
+            result = runner.invoke(app, ["list", "databases"])
         assert result.exit_code == 0
         assert "not-a-db" not in result.output
         assert "real" in result.output
@@ -664,6 +840,51 @@ class TestAutoWorkers:
             {"ocr_backend": "textract", "embedding_backend": "sagemaker"}
         )
         assert _auto_workers(settings) == 4
+
+
+class TestVersionCmd:
+    def test_prints_version(self):
+        _reset_globals()
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0
+        # Should output a version string like "0.10.1"
+        assert "." in result.output.strip()
+
+    def test_json_version(self):
+        _reset_globals()
+        result = runner.invoke(app, ["--json", "version"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "version" in data
+
+
+class TestGlobalFlags:
+    def test_verbose_quiet_mutually_exclusive(self):
+        _reset_globals()
+        result = runner.invoke(app, ["--verbose", "--quiet", "version"])
+        assert result.exit_code == 1
+
+    def test_verbose_sets_global(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--verbose", "list", "documents"])
+        assert result.exit_code == 0
+        assert cli_mod._verbose is True
+
+    def test_quiet_sets_global(self):
+        _reset_globals()
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+        ):
+            result = runner.invoke(app, ["--quiet", "list", "documents"])
+        assert result.exit_code == 0
+        assert cli_mod._quiet is True
 
 
 class TestCliErrors:

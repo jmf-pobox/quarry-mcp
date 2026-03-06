@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import functools
+import importlib.metadata
 import json
 import logging
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -13,17 +15,27 @@ from rich.progress import Progress
 
 from quarry.backends import get_embedding_backend
 from quarry.collections import derive_collection
-from quarry.config import Settings, configure_logging, load_settings, resolve_db_paths
+from quarry.config import (
+    Settings,
+    configure_logging,
+    load_settings,
+    read_default_db,
+    resolve_db_paths,
+    write_default_db,
+)
 from quarry.database import (
+    count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
     discover_databases,
     get_db,
+    get_page_text,
     list_collections as db_list_collections,
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_document, ingest_sitemap, ingest_url
+from quarry.formatting import format_document_detail, format_status
+from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -41,19 +53,67 @@ app.add_typer(hooks_app, name="hooks")
 console = Console()
 err_console = Console(stderr=True)
 
-DbOption = Annotated[
-    str,
-    typer.Option(
-        "--db",
-        help="Named database (default: 'default'). "
-        "Resolves to ~/.quarry/data/<name>/lancedb.",
-    ),
-]
+# Global state set by @app.callback
+_json_output: bool = False
+_verbose: bool = False
+_quiet: bool = False
+_global_db: str = ""
+
+
+@app.callback(invoke_without_command=True)
+def main_callback(
+    ctx: typer.Context,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output as JSON."),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Verbose output."),
+    ] = False,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-essential output."),
+    ] = False,
+    database: Annotated[
+        str,
+        typer.Option(
+            "--db",
+            help="Named database (default: 'default'). "
+            "Resolves to ~/.quarry/data/<name>/lancedb.",
+        ),
+    ] = "",
+) -> None:
+    """quarry: extract searchable knowledge from any document."""
+    global _json_output, _verbose, _quiet, _global_db
+    if verbose and quiet:
+        err_console.print("Error: --verbose and --quiet are mutually exclusive.")
+        raise typer.Exit(code=1)
+    _json_output = output_json
+    _verbose = verbose  # reserved: commands will use for extra output
+    _quiet = quiet  # reserved: commands will use to suppress non-essential output
+    _global_db = database
+    if ctx.invoked_subcommand is None:
+        print(ctx.get_help())
+        raise typer.Exit(code=0)
+
+
+def _emit(data: object, text: str = "") -> None:
+    """Output helper: JSON when --json is active, otherwise text."""
+    if _json_output:
+        json.dump(data, sys.stdout)
+        sys.stdout.write("\n")
+    elif text:
+        print(text)
 
 
 def _resolved_settings(db: str = "") -> Settings:
-    """Load settings with --db resolution applied."""
-    return resolve_db_paths(load_settings(), db or None)
+    """Load settings with --db resolution applied.
+
+    Priority: per-command ``db`` > global ``--db`` flag > persistent default.
+    """
+    effective = db or _global_db or read_default_db()
+    return resolve_db_paths(load_settings(), effective or None)
 
 
 def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
@@ -63,6 +123,8 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     def wrapper(*args: object, **kwargs: object) -> None:
         try:
             fn(*args, **kwargs)
+        except (SystemExit, KeyboardInterrupt, typer.Exit):
+            raise
         except Exception as exc:
             logger.exception("Command %s failed", fn.__name__)
             err_console.print(f"Error: {exc}", style="red")
@@ -71,161 +133,143 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
     return wrapper
 
 
-@app.command(name="ingest-file")
+@app.command(name="ingest")
 @_cli_errors
-def ingest_file(
-    file_path: Annotated[Path, typer.Argument(help="Path to document file")],
+def ingest_cmd(
+    source: Annotated[
+        str,
+        typer.Argument(help="File path or URL to ingest"),
+    ],
     overwrite: Annotated[
         bool, typer.Option("--overwrite", help="Replace existing data")
     ] = False,
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Collection name")
     ] = "",
-    database: DbOption = "",
 ) -> None:
-    """Ingest a document from a file path.
+    """Ingest a file or URL into the knowledge base.
 
-    Supports PDF, images (PNG, JPG, TIFF, BMP, WebP), presentations (PPTX),
-    spreadsheets (XLSX, CSV), HTML, TXT, MD, TEX, DOCX, and source code files.
+    Auto-detects the source type: URLs (http/https) use smart sitemap
+    discovery with single-page fallback; local paths are ingested as files.
+
+    Supports PDF, images, PPTX, XLSX, CSV, HTML, TXT, MD, TEX, DOCX, and
+    source code files.
     """
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    resolved = file_path.resolve()
-    col = derive_collection(resolved, explicit=collection or None)
+    is_url = source.startswith(("http://", "https://"))
 
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Processing {file_path.name}", total=None)
+    if is_url:
+        with Progress(console=console) as progress:
+            task = progress.add_task(f"Fetching {source}", total=None)
 
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
+            def on_url_progress(message: str) -> None:
+                progress.update(task, description=message)
 
-        result = ingest_document(
-            resolved,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=col,
-            progress_callback=on_progress,
-        )
+            result = ingest_auto(
+                source,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=collection,
+                progress_callback=on_url_progress,
+            )
 
-    console.print()
-    console.print(json.dumps(result, indent=2))
+        console.print()
+        console.print(json.dumps(result, indent=2))
+        errors: list[str] = result.get("errors", [])  # type: ignore[assignment]
+        for err in errors:
+            err_console.print(f"  {err}", style="red")
+    else:
+        file_path = Path(source).resolve()
+        if file_path.is_dir():
+            err_console.print(
+                f"Error: {source!r} is a directory. "
+                "Use 'quarry register' to track directories.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        col = derive_collection(file_path, explicit=collection or None)
+
+        with Progress(console=console) as progress:
+            task = progress.add_task(f"Processing {file_path.name}", total=None)
+
+            def on_file_progress(message: str) -> None:
+                progress.update(task, description=message)
+
+            result = ingest_document(
+                file_path,
+                db,
+                settings,
+                overwrite=overwrite,
+                collection=col,
+                progress_callback=on_file_progress,
+            )
+
+        console.print()
+        console.print(json.dumps(result, indent=2))
 
 
-@app.command(name="ingest-url")
+@app.command()
 @_cli_errors
-def ingest_url_cmd(
-    url: Annotated[str, typer.Argument(help="HTTP(S) URL to fetch and ingest")],
-    overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Replace existing data")
-    ] = False,
-    collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Collection name")
-    ] = "default",
+def remember(
     name: Annotated[
-        str, typer.Option("--name", "-n", help="Document name (defaults to URL)")
+        str, typer.Option("--name", "-n", help="Document name (required)")
     ] = "",
-    database: DbOption = "",
-) -> None:
-    """Fetch a webpage and ingest its content.
-
-    Downloads the HTML from the given URL, strips boilerplate (nav, scripts,
-    etc.), converts to Markdown, and indexes the text for semantic search.
-    """
-    settings = _resolved_settings(database)
-    db = get_db(settings.lancedb_path)
-
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Fetching {url}", total=None)
-
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
-
-        result = ingest_url(
-            url,
-            db,
-            settings,
-            overwrite=overwrite,
-            collection=collection,
-            document_name=name or None,
-            progress_callback=on_progress,
-        )
-
-    console.print()
-    console.print(json.dumps(result, indent=2))
-
-
-@app.command(name="ingest-sitemap")
-@_cli_errors
-def ingest_sitemap_cmd(
-    url: Annotated[str, typer.Argument(help="Sitemap URL to crawl")],
     collection: Annotated[
         str,
-        typer.Option("--collection", "-c", help="Collection name (default: domain)"),
-    ] = "",
-    include: Annotated[
-        list[str] | None,
-        typer.Option("--include", help="URL path glob to include (repeatable)"),
-    ] = None,
-    exclude: Annotated[
-        list[str] | None,
-        typer.Option("--exclude", help="URL path glob to exclude (repeatable)"),
-    ] = None,
-    limit: Annotated[
-        int, typer.Option("--limit", help="Max URLs to ingest (0 = no limit)")
-    ] = 0,
+        typer.Option("--collection", "-c", help="Collection name"),
+    ] = "default",
+    format_hint: Annotated[
+        str,
+        typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
+    ] = "auto",
     overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Force re-ingest regardless of lastmod")
-    ] = False,
-    workers: Annotated[
-        int, typer.Option("--workers", "-w", help="Parallel fetch workers")
-    ] = 4,
-    delay: Annotated[
-        float,
-        typer.Option("--delay", help="Base delay between fetches in seconds"),
-    ] = 0.5,
-    database: DbOption = "",
+        bool,
+        typer.Option(
+            "--overwrite/--no-overwrite",
+            help="Replace existing document with same name",
+        ),
+    ] = True,
 ) -> None:
-    """Crawl a sitemap and ingest all discovered URLs.
+    """Ingest inline content from stdin.
 
-    Parses the sitemap XML, discovers all page URLs (following sitemap
-    indexes recursively), applies include/exclude URL path filters, skips
-    pages unchanged since last ingest (via <lastmod>), and ingests the
-    rest in parallel.
+    Reads text from stdin and indexes it for semantic search. Requires
+    --name to set the document name. Overwrites by default; use
+    --no-overwrite to skip if the document already exists.
+
+    Examples:
+        echo "meeting notes" | quarry remember --name notes.md
+        cat README.md | quarry remember --name readme.md --format markdown
     """
-    settings = _resolved_settings(database)
+    if not name:
+        err_console.print("Error: --name is required for remember.", style="red")
+        raise typer.Exit(code=1)
+
+    content = sys.stdin.read()
+    if not content.strip():
+        err_console.print("Error: no content on stdin.", style="red")
+        raise typer.Exit(code=1)
+
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
-    with Progress(console=console) as progress:
-        task = progress.add_task(f"Crawling {url}", total=None)
+    result = ingest_content(
+        content,
+        name,
+        db,
+        settings,
+        overwrite=overwrite,
+        collection=collection,
+        format_hint=format_hint,
+    )
 
-        def on_progress(message: str) -> None:
-            progress.update(task, description=message)
-
-        result = ingest_sitemap(
-            url,
-            db,
-            settings,
-            collection=collection,
-            include=include,
-            exclude=exclude,
-            limit=limit,
-            overwrite=overwrite,
-            workers=workers,
-            delay=delay,
-            progress_callback=on_progress,
-        )
-
-    console.print()
     console.print(json.dumps(result, indent=2))
-    if result["errors"]:
-        for err in result["errors"]:
-            err_console.print(f"  {err}", style="red")
 
 
-@app.command(name="search")
+@app.command(name="find")
 @_cli_errors
-def search_cmd(
+def find_cmd(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results")] = 10,
     document: Annotated[
@@ -244,10 +288,9 @@ def search_cmd(
             "--source-format", help="Filter by source format (.pdf, .py, etc.)"
         ),
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Search indexed documents."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
@@ -272,16 +315,34 @@ def search_cmd(
         print(text[:300])
 
 
-@app.command(name="list")
+list_app = typer.Typer(
+    help="List documents, collections, databases, or registrations.",
+    invoke_without_command=True,
+)
+app.add_typer(list_app, name="list")
+
+
+@list_app.callback(invoke_without_command=True)
+def list_callback(ctx: typer.Context) -> None:
+    """List documents, collections, databases, or registrations."""
+    if ctx.invoked_subcommand is None:
+        err_console.print(
+            "Error: specify a noun — documents, collections, "
+            "databases, or registrations.",
+            style="red",
+        )
+        raise typer.Exit(code=1)
+
+
+@list_app.command(name="documents")
 @_cli_errors
-def list_cmd(
+def list_documents_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Filter by collection")
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """List all indexed documents."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     docs = list_documents(db, collection_filter=collection or None)
 
@@ -297,33 +358,143 @@ def list_cmd(
         )
 
 
+@app.command(name="show")
+@_cli_errors
+def show_cmd(
+    document_name: Annotated[str, typer.Argument(help="Document name")],
+    page: Annotated[
+        int | None,
+        typer.Option("--page", "-p", help="Page number to display"),
+    ] = None,
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Scope to collection"),
+    ] = "",
+) -> None:
+    """Show document metadata or a specific page's text."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    if page is not None:
+        text = get_page_text(db, document_name, page, collection=collection or None)
+        if text is None:
+            err_console.print(
+                f"No data found for {document_name!r} page {page}",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        print(f"Document: {document_name}")
+        print(f"Page: {page}")
+        print("---")
+        print(text)
+        return
+
+    docs = list_documents(db, collection_filter=collection or None)
+    match = [d for d in docs if d["document_name"] == document_name]
+    if not match:
+        err_console.print(f"Document {document_name!r} not found", style="red")
+        raise typer.Exit(code=1)
+    print(format_document_detail(match[0]))
+
+
+@app.command(name="status")
+@_cli_errors
+def status_cmd() -> None:
+    """Show database status: documents, chunks, storage, model info."""
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    docs = list_documents(db)
+    chunks = count_chunks(db)
+    cols = db_list_collections(db)
+
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = list_registrations(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
+
+    db_size_bytes = (
+        sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
+        if settings.lancedb_path.exists()
+        else 0
+    )
+
+    print(
+        format_status(
+            {
+                "document_count": len(docs),
+                "collection_count": len(cols),
+                "chunk_count": chunks,
+                "registered_directories": len(regs),
+                "database_path": str(settings.lancedb_path),
+                "database_size_bytes": db_size_bytes,
+                "embedding_model": settings.embedding_model,
+            }
+        )
+    )
+
+
+@app.command(name="use")
+@_cli_errors
+def use_cmd(
+    name: Annotated[str, typer.Argument(help="Database name (e.g., 'coding', 'work')")],
+) -> None:
+    """Set the persistent default database for subsequent commands.
+
+    Use 'default' to reset to the default database. The --db flag
+    overrides this per-call.
+    """
+    # Validate the name before persisting.
+    resolve_db_paths(load_settings(), name if name != "default" else None)
+    write_default_db(name)
+    print(f"Default database set to {name!r}")
+
+
 @app.command(name="delete")
 @_cli_errors
 def delete_cmd(
-    document_name: Annotated[str, typer.Argument(help="Document name to delete")],
+    name: Annotated[str, typer.Argument(help="Document or collection name to delete")],
+    kind: Annotated[
+        str,
+        typer.Option("--type", "-t", help="What to delete: 'document' or 'collection'"),
+    ] = "document",
     collection: Annotated[
-        str, typer.Option("--collection", "-c", help="Scope to collection")
+        str,
+        typer.Option("--collection", "-c", help="Scope to collection (documents only)"),
     ] = "",
-    database: DbOption = "",
 ) -> None:
-    """Delete all indexed data for a document."""
-    settings = _resolved_settings(database)
+    """Delete indexed data for a document or collection."""
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
-    deleted = db_delete_document(db, document_name, collection=collection or None)
+
+    if kind == "collection":
+        deleted = db_delete_collection(db, name)
+        label = f"collection {name!r}"
+    elif kind == "document":
+        deleted = db_delete_document(db, name, collection=collection or None)
+        label = f"{name!r}"
+    else:
+        err_console.print(
+            f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
+            style="red",
+        )
+        raise typer.Exit(code=1)
 
     if deleted == 0:
-        print(f"No data found for {document_name!r}")
+        print(f"No data found for {label}")
     else:
-        print(f"Deleted {deleted} chunks for {document_name!r}")
+        print(f"Deleted {deleted} chunks for {label}")
 
 
-@app.command(name="collections")
+@list_app.command(name="collections")
 @_cli_errors
-def collections_cmd(
-    database: DbOption = "",
-) -> None:
+def list_collections_cmd() -> None:
     """List all collections with document and chunk counts."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     cols = db_list_collections(db)
 
@@ -339,23 +510,6 @@ def collections_cmd(
         )
 
 
-@app.command(name="delete-collection")
-@_cli_errors
-def delete_collection_cmd(
-    collection: Annotated[str, typer.Argument(help="Collection name to delete")],
-    database: DbOption = "",
-) -> None:
-    """Delete all indexed data for a collection."""
-    settings = _resolved_settings(database)
-    db = get_db(settings.lancedb_path)
-    deleted = db_delete_collection(db, collection)
-
-    if deleted == 0:
-        print(f"No data found for collection {collection!r}")
-    else:
-        print(f"Deleted {deleted} chunks for collection {collection!r}")
-
-
 @app.command()
 @_cli_errors
 def register(
@@ -364,10 +518,9 @@ def register(
         str,
         typer.Option("--collection", "-c", help="Collection name (default: dir name)"),
     ] = "",
-    database: DbOption = "",
 ) -> None:
     """Register a directory for incremental sync."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     resolved = directory.resolve()
     col = collection or resolved.name
     conn = open_registry(settings.registry_path)
@@ -386,10 +539,9 @@ def deregister(
         bool,
         typer.Option("--keep-data", help="Keep indexed data in LanceDB"),
     ] = False,
-    database: DbOption = "",
 ) -> None:
     """Remove a directory registration. Optionally keep indexed data."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         doc_names = deregister_directory(conn, collection)
@@ -404,13 +556,11 @@ def deregister(
     print(f"Deregistered collection {collection!r} ({removed} files)")
 
 
-@app.command(name="registrations")
+@list_app.command(name="registrations")
 @_cli_errors
-def registrations_cmd(
-    database: DbOption = "",
-) -> None:
+def list_registrations_cmd() -> None:
     """List all registered directories."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     conn = open_registry(settings.registry_path)
     try:
         regs = list_registrations(conn)
@@ -453,10 +603,9 @@ def sync_cmd(
             help="Parallel workers (auto: 4 for cloud backends, 1 for local)",
         ),
     ] = None,
-    database: DbOption = "",
 ) -> None:
     """Sync all registered directories: ingest new/changed, remove deleted."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     effective_workers = workers if workers is not None else _auto_workers(settings)
     logger.info("Using %d sync workers", effective_workers)
     db = get_db(settings.lancedb_path)
@@ -484,21 +633,16 @@ def sync_cmd(
             console.print(f"  error: {err}", style="red")
 
 
-@app.command(name="databases")
+@list_app.command(name="databases")
 @_cli_errors
-def databases_cmd(
-    database: DbOption = "",
-    output_json: Annotated[
-        bool,
-        typer.Option("--json", help="Output as JSON array."),
-    ] = False,
-) -> None:
+def list_databases_cmd() -> None:
     """List named databases with document counts and storage size."""
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     databases = discover_databases(settings.quarry_root)
 
-    if output_json:
-        console.print(json.dumps(databases, indent=2))
+    if _json_output:
+        json.dump(databases, sys.stdout)
+        sys.stdout.write("\n")
         return
 
     if not databases:
@@ -537,23 +681,27 @@ def serve(
         int,
         typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
     ] = 0,
-    database: DbOption = "",
 ) -> None:
     """Start the HTTP API server for quarry-menubar."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
-    settings = _resolved_settings(database)
+    settings = _resolved_settings()
     http_serve(settings, port=port)
 
 
 @app.command()
-def mcp(
-    database: DbOption = "",
-) -> None:
+def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main(db_name=database or None)
+    mcp_main(db_name=_global_db or read_default_db())
+
+
+@app.command()
+def version() -> None:
+    """Print the quarry version."""
+    ver = importlib.metadata.version("punt-quarry")
+    _emit({"version": ver}, ver)
 
 
 # ---------------------------------------------------------------------------
