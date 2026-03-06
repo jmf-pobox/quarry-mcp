@@ -193,20 +193,20 @@ def ingest(
 
 @mcp.tool()
 @_handle_errors
-def ingest_content(
+def remember(
     content: str,
     document_name: str,
     overwrite: bool = False,
     collection: str = "default",
     format_hint: str = "auto",
 ) -> str:
-    """Ingest inline text content: chunk, embed, and index for search.
+    """Remember inline text content: chunk, embed, and index for search.
 
     Use this instead of ingest when you have the text content directly
     (e.g., clipboard, API response, or sandbox-uploaded files in Claude Desktop).
 
     Args:
-        content: The text content to ingest.
+        content: The text content to remember.
         document_name: Name for the document (e.g., 'notes.md').
         overwrite: If true, replace existing data for this document.
         collection: Collection name (default: 'default').

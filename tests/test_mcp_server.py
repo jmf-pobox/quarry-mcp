@@ -13,11 +13,11 @@ from quarry.mcp_server import (
     get_documents,
     get_page,
     ingest,
-    ingest_content as mcp_ingest_content,
     list_collections,
     list_databases,
     list_registrations,
     register_directory,
+    remember as mcp_remember,
     status,
     sync_all_registrations,
     use_database,
@@ -34,7 +34,7 @@ def _settings(tmp_path: Path) -> MagicMock:
     return s
 
 
-class TestIngestText:
+class TestRemember:
     def test_calls_pipeline_and_returns_summary(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
         mock_result = {
@@ -51,7 +51,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            result = mcp_ingest_content("# Hello\nWorld", "notes.md")
+            result = mcp_remember("# Hello\nWorld", "notes.md")
 
         mock_ingest.assert_called_once()
         call_args = mock_ingest.call_args
@@ -76,7 +76,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_content("text", "a.txt", format_hint="markdown")
+            mcp_remember("text", "a.txt", format_hint="markdown")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["format_hint"] == "markdown"
@@ -97,7 +97,7 @@ class TestIngestText:
                 return_value=mock_result,
             ) as mock_ingest,
         ):
-            mcp_ingest_content("text", "a.txt", collection="ml-101")
+            mcp_remember("text", "a.txt", collection="ml-101")
 
         call_kwargs = mock_ingest.call_args[1]
         assert call_kwargs["collection"] == "ml-101"
@@ -532,7 +532,7 @@ class TestHandleErrors:
                 side_effect=ValueError("bad format hint"),
             ),
         ):
-            result = mcp_ingest_content("text", "doc.txt")
+            result = mcp_remember("text", "doc.txt")
 
         assert "ValueError" in result
         assert "bad format hint" in result

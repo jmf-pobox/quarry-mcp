@@ -610,6 +610,51 @@ class TestIngestCmd:
         assert mock_resolve.call_args[0][1] == "work"
 
 
+class TestRememberCmd:
+    def test_remember_from_stdin(self):
+        mock_result = {
+            "document_name": "notes.md",
+            "chunks": 2,
+            "collection": "default",
+        }
+        with (
+            patch(
+                "quarry.__main__._resolved_settings",
+                return_value=_mock_settings(),
+            ),
+            patch("quarry.__main__.get_db"),
+            patch(
+                "quarry.__main__.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                ["remember", "--name", "notes.md"],
+                input="some content here",
+            )
+        assert result.exit_code == 0
+        assert "notes.md" in result.output
+
+    def test_remember_requires_name(self):
+        result = runner.invoke(
+            app,
+            ["remember"],
+            input="some content",
+        )
+        assert result.exit_code == 1
+        assert "--name" in result.output
+
+    def test_remember_rejects_empty_stdin(self):
+        result = runner.invoke(
+            app,
+            ["remember", "--name", "test.md"],
+            input="",
+        )
+        assert result.exit_code == 1
+        assert "no content" in result.output.lower()
+
+
 class TestDatabasesCmdSizeFormatting:
     def test_megabyte_formatting(self, tmp_path: Path):
         settings = _mock_settings()

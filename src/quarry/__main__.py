@@ -25,7 +25,7 @@ from quarry.database import (
     list_documents,
     search,
 )
-from quarry.pipeline import ingest_auto, ingest_document
+from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.sync import sync_all
 from quarry.sync_registry import (
     deregister_directory,
@@ -198,6 +198,55 @@ def ingest_cmd(
 
         console.print()
         console.print(json.dumps(result, indent=2))
+
+
+@app.command()
+@_cli_errors
+def remember(
+    name: Annotated[
+        str, typer.Option("--name", "-n", help="Document name (required)")
+    ] = "",
+    collection: Annotated[
+        str,
+        typer.Option("--collection", "-c", help="Collection name"),
+    ] = "default",
+    format_hint: Annotated[
+        str,
+        typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
+    ] = "auto",
+) -> None:
+    """Ingest inline content from stdin.
+
+    Reads text from stdin and indexes it for semantic search. Requires
+    --name to set the document name.
+
+    Examples:
+        echo "meeting notes" | quarry remember --name notes.md
+        cat README.md | quarry remember --name readme.md --format markdown
+    """
+    if not name:
+        err_console.print("Error: --name is required for remember.", style="red")
+        raise typer.Exit(code=1)
+
+    content = sys.stdin.read()
+    if not content.strip():
+        err_console.print("Error: no content on stdin.", style="red")
+        raise typer.Exit(code=1)
+
+    settings = _resolved_settings()
+    db = get_db(settings.lancedb_path)
+
+    result = ingest_content(
+        content,
+        name,
+        db,
+        settings,
+        overwrite=True,
+        collection=collection,
+        format_hint=format_hint,
+    )
+
+    console.print(json.dumps(result, indent=2))
 
 
 @app.command(name="find")
