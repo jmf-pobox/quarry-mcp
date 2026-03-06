@@ -174,7 +174,7 @@ Today, the Quarry project announced the general availability of Quarry, a free,
 open-source tool that gives Claude instant access to everything on your computer.
 Quarry indexes PDFs, scanned documents, spreadsheets, presentations, web pages,
 notes, source code, and images into a local semantic search engine, then exposes
-that knowledge to Claude Code, Claude Desktop, and Cowork through the Model
+that knowledge to Claude Code and Claude Desktop through the Model
 Context Protocol. Unlike uploading
 files to Projects or pointing your LLM at folders, Quarry lets Claude search
 your entire knowledge base by meaning---across every format, with no manual
@@ -199,7 +199,7 @@ is invisible to it, trapped in files you haven't opened in months.
 \prsection{Solution}
 
 Quarry works in three steps: install, ingest, search. Run
-\texttt{pip install punt-quarry} and \texttt{quarry install}. Point it at your
+\texttt{uv tool install punt-quarry} and \texttt{quarry install}. Point it at your
 files---\texttt{quarry ingest report.pdf}, or register an entire directory with
 \texttt{quarry register \texttildelow/Documents/research}. From that moment,
 Claude can search your indexed knowledge semantically, finding relevant passages
@@ -239,7 +239,7 @@ Getting started takes under five minutes and requires no accounts, API keys, or
 configuration:
 
 \begin{enumerate}[leftmargin=2em]
-  \item \textbf{Install:} \texttt{pip install punt-quarry \&\& quarry install}
+  \item \textbf{Install:} \texttt{uv tool install punt-quarry \&\& quarry install}
         downloads the embedding model and configures Claude Code and Claude
         Desktop automatically.
   \item \textbf{Ingest:} \texttt{quarry register \texttildelow/Documents/work
@@ -271,7 +271,7 @@ how Claude thinks.''
 
 Quarry is available now at \url{https://pypi.org/project/punt-quarry/} and
 \url{https://github.com/punt-labs/quarry}. It is free, open source (MIT
-license), and always will be. Install it with \texttt{pip install punt-quarry},
+license), and always will be. Install it with \texttt{uv tool install punt-quarry},
 run \texttt{quarry install}, and start searching.
 
 \newpage
@@ -288,8 +288,8 @@ run \texttt{quarry install}, and start searching.
 
 \begin{faqpair}{What is Quarry and who is it for?}
   Quarry is a local semantic search engine for your files that integrates with
-  Claude through MCP. It is for people who use Claude Code, Claude Desktop, or
-  Cowork for real work---writing, coding, research, analysis---and are
+  Claude through MCP. It is for people who use Claude Code or Claude Desktop
+  for real work---writing, coding, research, analysis---and are
   tired of manually uploading files or organizing context folders before every
   session. If you have documents on your hard drive that you wish Claude could
   see, Quarry is for you.
@@ -340,7 +340,7 @@ run \texttt{quarry install}, and start searching.
 
 \begin{faqpair}{Can I use Quarry with tools other than Claude?}
   Quarry exposes a standard MCP server over stdio. Any MCP-compatible client can
-  use it. Today that includes Claude Code, Claude Desktop, and Cowork.
+  use it. Today that includes Claude Code and Claude Desktop.
   As other LLM tools adopt MCP, Quarry will work with them without modification.
   The CLI also works standalone for direct search without any LLM.
 \end{faqpair}
@@ -362,7 +362,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{What is the total addressable market?}
   Bottoms-up: Claude Code had 115{,}000 developers by July 2025 and doubled
   its weekly active users between January and February 2026, with annualized
-  revenue exceeding \$2.5B. Claude Desktop and Cowork add to this base. Among
+  revenue exceeding \$2.5B. Claude Desktop adds to this base. Among
   these users,
   the power-user segment---those who have moved beyond simple Q\&A to using
   Claude for complex, multi-document work---is the target. Conservatively
@@ -557,7 +557,7 @@ run \texttt{quarry install}, and start searching.
   Three converging shifts:
 
   \textbf{MCP maturity:} The Model Context Protocol shipped in late 2024 and
-  is now supported by Claude Code, Claude Desktop, and Cowork. For the
+  is now supported by Claude Code and Claude Desktop. For the
   first time, a local tool can be a native part of an LLM's reasoning process,
   not just an external API the user invokes manually.
 
@@ -649,7 +649,7 @@ run \texttt{quarry install}, and start searching.
   accounts, no API keys, no configuration files. Once set up, the user does
   nothing---Claude invokes Quarry automatically during conversations.
 
-  However, the product currently requires Python, pip, and comfort with a
+  However, the product currently requires comfort with a
   terminal. For the non-CLI audience identified as a growth target in the Value
   section, usability risk is real. The macOS menu bar app (in development) is
   the primary mitigation: once shipped, it reduces the setup path to a native
@@ -660,7 +660,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{Feasibility --- Can we build it?}
   \textcolor{RiskGreen}{\textbf{Low risk.}} The product is already built and
   live on PyPI. Core pipeline (ingest, embed, search, MCP server) is shipped
-  across 10 document formats with 596 passing tests and strict type checking.
+  across 10 document formats with 737 passing tests and strict type checking.
   The remaining roadmap items (menu bar app, Google Drive connector,
   \texttt{sync --watch}) are additive features, not architectural risks.
 \end{faqpair}
