@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-03-07
+
+### Tool
+
+- Fire-and-forget for side-effect MCP tools (#81)
+
+### Fixed
+
+- `--json` flag produces valid JSON for every CLI command (#80)
+- 38 new tests for CLI error paths, flag passthrough, and edge cases
+- Remove `[skip ci]` from release-plugin.sh (suppressed tag-triggered releases)
+
+### Docs
+
+- Add DESIGN.md and update stale documentation (#82)
+
 ## [1.0.0] - 2026-03-06
 
 ### Tool

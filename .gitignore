@@ -61,3 +61,18 @@ htmlcov/
 
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
+
+# Plugin runtime state (vox, tts, biff)
+.tts/
+.vox/
+.biff.local
+
+# Dev scratch files
+*.tmp
+prfaq*.bbl
+prfaq*.bcf
+prfaq*.blg
+prfaq*.run.xml
+
+# MCP project-local
+.mcp.json
