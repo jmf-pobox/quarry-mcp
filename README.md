@@ -273,16 +273,18 @@ Both Claude Desktop and Claude Code access Quarry through these MCP tools. You d
 | Tool | What it does |
 |------|-------------|
 | `find` | Semantic search with optional filters |
-| `ingest` | Index a file or URL (auto-detects type) |
-| `remember` | Index inline text (for uploads, clipboard, etc.) |
+| `ingest` | Index a file or URL (returns immediately, processes in background) |
+| `remember` | Index inline text (returns immediately, processes in background) |
 | `show` | Show document metadata or a specific page's text |
 | `list` | List documents, collections, databases, or registrations |
-| `delete` | Remove a document or collection |
-| `register_directory` | Register a directory for sync |
-| `deregister_directory` | Remove a directory registration |
-| `sync_all_registrations` | Re-index all registered directories |
+| `delete` | Remove a document or collection (background) |
+| `register_directory` | Register a directory for sync (background) |
+| `deregister_directory` | Remove a directory registration (background) |
+| `sync_all_registrations` | Re-index all registered directories (background) |
 | `use` | Switch to a different database |
 | `status` | Database stats |
+
+Side-effect tools (`ingest`, `remember`, `delete`, `register_directory`, `deregister_directory`, `sync_all_registrations`) return an optimistic response immediately and process in the background. This keeps Claude responsive during long-running operations like PDF ingestion or directory sync.
 
 ## Roadmap
 
@@ -296,16 +298,16 @@ For product vision and positioning, see [PR/FAQ](prfaq.pdf).
 ## Development
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src/ tests/
-uv run pytest                  # run the test suite
+make check                     # run all quality gates (lint, type, test)
+make test                      # run the test suite only
+make format                    # auto-format code
 ```
 
-Quarry is fully typed (`py.typed`) and can be used as a Python library. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture, and how to add new formats.
+Quarry is fully typed (`py.typed`) and can be used as a Python library. See [DESIGN.md](DESIGN.md) for architecture and design decisions, and [CONTRIBUTING.md](CONTRIBUTING.md) for setup and how to add new formats.
 
 ## Documentation
 
+- [Design](DESIGN.md) — architecture and design decisions
 - [Changelog](CHANGELOG.md)
 - [AWS Setup Guide](docs/AWS-SETUP.md) — IAM, S3, SageMaker deployment
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
