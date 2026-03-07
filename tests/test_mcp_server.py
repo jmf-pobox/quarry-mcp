@@ -44,11 +44,10 @@ class TestRemember:
             ),
         ):
             result = mcp_remember("# Hello\nWorld", "notes.md")
-
-        assert "notes.md" in result
-        assert "background" in result
-        started.wait(timeout=2)
-        assert started.is_set()
+            assert "notes.md" in result
+            assert "background" in result
+            started.wait(timeout=2)
+            assert started.is_set()
 
     def test_passes_format_hint(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
@@ -63,9 +62,8 @@ class TestRemember:
         ):
             mcp_remember("text", "a.txt", format_hint="markdown")
             done.wait(timeout=2)
-
-        call_kwargs = mock_ingest.call_args[1]
-        assert call_kwargs["format_hint"] == "markdown"
+            call_kwargs = mock_ingest.call_args[1]
+            assert call_kwargs["format_hint"] == "markdown"
 
     def test_passes_collection(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
@@ -80,9 +78,8 @@ class TestRemember:
         ):
             mcp_remember("text", "a.txt", collection="ml-101")
             done.wait(timeout=2)
-
-        call_kwargs = mock_ingest.call_args[1]
-        assert call_kwargs["collection"] == "ml-101"
+            call_kwargs = mock_ingest.call_args[1]
+            assert call_kwargs["collection"] == "ml-101"
 
 
 class TestDeleteDocument:
@@ -98,11 +95,10 @@ class TestDeleteDocument:
             ),
         ):
             result = delete("report.pdf")
-
-        assert "report.pdf" in result
-        assert "background" in result
-        done.wait(timeout=2)
-        assert done.is_set()
+            assert "report.pdf" in result
+            assert "background" in result
+            done.wait(timeout=2)
+            assert done.is_set()
 
     def test_invalid_kind(self) -> None:
         result = delete("x", kind="bogus")
@@ -121,10 +117,9 @@ class TestDeleteDocument:
         ):
             result = delete("report.pdf", collection="math")
             done.wait(timeout=2)
-
-        mock_del.assert_called_once()
-        assert mock_del.call_args[1]["collection"] == "math"
-        assert "report.pdf" in result
+            mock_del.assert_called_once()
+            assert mock_del.call_args[1]["collection"] == "math"
+            assert "report.pdf" in result
 
 
 class TestStatus:
@@ -517,18 +512,22 @@ class TestDeleteCollection:
         ):
             result = delete("math", kind="collection")
             done.wait(timeout=2)
-
-        mock_del.assert_called_once()
-        assert "math" in result
-        assert "background" in result
+            mock_del.assert_called_once()
+            assert "math" in result
+            assert "background" in result
 
 
 class TestHandleErrors:
-    def test_returns_error_on_background_spawn_failure(self) -> None:
+    def test_returns_error_on_background_spawn_failure(self, tmp_path: Path) -> None:
         """_handle_errors catches exceptions before background spawn."""
-        with patch(
-            "quarry.mcp_server._background",
-            side_effect=RuntimeError("thread pool exhausted"),
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch(
+                "quarry.mcp_server._background",
+                side_effect=RuntimeError("thread pool exhausted"),
+            ),
         ):
             result = ingest("/tmp/bad.pdf")
 
@@ -563,29 +562,43 @@ class TestHandleErrors:
 
 class TestRegisterDirectory:
     def test_returns_summary_immediately(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
         done = threading.Event()
         d = tmp_path / "course"
         d.mkdir()
-        with patch(
-            "quarry.mcp_server._background",
-            side_effect=lambda *a, **kw: done.set(),
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch(
+                "quarry.mcp_server._background",
+                side_effect=lambda *a, **kw: done.set(),
+            ),
         ):
             result = register_directory(str(d), "my-course")
         assert "my-course" in result
+        assert "background" in result
         assert str(d.resolve()) in result
         assert done.is_set()
 
     def test_default_collection_from_dir_name(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
         d = tmp_path / "ml-101"
         d.mkdir()
-        with patch("quarry.mcp_server._background"):
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._background"),
+        ):
             result = register_directory(str(d))
         assert "ml-101" in result
 
 
 class TestDeregisterDirectory:
-    def test_returns_immediately_with_background(self) -> None:
-        with patch("quarry.mcp_server._background") as mock_bg:
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server._background") as mock_bg,
+        ):
             result = deregister_directory("math")
         assert "math" in result
         assert "background" in result
@@ -593,8 +606,13 @@ class TestDeregisterDirectory:
 
 
 class TestSyncAllRegistrations:
-    def test_returns_immediately_with_background(self) -> None:
-        with patch("quarry.mcp_server._background") as mock_bg:
+    def test_returns_immediately_with_background(self, tmp_path: Path) -> None:
+        settings = _settings(tmp_path)
+        with (
+            patch("quarry.mcp_server._settings", return_value=settings),
+            patch("quarry.mcp_server._db"),
+            patch("quarry.mcp_server._background") as mock_bg,
+        ):
             result = sync_all_registrations()
         assert "Syncing" in result
         assert "background" in result

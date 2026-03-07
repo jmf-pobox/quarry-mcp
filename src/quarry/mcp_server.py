@@ -27,7 +27,6 @@ from quarry.formatting import (
     format_databases,
     format_document_detail,
     format_documents,
-    format_register_summary,
     format_registrations,
     format_search_results,
     format_status,
@@ -152,11 +151,10 @@ def find(
     return format_search_results(query, formatted)
 
 
-def _do_ingest(source: str, overwrite: bool, collection: str) -> None:
+def _do_ingest(
+    source: str, overwrite: bool, collection: str, settings: Settings, db: LanceDB
+) -> None:
     """Blocking ingest — runs in background thread."""
-    settings = _settings()
-    db = _db()
-
     if source.startswith(("http://", "https://")):
         pipeline_ingest_auto(
             source, db, settings, overwrite=overwrite, collection=collection or ""
@@ -191,7 +189,9 @@ def ingest(
         overwrite: If true, replace existing data.
         collection: Collection name. Auto-derived if empty.
     """
-    _background(_do_ingest, source, overwrite, collection)
+    settings = _settings()
+    db = _db()
+    _background(_do_ingest, source, overwrite, collection, settings, db)
     return f"\u25b6  Ingesting {source} (background)"
 
 
@@ -201,10 +201,10 @@ def _do_remember(
     overwrite: bool,
     collection: str,
     format_hint: str,
+    settings: Settings,
+    db: LanceDB,
 ) -> None:
     """Blocking remember — runs in background thread."""
-    settings = _settings()
-    db = _db()
     pipeline_ingest_content(
         content,
         document_name,
@@ -239,8 +239,17 @@ def remember(
         collection: Collection name (default: 'default').
         format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
     """
+    settings = _settings()
+    db = _db()
     _background(
-        _do_remember, content, document_name, overwrite, collection, format_hint
+        _do_remember,
+        content,
+        document_name,
+        overwrite,
+        collection,
+        format_hint,
+        settings,
+        db,
     )
     return f"\u25b6  Remembering {document_name} (background)"
 
@@ -327,9 +336,8 @@ def show(
     return format_document_detail(match[0])
 
 
-def _do_delete(name: str, kind: str, collection: str) -> None:
+def _do_delete(name: str, kind: str, collection: str, db: LanceDB) -> None:
     """Blocking delete — runs in background thread."""
-    db = _db()
     if kind == "collection":
         db_delete_collection(db, name)
     else:
@@ -354,13 +362,13 @@ def delete(
     """
     if kind not in ("document", "collection"):
         return f"Invalid kind {kind!r}. Must be 'document' or 'collection'."
-    _background(_do_delete, name, kind, collection)
+    db = _db()
+    _background(_do_delete, name, kind, collection, db)
     return f"\u25b6  Deleting {kind} {name!r} (background)"
 
 
-def _do_register(directory: str, collection: str) -> None:
+def _do_register(directory: str, collection: str, settings: Settings) -> None:
     """Blocking register — runs in background thread."""
-    settings = _settings()
     path = Path(directory).resolve()
     col = collection or path.name
     conn = open_registry(settings.registry_path)
@@ -381,15 +389,17 @@ def register_directory(directory: str, collection: str = "") -> str:
         directory: Absolute path to the directory.
         collection: Collection name. Uses directory name if empty.
     """
+    settings = _settings()
     path = Path(directory).resolve()
     col = collection or path.name
-    _background(_do_register, directory, collection)
-    return format_register_summary(str(path), col)
+    _background(_do_register, directory, collection, settings)
+    return f"\u25b6  Registering {path} as {col!r} (background)"
 
 
-def _do_deregister(collection: str, keep_data: bool) -> None:
+def _do_deregister(
+    collection: str, keep_data: bool, settings: Settings, db: LanceDB
+) -> None:
     """Blocking deregister — runs in background thread."""
-    settings = _settings()
     conn = open_registry(settings.registry_path)
     try:
         doc_names = registry_deregister(conn, collection)
@@ -397,7 +407,6 @@ def _do_deregister(collection: str, keep_data: bool) -> None:
         conn.close()
 
     if not keep_data and doc_names:
-        db = _db()
         for name in doc_names:
             db_delete_document(db, name, collection=collection)
 
@@ -416,14 +425,14 @@ def deregister_directory(
         collection: Collection name to deregister.
         keep_data: If true, keep indexed data in LanceDB.
     """
-    _background(_do_deregister, collection, keep_data)
+    settings = _settings()
+    db = _db()
+    _background(_do_deregister, collection, keep_data, settings, db)
     return f"\u25b6  Deregistering {collection!r} (background)"
 
 
-def _do_sync() -> None:
+def _do_sync(settings: Settings, db: LanceDB) -> None:
     """Blocking sync — runs in background thread."""
-    settings = _settings()
-    db = _db()
     engine_sync_all(db, settings)
 
 
@@ -434,7 +443,9 @@ def sync_all_registrations() -> str:
 
     Returns immediately — sync runs in the background.
     """
-    _background(_do_sync)
+    settings = _settings()
+    db = _db()
+    _background(_do_sync, settings, db)
     return "\u25b6  Syncing all registrations (background)"
 
 
