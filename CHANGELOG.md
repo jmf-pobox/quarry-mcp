@@ -16,6 +16,8 @@ across `transform`, `index`, and `connector`).
 
 ## [1.0.1] - 2026-03-07
 
+## [1.0.1] - 2026-03-07
+
 ### Tool
 
 - Fire-and-forget for side-effect MCP tools (#81)
