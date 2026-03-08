@@ -42,11 +42,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
-_STATIC_CORS_HEADERS = {
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-}
-
 
 class _QuarryContext:
     """Shared state for the HTTP server: settings, database, embeddings."""
@@ -127,12 +122,18 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         return True
 
     def _cors_headers(self) -> dict[str, str]:
-        """Build CORS headers, reflecting the Origin if it's in the allow list."""
+        """Build CORS headers, reflecting the Origin if it's in the allow list.
+
+        Always emits ``Vary: Origin`` so caches key on origin regardless of
+        match — prevents a non-CORS cached response from being served to a
+        valid CORS request.
+        """
         origin = self.headers.get("Origin", "")
-        headers = dict(_STATIC_CORS_HEADERS)
+        headers: dict[str, str] = {"Vary": "Origin"}
         if origin in self.server.ctx.cors_origins:
             headers["Access-Control-Allow-Origin"] = origin
-            headers["Vary"] = "Origin"
+            headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
         return headers
 
     def do_OPTIONS(self) -> None:

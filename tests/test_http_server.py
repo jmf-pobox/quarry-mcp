@@ -290,7 +290,9 @@ class TestOptionsPreflightCors:
         resp.close()
 
     def test_cors_allows_authorization_header(self, server_url: str):
-        resp = _get_response(f"{server_url}/health", method="OPTIONS")
+        resp = _get_with_origin(
+            f"{server_url}/health", "http://localhost", method="OPTIONS"
+        )
         allow_headers = resp.headers.get("Access-Control-Allow-Headers", "")
         resp.close()
         tokens = [h.strip().lower() for h in allow_headers.split(",")]
@@ -342,14 +344,21 @@ class TestCorsOrigins:
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost:4321"
         resp.close()
 
-    def test_non_matching_origin_no_header(self, cors_server_url: str):
+    def test_non_matching_origin_no_cors_headers(self, cors_server_url: str):
         resp = _get_with_origin(f"{cors_server_url}/health", "https://evil.com")
         assert resp.headers.get("Access-Control-Allow-Origin") is None
+        assert resp.headers.get("Access-Control-Allow-Methods") is None
+        assert resp.headers.get("Access-Control-Allow-Headers") is None
+        assert resp.headers["Vary"] == "Origin"
         resp.close()
 
-    def test_no_origin_header_no_cors(self, cors_server_url: str):
-        data = _get(f"{cors_server_url}/health")
-        assert data["status"] == "ok"
+    def test_no_origin_header_no_cors_headers(self, cors_server_url: str):
+        resp = _get_response(f"{cors_server_url}/health")
+        assert resp.headers.get("Access-Control-Allow-Origin") is None
+        assert resp.headers.get("Access-Control-Allow-Methods") is None
+        assert resp.headers.get("Access-Control-Allow-Headers") is None
+        assert resp.headers["Vary"] == "Origin"
+        resp.close()
 
     def test_options_reflects_matching_origin(self, cors_server_url: str):
         resp = _get_with_origin(
