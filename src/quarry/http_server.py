@@ -119,7 +119,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
             return value
 
         # Handle HTTP request line: "<METHOD> <TARGET> HTTP/<VERSION>"
-        parts = value.split(" ")
+        parts = value.split(None, 2)
         if len(parts) == 3 and parts[2].startswith("HTTP/"):
             method, target, version = parts
             return f"{method} {target.split('?', 1)[0]} {version}"
