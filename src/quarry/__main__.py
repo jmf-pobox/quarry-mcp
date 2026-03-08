@@ -727,6 +727,13 @@ def serve(
         int,
         typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
     ] = 0,
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help="Address to bind. 127.0.0.1 (default) or 0.0.0.0 for containers.",
+        ),
+    ] = "127.0.0.1",
     api_key: Annotated[
         str | None,
         typer.Option(
@@ -748,7 +755,7 @@ def serve(
 
     settings = _resolved_settings()
     origins = frozenset(cors_origin) if cors_origin else None
-    http_serve(settings, port=port, api_key=api_key, cors_origins=origins)
+    http_serve(settings, port=port, host=host, api_key=api_key, cors_origins=origins)
 
 
 @app.command()

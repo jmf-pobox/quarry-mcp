@@ -320,6 +320,7 @@ def serve(
     settings: Settings,
     port: int = 0,
     *,
+    host: str = "127.0.0.1",
     api_key: str | None = None,
     cors_origins: frozenset[str] | None = None,
 ) -> None:
@@ -328,10 +329,19 @@ def serve(
     Args:
         settings: Resolved application settings.
         port: Port to bind (0 = OS-assigned).
+        host: Address to bind. ``127.0.0.1`` for local-only (default),
+            ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token. When set, all GET endpoints except
             /health require ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins. Defaults to ``http://localhost``.
     """
+    if host != "127.0.0.1" and not api_key:
+        msg = (
+            "Refusing to bind to %s without --api-key. "
+            "Non-loopback hosts require authentication."
+        )
+        raise SystemExit(msg % host)
+
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
@@ -342,7 +352,7 @@ def serve(
     _ = ctx.db
     logger.info("Embedding model ready")
 
-    server = QuarryHTTPServer(("127.0.0.1", port), ctx)
+    server = QuarryHTTPServer((host, port), ctx)
     actual_port = server.server_address[1]
 
     try:
@@ -361,7 +371,7 @@ def serve(
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    logger.info("Quarry HTTP server listening on http://127.0.0.1:%d", actual_port)
+    logger.info("Quarry HTTP server listening on http://%s:%d", host, actual_port)
     try:
         server.serve_forever()
     finally:
