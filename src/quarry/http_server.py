@@ -100,7 +100,20 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-        logger.info(format, *args)
+        # Redact query strings from access logs to avoid leaking user input
+        # (CWE-532). BaseHTTPRequestHandler passes the full request line
+        # (e.g. "GET /search?q=secret HTTP/1.1") as the first positional arg.
+        redacted_args = tuple(
+            self._redact_query_string(a) if isinstance(a, str) else a for a in args
+        )
+        logger.info(format, *redacted_args)
+
+    @staticmethod
+    def _redact_query_string(value: str) -> str:
+        """Strip query parameters from request line strings."""
+        if "?" in value:
+            return value[: value.index("?")]
+        return value
 
     def _ctx(self) -> _QuarryContext:
         return self.server.ctx
@@ -168,7 +181,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
             for r in results
         ]
 
-        logger.info("Search query=%r results=%d", query, len(formatted))
+        logger.info("Search results=%d", len(formatted))
         self._send_json(
             {
                 "query": query,
