@@ -312,9 +312,7 @@ def auth_server_url(tmp_path: Path):
     server.server_close()
 
 
-def _get_with_auth(
-    url: str, api_key: str | None = None
-) -> dict[str, Any]:
+def _get_with_auth(url: str, api_key: str | None = None) -> dict[str, Any]:
     """GET with optional Bearer auth."""
     req = Request(url)  # noqa: S310
     if api_key is not None:
@@ -324,9 +322,7 @@ def _get_with_auth(
         return body
 
 
-def _get_status_with_auth(
-    url: str, api_key: str | None = None
-) -> int:
+def _get_status_with_auth(url: str, api_key: str | None = None) -> int:
     """GET with optional Bearer auth, return status code."""
     req = Request(url)  # noqa: S310
     if api_key is not None:
@@ -376,9 +372,7 @@ class TestApiKeyAuth:
             )
         assert data["total_documents"] == 0
 
-    def test_no_auth_required_when_key_not_configured(
-        self, server_url: str
-    ):
+    def test_no_auth_required_when_key_not_configured(self, server_url: str):
         """The default server_url fixture has no api_key — all open."""
         with patch("quarry.http_server.search", return_value=[]):
             data = _get(f"{server_url}/search?q=test")

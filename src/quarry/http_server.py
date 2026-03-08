@@ -111,7 +111,7 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Unauthorized"}, status=401)
             return False
 
-        token = auth_header[len("Bearer "):]
+        token = auth_header[len("Bearer ") :]
         if not hmac.compare_digest(token, api_key):
             self._send_json({"error": "Unauthorized"}, status=401)
             return False
