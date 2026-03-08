@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "http://localhost",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
 }
 
 
@@ -103,16 +103,16 @@ class QuarryHTTPHandler(BaseHTTPRequestHandler):
     def _check_auth(self, path: str) -> bool:
         """Verify Bearer token if api_key is configured. Returns True if ok."""
         api_key = self.server.ctx.api_key
-        if api_key is None or path in self._AUTH_EXEMPT_PATHS:
+        if not api_key or path in self._AUTH_EXEMPT_PATHS:
             return True
 
         auth_header = self.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
             self._send_json({"error": "Unauthorized"}, status=401)
             return False
 
-        token = auth_header[len("Bearer ") :]
-        if not hmac.compare_digest(token, api_key):
+        if not hmac.compare_digest(parts[1], api_key):
             self._send_json({"error": "Unauthorized"}, status=401)
             return False
 
@@ -297,7 +297,7 @@ def serve(settings: Settings, port: int = 0, *, api_key: str | None = None) -> N
     Args:
         settings: Resolved application settings.
         port: Port to bind (0 = OS-assigned).
-        api_key: Optional Bearer token. When set, all endpoints except
+        api_key: Optional Bearer token. When set, all GET endpoints except
             /health require ``Authorization: Bearer <key>``.
     """
     port_path = settings.lancedb_path.parent / "serve.port"

@@ -287,6 +287,13 @@ class TestOptionsPreflightCors:
         assert resp.status == 204
         resp.close()
 
+    def test_cors_allows_authorization_header(self, server_url: str):
+        resp = _get_response(f"{server_url}/health", method="OPTIONS")
+        allow_headers = resp.headers.get("Access-Control-Allow-Headers", "")
+        resp.close()
+        tokens = [h.strip().lower() for h in allow_headers.split(",")]
+        assert "authorization" in tokens
+
 
 # --- API key auth tests ---
 
@@ -387,3 +394,38 @@ class TestApiKeyAuth:
         except HTTPError as exc:
             status = exc.code
         assert status == 401
+
+    def test_bearer_scheme_case_insensitive(self, auth_server_url: str):
+        """RFC 7235: auth scheme names are case-insensitive."""
+        with patch("quarry.http_server.search", return_value=[]):
+            req = Request(  # noqa: S310
+                f"{auth_server_url}/search?q=test"
+            )
+            req.add_header("Authorization", f"bearer {_TEST_API_KEY}")
+            with urlopen(req, timeout=5) as resp:  # noqa: S310
+                data: dict[str, Any] = json.loads(resp.read())
+        assert data["query"] == "test"
+
+
+class TestEmptyApiKey:
+    """Empty API key string should not enable auth."""
+
+    @pytest.fixture()
+    def empty_key_server_url(self, tmp_path: Path):
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings, api_key="")
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+
+        server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{port}"
+        server.shutdown()
+        server.server_close()
+
+    def test_empty_key_does_not_require_auth(self, empty_key_server_url: str):
+        with patch("quarry.http_server.search", return_value=[]):
+            data = _get(f"{empty_key_server_url}/search?q=test")
+        assert data["query"] == "test"
