@@ -335,6 +335,13 @@ def serve(
             /health require ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins. Defaults to ``http://localhost``.
     """
+    if host != "127.0.0.1" and not api_key:
+        msg = (
+            "Refusing to bind to %s without --api-key. "
+            "Non-loopback hosts require authentication."
+        )
+        raise SystemExit(msg % host)
+
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
