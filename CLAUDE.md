@@ -158,7 +158,7 @@ Quarry serves the punt-labs.com chat widget's RAG backend at `quarry.fly.dev`.
 - **Machine:** `shared-cpu-2x`, 512 MB RAM
 - **Volume:** `quarry_data` mounted at `/data` (persistent LanceDB storage)
 - **Auth:** `QUARRY_API_KEY` set via `fly secrets` (also in macOS Keychain as `quarry-api-key`)
-- **Auto-stop:** Machine stops after idle; auto-starts on request
+- **Auto-stop:** Disabled (`--autostop=off`). Machine runs continuously.
 
 ### Database Sync (Local → Fly)
 

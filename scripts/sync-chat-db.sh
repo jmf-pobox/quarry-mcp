@@ -2,7 +2,8 @@
 # Rebuild the chat database and sync it to Fly.io.
 #
 # The chat database is a curated subset of the punt-labs workspace:
-# READMEs, DESIGN.md, CHANGELOGs, prfaq PDFs, and blog posts.
+# READMEs, DESIGN.md, CHANGELOGs, prfaq PDFs, research files, blog posts,
+# and the public website's content collections, data files, and key pages.
 # It serves the punt-labs.com chat widget via quarry.fly.dev.
 #
 # Usage: ./scripts/sync-chat-db.sh
@@ -10,14 +11,18 @@
 # Prerequisites:
 #   - quarry CLI installed
 #   - fly CLI authenticated (fly auth login)
+#   - python3 available (for JSON→markdown conversion)
 #   - Workspace at ~/Coding/punt-labs/
+#   - For full coverage: cd public-website && npx astro build (renders HTML pages)
 
 set -euo pipefail
+shopt -s nullglob
 
 WORKSPACE="${QUARRY_WORKSPACE:-$HOME/Coding/punt-labs}"
 APP="quarry"
 TARBALL="/tmp/chat-lancedb.tar.gz"
 REMOTE_PATH="/data/default"
+SCRATCH="${WORKSPACE}/.tmp"
 
 echo "=== Rebuilding chat database ==="
 quarry use chat
@@ -59,12 +64,120 @@ for f in public-website/src/content/blog/*.md; do
 done
 
 echo ""
+echo "--- Reading list ---"
+for f in public-website/src/content/reading/*.md; do
+  quarry ingest "$f" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+done
+
+echo ""
+echo "--- Press releases ---"
+for f in public-website/src/content/press/*.md; do
+  quarry ingest "$f" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+done
+
+echo ""
+echo "--- Demos ---"
+for f in public-website/src/content/demos/*.md; do
+  quarry ingest "$f" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+done
+
+echo ""
+echo "--- Research files ---"
+# Use python3 to handle filenames with spaces safely.
+# Covers both top-level research/ and per-project */research/ directories.
+python3 -c "
+import subprocess, pathlib
+for pattern in ('research/{ext}', '*/research/{ext}'):
+    for ext in ('*.md', '*.pdf', '*.docx'):
+        for f in sorted(pathlib.Path('.').glob(pattern.format(ext=ext))):
+            proj = f.parts[0] if len(f.parts) > 2 else 'workspace'
+            r = subprocess.run(
+                ['quarry', 'ingest', str(f), '--collection', proj, '--overwrite'],
+                capture_output=True, text=True,
+            )
+            for line in r.stdout.splitlines():
+                if line.startswith('Done:'):
+                    print(line)
+                    break
+"
+
+echo ""
+echo "--- Project data (JSON→markdown) ---"
+mkdir -p "$SCRATCH"
+SCRATCH_DIR="$SCRATCH" python3 -c "
+import json, pathlib, os
+out = pathlib.Path(os.environ['SCRATCH_DIR'])
+data = json.loads(pathlib.Path('public-website/src/data/projects.json').read_text())
+lines = ['# Punt Labs Projects\n']
+for p in data:
+    lines.append(f\"## {p['name']}\n\")
+    lines.append(f\"**Tagline:** {p['tagline']}\n\")
+    lines.append(f\"{p['description']}\n\")
+    if p.get('features'):
+        lines.append('**Features:**\n')
+        for feat in p['features']:
+            lines.append(f'- {feat}')
+        lines.append('')
+    lines.append(f\"**Category:** {p['category']} | **Stage:** {p.get('stage','—')} | **Version:** {p.get('version','—')}\")
+    if p.get('installCommand'):
+        lines.append(f\"**Install:** \`{p['installCommand']}\`\")
+    lines.append('')
+(out / 'projects-catalog.md').write_text('\n'.join(lines))
+"
+quarry ingest "$SCRATCH/projects-catalog.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+
+echo ""
+echo "--- Technology radar (JSON→markdown) ---"
+SCRATCH_DIR="$SCRATCH" python3 -c "
+import json, pathlib, os
+out = pathlib.Path(os.environ['SCRATCH_DIR'])
+data = json.loads(pathlib.Path('public-website/src/data/radar.json').read_text())
+quadrant_names = {q['id']: q['name'] for q in data.get('quadrants', [])}
+ring_names = {r['id']: r['name'] for r in data.get('rings', [])}
+lines = ['# Punt Labs Technology Radar\n']
+for entry in data.get('entries', []):
+    label = entry.get('label', '?')
+    quadrant = quadrant_names.get(entry.get('quadrant', ''), '?')
+    ring = ring_names.get(entry.get('ring', ''), '?')
+    desc = entry.get('description', '')
+    lines.append(f'## {label}')
+    lines.append(f'**Quadrant:** {quadrant} | **Ring:** {ring}')
+    if desc:
+        lines.append(desc)
+    lines.append('')
+(out / 'technology-radar.md').write_text('\n'.join(lines))
+"
+quarry ingest "$SCRATCH/technology-radar.md" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+
+echo ""
+echo "--- Website pages (rendered HTML) ---"
+DIST="public-website/dist/client"
+if [ -d "$DIST" ]; then
+  for page in about grounding building-blocks building-blocks/integration applications radar demos; do
+    html="$DIST/$page/index.html"
+    if [ -f "$html" ]; then
+      quarry ingest "$html" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+    fi
+  done
+  # Homepage
+  if [ -f "$DIST/index.html" ]; then
+    quarry ingest "$DIST/index.html" --collection public-website --overwrite 2>&1 | grep "^Done:" || true
+  fi
+else
+  echo "WARNING: $DIST not found — skipping rendered pages."
+  echo "Run 'cd public-website && npx astro build' first for full coverage."
+fi
+
+echo ""
 quarry status
 
 echo ""
 echo "=== Creating tarball ==="
-# COPYFILE_DISABLE suppresses macOS ._* resource fork files that break LanceDB on Linux
-COPYFILE_DISABLE=1 tar czf "$TARBALL" -C "$HOME/.quarry/data/chat" lancedb
+# COPYFILE_DISABLE suppresses macOS ._* resource fork files.
+# --no-xattrs prevents PAX xattr headers (com.apple.provenance) that cause
+# GNU tar on Linux to exit with error.
+xattr -cr "$HOME/.quarry/data/chat/lancedb" 2>/dev/null || true
+COPYFILE_DISABLE=1 tar czf "$TARBALL" --no-xattrs -C "$HOME/.quarry/data/chat" lancedb
 ls -lh "$TARBALL"
 
 echo ""
@@ -79,7 +192,8 @@ EOF
 
 echo ""
 echo "=== Extracting on Fly.io ==="
-fly ssh console -a "$APP" -C "rm -rf ${REMOTE_PATH}/lancedb && tar xzf /data/chat-lancedb.tar.gz -C ${REMOTE_PATH}/ && rm /data/chat-lancedb.tar.gz"
+# fly ssh -C doesn't invoke a shell, so use sh -c for chained commands
+fly ssh console -a "$APP" -C "sh -c 'rm -rf ${REMOTE_PATH}/lancedb && tar xzf /data/chat-lancedb.tar.gz -C ${REMOTE_PATH}/ && rm /data/chat-lancedb.tar.gz'"
 
 echo ""
 echo "=== Restarting server ==="
@@ -104,3 +218,4 @@ fi
 echo ""
 echo "=== Done ==="
 rm -f "$TARBALL"
+rm -f "$SCRATCH/projects-catalog.md" "$SCRATCH/technology-radar.md"
