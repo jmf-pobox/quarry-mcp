@@ -146,6 +146,10 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 - **Empty key = no auth** — `QUARRY_API_KEY=""` is treated as unset, preventing accidental trivial bypass.
 - **No auth when omitted** — local use (menu bar, CLI) requires no key. Auth is opt-in for production deployment.
 
+### Container Deployment (Fly.io)
+
+Multi-stage Dockerfile: (1) install Python deps with `uv sync`, (2) download the embedding model at build time via `hf_hub_download`, (3) slim runtime image with baked-in model. LanceDB data lives on a Fly persistent volume at `/data` (`QUARRY_ROOT=/data`). The `--host 0.0.0.0` flag binds to all interfaces for container networking. Auto-stop scales to zero when idle; cold start is ~5s with the baked-in model (no download on first request). TLS is terminated by Fly's proxy.
+
 ### Threaded Request Handling
 
 `QuarryHTTPServer` extends `ThreadingHTTPServer` — each request gets its own daemon thread. This prevents a slow embedding (the dominant latency) from blocking other clients. Thread safety relies on immutable shared state: `_QuarryContext` fields are set once at startup, LanceDB handles concurrent reads internally, and ONNX Runtime sessions are thread-safe for inference. Alternative considered: uvicorn/starlette (async) — rejected as unnecessary complexity for 5 synchronous endpoints with no I/O multiplexing benefit.
