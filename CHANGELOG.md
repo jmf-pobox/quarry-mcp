@@ -14,7 +14,21 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-03-07
+### Tool
+
+- **`quarry serve` Fly.io deployment** — HTTP server supports `--host 0.0.0.0` for container environments. Threaded request handling for concurrent clients. Configurable CORS origins via `--cors-origin`. (#86, #87, #88)
+- **Bearer token auth** — `--api-key` flag enables `Authorization: Bearer` authentication on all HTTP endpoints (#85)
+
+### Infra
+
+- **Chat database expansion** — `sync-chat-db.sh` now ingests the full punt-labs.com content surface: reading list, press releases, demos, research files (md/pdf/docx), projects.json and radar.json (via JSON→markdown conversion), and rendered HTML pages. Fixes macOS→Linux tar xattr issues (`--no-xattrs`). (#89)
+- **Fly.io auto-stop disabled** — machine runs continuously for zero cold-start latency on chat widget requests
+
+### Fixed
+
+- Redact query strings from HTTP access logs (CWE-532) (#84)
+- HTTP request logging at INFO level with search query details (#83)
+- Include README.md in Docker build for uv build backend (#88)
 
 ## [1.0.1] - 2026-03-07
 
