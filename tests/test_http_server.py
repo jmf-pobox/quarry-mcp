@@ -133,9 +133,10 @@ class TestConcurrency:
                 f.result()
             elapsed = time.monotonic() - start
 
-        # If serialized, elapsed >= 2 * delay. If concurrent, elapsed ~= delay.
-        assert elapsed < 2 * delay, (
-            f"Requests serialized: {elapsed:.2f}s >= {2 * delay:.2f}s"
+        # If serialized, elapsed >= 2 * delay (0.6s). If concurrent, ~= delay.
+        # Allow generous headroom for CI thread scheduling overhead.
+        assert elapsed < 1.5 * delay, (
+            f"Requests appear serialized: {elapsed:.2f}s >= {1.5 * delay:.2f}s"
         )
 
 

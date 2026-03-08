@@ -335,9 +335,11 @@ def serve(
     port_path = settings.lancedb_path.parent / "serve.port"
 
     ctx = _QuarryContext(settings, api_key=api_key, cors_origins=cors_origins)
-    # Eagerly load embedding model so cold-start happens before serving
+    # Eagerly initialize cached properties before serving — cached_property
+    # is not thread-safe, so all shared state must be resolved single-threaded.
     logger.info("Loading embedding model...")
     _ = ctx.embedder
+    _ = ctx.db
     logger.info("Embedding model ready")
 
     server = QuarryHTTPServer(("127.0.0.1", port), ctx)
