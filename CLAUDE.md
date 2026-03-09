@@ -111,25 +111,43 @@ Before creating a PR, verify:
 
 - [ ] **DESIGN.md updated** if architecture, module responsibilities, or design decisions changed
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
-- [ ] **CHANGELOG entry included in the PR diff** for notable changes (not retroactively on main)
+- [ ] **CHANGELOG entry included in the PR diff** under `## [Unreleased]` (not retroactively on main)
+- [ ] **prfaq.tex updated** if the change shifts product direction or validates/invalidates a risk
 - [ ] **Quality gates pass** — `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`
 - [ ] **Live demo** for features — create a test database (`--db demo`), ingest real content, and exercise the new behavior end-to-end. Fix any issues discovered before opening the PR.
 
+### Documentation Discipline
+
+The Pre-PR Checklist above gates these — a PR missing required doc updates is not ready to merge.
+
+1. **CHANGELOG.** Entries are written in the PR branch, before merge — not retroactively on main. If a PR changes user-facing behavior and the diff does not include a CHANGELOG entry, the PR is not ready to merge. Follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format under `## [Unreleased]`.
+
+2. **README.** Update README.md when user-facing behavior changes — new flags, commands, defaults, or config.
+
+3. **PR/FAQ.** Update prfaq.tex when the change shifts product direction or validates/invalidates a risk assumption.
+
 ### Pull Request and Code Review Workflow
 
-Do **not** merge immediately after creating a PR. The full flow is:
+Do **not** merge immediately after creating a PR. Expect **2-6 review cycles** before merging. The full flow is:
 
-1. **Create PR** — Push branch, open PR (via MCP or `gh pr create`).
-2. **Wait for CI and Copilot** — Block until all checks resolve:
+1. **Create PR** — Push branch, open PR via `mcp__github__create_pull_request`. Prefer MCP GitHub tools over `gh` CLI where possible.
+2. **Watch for CI and review feedback in the background** — Do not stop waiting. Block until all checks resolve:
 
    ```bash
    gh pr checks <number> --watch          # BLOCKING: polls until all checks pass or fail
-   gh pr view <number> --comments         # Read Copilot and Bugbot feedback
    ```
 
-3. **Evaluate feedback** — Read each comment; decide which are valid and actionable.
-4. **Address valid issues** — Commit fixes; push; re-run `gh pr checks <number> --watch` and `gh pr view <number> --comments` after each push.
-5. **Merge only when** — All review feedback has been evaluated (addressed or explicitly declined), GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
+   After CI passes, read feedback using MCP tools — Copilot and Bugbot may take 1-3 minutes to post after CI completes:
+
+   ```text
+   mcp__github__pull_request_read  →  get_reviews
+   mcp__github__pull_request_read  →  get_review_comments
+   ```
+
+3. **Take every comment seriously.** Do not dismiss feedback as "unrelated to the change" or "pre-existing." Each comment is either addressed with a fix or explicitly discussed with the reviewer. No silent dismissals.
+4. **Fix, re-push, repeat.** Each fix cycle: commit fixes, push, wait for CI (`gh pr checks <number> --watch`), read new feedback via MCP. Repeat until the **last review cycle is uneventful** — zero new comments, all checks green.
+5. **Merge only when** — The last review cycle produced zero new comments, GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
+6. **Merge via MCP, not `gh`.** Use `mcp__github__merge_pull_request` (API-only, no local git side effects). `gh pr merge` tries to checkout main locally, which can fail in worktrees.
 
 **Quality gates apply at every step:** Each commit that addresses review feedback must pass both local checks and GitHub Actions. Do not merge if any CI check is failing.
 
