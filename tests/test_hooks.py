@@ -13,6 +13,7 @@ from quarry.hooks import (
     HookConfig,
     _extract_transcript_text,
     _extract_url,
+    _extract_web_fetch_content,
     _find_registration,
     _format_context,
     _unique_collection_name,
@@ -395,6 +396,41 @@ class TestExtractUrl:
         assert _extract_url(payload) is None
 
 
+class TestExtractWebFetchContent:
+    def test_extracts_from_json_result_field(self) -> None:
+        payload: dict[str, object] = {
+            "tool_response": json.dumps({"result": "<html>Hello</html>"}),
+        }
+        assert _extract_web_fetch_content(payload) == "<html>Hello</html>"
+
+    def test_extracts_from_json_string(self) -> None:
+        payload: dict[str, object] = {
+            "tool_response": json.dumps("Plain text content"),
+        }
+        assert _extract_web_fetch_content(payload) == "Plain text content"
+
+    def test_returns_none_for_missing_tool_response(self) -> None:
+        assert _extract_web_fetch_content({}) is None
+
+    def test_returns_none_for_non_string_tool_response(self) -> None:
+        assert _extract_web_fetch_content({"tool_response": 42}) is None
+
+    def test_returns_none_for_invalid_json(self) -> None:
+        assert _extract_web_fetch_content({"tool_response": "not json{{"}) is None
+
+    def test_returns_none_for_empty_result(self) -> None:
+        payload: dict[str, object] = {
+            "tool_response": json.dumps({"result": "  "}),
+        }
+        assert _extract_web_fetch_content(payload) is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        payload: dict[str, object] = {
+            "tool_response": json.dumps("   "),
+        }
+        assert _extract_web_fetch_content(payload) is None
+
+
 class TestHandlePostWebFetch:
     def test_no_url_returns_empty(self) -> None:
         result = handle_post_web_fetch({})
@@ -412,13 +448,68 @@ class TestHandlePostWebFetch:
             "cwd": str(project),
             "tool_input": {"url": "https://example.com/page"},
         }
-        with patch("quarry.hooks.ingest_url") as mock_ingest:
+        with patch("quarry.hooks.ingest_content") as mock_ingest:
             result = handle_post_web_fetch(payload)
         assert result == {}
         mock_ingest.assert_not_called()
 
-    def test_ingests_new_url(self) -> None:
-        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/page"}}
+    def test_ingests_content_from_tool_response(self) -> None:
+        """Prefers already-fetched content from tool_response (no re-fetch)."""
+        from quarry.models import PageContent, PageType
+
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<html>Page content</html>"}),
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 5,
+        }
+        mock_pages = [
+            PageContent(
+                text="Page content",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name="https://example.com/page",
+                document_path="https://example.com/page",
+            )
+        ]
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch(
+                "quarry.html_processor.process_html_text",
+                return_value=mock_pages,
+            ),
+            patch(
+                "quarry.hooks.ingest_content",
+                return_value=mock_ingest_result,
+            ) as mock_content,
+            patch("quarry.hooks.ingest_url") as mock_url,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        mock_content.assert_called_once()
+        call_args = mock_content.call_args
+        assert call_args[0][0] == "Page content"
+        assert call_args[0][1] == "https://example.com/page"
+        assert call_args[1]["collection"] == "web-captures"
+        assert call_args[1]["format_hint"] == "markdown"
+        mock_url.assert_not_called()
+
+    def test_falls_back_to_ingest_url_without_tool_response(self) -> None:
+        """Falls back to ingest_url when tool_response is absent."""
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+        }
         mock_ingest_result = {
             "document_name": "https://example.com/page",
             "collection": "web-captures",
@@ -435,15 +526,46 @@ class TestHandlePostWebFetch:
             patch(
                 "quarry.hooks.ingest_url",
                 return_value=mock_ingest_result,
-            ) as mock_ingest,
+            ) as mock_url,
+            patch("quarry.hooks.ingest_content") as mock_content,
         ):
             result = handle_post_web_fetch(payload)
 
         assert result == {}
-        mock_ingest.assert_called_once()
-        call_kwargs = mock_ingest.call_args
-        assert call_kwargs[0][0] == "https://example.com/page"
-        assert call_kwargs[1]["collection"] == "web-captures"
+        mock_url.assert_called_once()
+        assert mock_url.call_args[0][0] == "https://example.com/page"
+        assert mock_url.call_args[1]["collection"] == "web-captures"
+        mock_content.assert_not_called()
+
+    def test_falls_back_when_html_is_boilerplate(self) -> None:
+        """Falls back to ingest_url when tool_response has no extractable text."""
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<nav>Menu</nav>"}),
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 3,
+        }
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.html_processor.process_html_text", return_value=[]),
+            patch(
+                "quarry.hooks.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        mock_url.assert_called_once()
 
     def test_skips_already_ingested_url(self) -> None:
         payload: dict[str, object] = {"tool_input": {"url": "https://example.com/old"}}
@@ -614,6 +736,14 @@ class TestHandlePreCompact:
         result = handle_pre_compact({"transcript_path": str(tmp_path / "t.jsonl")})
         assert result == {}
 
+    def test_rejects_non_jsonl_transcript(self, tmp_path: Path) -> None:
+        payload: dict[str, object] = {
+            "transcript_path": str(tmp_path / "secrets.txt"),
+            "session_id": "abc123",
+        }
+        result = handle_pre_compact(payload)
+        assert result == {}
+
     def test_ingests_transcript(self, tmp_path: Path) -> None:
         transcript = tmp_path / "session.jsonl"
         transcript.write_text(
@@ -710,3 +840,83 @@ class TestHookCLI:
         result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
         assert result.exit_code == 0
         assert json.loads(result.output) == {}
+
+
+# ---------------------------------------------------------------------------
+# Wiring tests — hooks.json references scripts that exist and are executable
+# ---------------------------------------------------------------------------
+
+_HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
+
+
+class TestHookWiring:
+    """Verify hooks.json entries reference shell scripts that exist."""
+
+    def test_hooks_json_is_valid(self) -> None:
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        assert "hooks" in data
+
+    def test_all_referenced_scripts_exist(self) -> None:
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        plugin_root = _HOOKS_DIR.parent
+
+        for entries in data["hooks"].values():
+            for entry in entries:
+                for hook in entry.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    # Resolve ${CLAUDE_PLUGIN_ROOT} to the actual plugin root.
+                    resolved = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
+                    script = Path(resolved)
+                    assert script.is_file(), f"Missing script: {cmd}"
+                    assert script.stat().st_mode & 0o111, f"Not executable: {cmd}"
+
+    def test_session_sync_script_exists(self) -> None:
+        script = _HOOKS_DIR / "session-sync.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_web_fetch_script_exists(self) -> None:
+        script = _HOOKS_DIR / "web-fetch.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_pre_compact_script_exists(self) -> None:
+        script = _HOOKS_DIR / "pre-compact.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_session_start_hook_registered(self) -> None:
+        """SessionStart has entries for both plugin setup and Python sync."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        session_entries = data["hooks"]["SessionStart"]
+        commands = [
+            h["command"] for entry in session_entries for h in entry.get("hooks", [])
+        ]
+        assert any("session-start.sh" in c for c in commands), (
+            "Missing plugin setup hook"
+        )
+        assert any("session-sync.sh" in c for c in commands), "Missing Python sync hook"
+
+    def test_web_fetch_hook_registered(self) -> None:
+        """PostToolUse has a WebFetch matcher entry."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        post_entries = data["hooks"]["PostToolUse"]
+        web_fetch_entries = [e for e in post_entries if e.get("matcher") == "WebFetch"]
+        assert len(web_fetch_entries) == 1
+        commands = [h["command"] for h in web_fetch_entries[0]["hooks"]]
+        assert any("web-fetch.sh" in c for c in commands)
+
+    def test_pre_compact_hook_registered(self) -> None:
+        """PreCompact event is registered in hooks.json."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        assert "PreCompact" in data["hooks"]
+        pre_entries = data["hooks"]["PreCompact"]
+        commands = [
+            h["command"] for entry in pre_entries for h in entry.get("hooks", [])
+        ]
+        assert any("pre-compact.sh" in c for c in commands)

@@ -224,6 +224,32 @@ def _extract_url(payload: dict[str, object]) -> str | None:
     return None
 
 
+def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
+    """Extract already-fetched content from a PostToolUse WebFetch payload.
+
+    The ``tool_response`` field is a JSON-encoded string containing the
+    fetched HTML/text.  When present and valid, using this avoids a second
+    network fetch and reduces SSRF exposure by not issuing an additional
+    request from quarry itself on that code path.
+    """
+    import json as _json  # noqa: PLC0415
+
+    tool_response = payload.get("tool_response")
+    if not isinstance(tool_response, str):
+        return None
+    try:
+        parsed = _json.loads(tool_response)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        result = parsed.get("result")
+        if isinstance(result, str) and result.strip():
+            return result
+    if isinstance(parsed, str) and parsed.strip():
+        return parsed
+    return None
+
+
 def _is_already_ingested(url: str, db: LanceDB) -> bool:
     """Check if *url* is already in the web-captures collection."""
     docs = list_documents(db, collection_filter=_WEB_CAPTURES_COLLECTION)
@@ -233,8 +259,10 @@ def _is_already_ingested(url: str, db: LanceDB) -> bool:
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     """Handle PostToolUse on WebFetch.
 
-    Extracts the fetched URL and ingests it into the ``web-captures``
-    collection.  Skips URLs that are already ingested (dedup by
+    Ingests the already-fetched content from the hook payload into the
+    ``web-captures`` collection.  Uses ``tool_response`` directly — no
+    second network request.  Falls back to ``ingest_url`` only if the
+    payload lacks content.  Skips URLs already ingested (dedup by
     document_name).
     """
     cwd_obj = payload.get("cwd")
@@ -257,12 +285,37 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("post-web-fetch: already ingested %s, skipping", url)
         return {}
 
-    result = ingest_url(
-        url,
-        db,
-        settings,
-        collection=_WEB_CAPTURES_COLLECTION,
-    )
+    # Prefer already-fetched content from tool_response (avoids extra fetch).
+    # Trade-off: chunks are tagged source_format="inline" instead of ".html"
+    # since we strip HTML before ingestion. The URL is preserved as
+    # document_name, which is the primary identifier in search results.
+    content = _extract_web_fetch_content(payload)
+    result = None
+    if content:
+        from quarry.html_processor import process_html_text  # noqa: PLC0415
+
+        pages = process_html_text(content, url, url)
+        if pages:
+            clean_text = "\n\n".join(p.text for p in pages)
+            result = ingest_content(
+                clean_text,
+                url,
+                db,
+                settings,
+                collection=_WEB_CAPTURES_COLLECTION,
+                format_hint="markdown",
+            )
+        else:
+            logger.debug("post-web-fetch: no text in tool_response, falling back")
+
+    if result is None:
+        # Fallback: re-fetch if tool_response is missing/empty/boilerplate.
+        result = ingest_url(
+            url,
+            db,
+            settings,
+            collection=_WEB_CAPTURES_COLLECTION,
+        )
     logger.info(
         "post-web-fetch: ingested %s (%d chunks)",
         url,
@@ -356,6 +409,12 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     session_id = str(payload.get("session_id", ""))
     if not transcript_path or not session_id:
         logger.debug("pre-compact: missing transcript_path or session_id")
+        return {}
+
+    # Defense-in-depth: reject non-JSONL paths (suffix check only).
+    tp = Path(transcript_path).resolve()
+    if tp.suffix != ".jsonl":
+        logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
         return {}
 
     text = _extract_transcript_text(transcript_path)
