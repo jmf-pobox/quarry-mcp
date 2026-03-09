@@ -455,6 +455,8 @@ class TestHandlePostWebFetch:
 
     def test_ingests_content_from_tool_response(self) -> None:
         """Prefers already-fetched content from tool_response (no re-fetch)."""
+        from quarry.models import PageContent, PageType
+
         payload: dict[str, object] = {
             "tool_input": {"url": "https://example.com/page"},
             "tool_response": json.dumps({"result": "<html>Page content</html>"}),
@@ -464,6 +466,16 @@ class TestHandlePostWebFetch:
             "collection": "web-captures",
             "chunks": 5,
         }
+        mock_pages = [
+            PageContent(
+                text="Page content",
+                page_number=1,
+                total_pages=1,
+                page_type=PageType.SECTION,
+                document_name="https://example.com/page",
+                document_path="https://example.com/page",
+            )
+        ]
 
         with (
             patch(
@@ -472,6 +484,10 @@ class TestHandlePostWebFetch:
             ),
             patch("quarry.hooks.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch(
+                "quarry.html_processor.process_html_text",
+                return_value=mock_pages,
+            ),
             patch(
                 "quarry.hooks.ingest_content",
                 return_value=mock_ingest_result,
@@ -483,10 +499,10 @@ class TestHandlePostWebFetch:
         assert result == {}
         mock_content.assert_called_once()
         call_args = mock_content.call_args
-        assert call_args[0][0] == "<html>Page content</html>"
+        assert call_args[0][0] == "Page content"
         assert call_args[0][1] == "https://example.com/page"
         assert call_args[1]["collection"] == "web-captures"
-        assert call_args[1]["format_hint"] == "html"
+        assert call_args[1]["format_hint"] == "markdown"
         mock_url.assert_not_called()
 
     def test_falls_back_to_ingest_url_without_tool_response(self) -> None:

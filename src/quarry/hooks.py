@@ -287,13 +287,21 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     # Prefer already-fetched content from tool_response (no SSRF risk).
     content = _extract_web_fetch_content(payload)
     if content:
+        from quarry.html_processor import process_html_text  # noqa: PLC0415
+
+        pages = process_html_text(content, url, url)
+        if not pages:
+            logger.debug("post-web-fetch: no text extracted from %s", url)
+            return {}
+        # Join extracted markdown sections for ingestion.
+        clean_text = "\n\n".join(p.text for p in pages)
         result = ingest_content(
-            content,
+            clean_text,
             url,
             db,
             settings,
             collection=_WEB_CAPTURES_COLLECTION,
-            format_hint="html",
+            format_hint="markdown",
         )
     else:
         # Fallback: re-fetch if tool_response is missing/empty.
