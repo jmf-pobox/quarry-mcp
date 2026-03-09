@@ -710,3 +710,83 @@ class TestHookCLI:
         result = runner.invoke(app, ["hooks", "session-start"], input="not json{{{")
         assert result.exit_code == 0
         assert json.loads(result.output) == {}
+
+
+# ---------------------------------------------------------------------------
+# Wiring tests — hooks.json references scripts that exist and are executable
+# ---------------------------------------------------------------------------
+
+_HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
+
+
+class TestHookWiring:
+    """Verify hooks.json entries reference shell scripts that exist."""
+
+    def test_hooks_json_is_valid(self) -> None:
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        assert "hooks" in data
+
+    def test_all_referenced_scripts_exist(self) -> None:
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        plugin_root = _HOOKS_DIR.parent
+
+        for entries in data["hooks"].values():
+            for entry in entries:
+                for hook in entry.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    # Resolve ${CLAUDE_PLUGIN_ROOT} to the actual plugin root.
+                    resolved = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(plugin_root))
+                    script = Path(resolved)
+                    assert script.is_file(), f"Missing script: {cmd}"
+                    assert script.stat().st_mode & 0o111, f"Not executable: {cmd}"
+
+    def test_session_sync_script_exists(self) -> None:
+        script = _HOOKS_DIR / "session-sync.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_web_fetch_script_exists(self) -> None:
+        script = _HOOKS_DIR / "web-fetch.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_pre_compact_script_exists(self) -> None:
+        script = _HOOKS_DIR / "pre-compact.sh"
+        assert script.is_file()
+        assert script.stat().st_mode & 0o111
+
+    def test_session_start_hook_registered(self) -> None:
+        """SessionStart has entries for both plugin setup and Python sync."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        session_entries = data["hooks"]["SessionStart"]
+        commands = [
+            h["command"] for entry in session_entries for h in entry.get("hooks", [])
+        ]
+        assert any("session-start.sh" in c for c in commands), (
+            "Missing plugin setup hook"
+        )
+        assert any("session-sync.sh" in c for c in commands), "Missing Python sync hook"
+
+    def test_web_fetch_hook_registered(self) -> None:
+        """PostToolUse has a WebFetch matcher entry."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        post_entries = data["hooks"]["PostToolUse"]
+        web_fetch_entries = [e for e in post_entries if e.get("matcher") == "WebFetch"]
+        assert len(web_fetch_entries) == 1
+        commands = [h["command"] for h in web_fetch_entries[0]["hooks"]]
+        assert any("web-fetch.sh" in c for c in commands)
+
+    def test_pre_compact_hook_registered(self) -> None:
+        """PreCompact event is registered in hooks.json."""
+        hooks_json = _HOOKS_DIR / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        assert "PreCompact" in data["hooks"]
+        pre_entries = data["hooks"]["PreCompact"]
+        commands = [
+            h["command"] for entry in pre_entries for h in entry.get("hooks", [])
+        ]
+        assert any("pre-compact.sh" in c for c in commands)
