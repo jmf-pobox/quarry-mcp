@@ -285,6 +285,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         return {}
 
     # Prefer already-fetched content from tool_response (no SSRF risk).
+    # Trade-off: chunks are tagged source_format="inline" instead of ".html"
+    # since we strip HTML before ingestion. The URL is preserved as
+    # document_name, which is the primary identifier in search results.
     content = _extract_web_fetch_content(payload)
     if content:
         from quarry.html_processor import process_html_text  # noqa: PLC0415
@@ -293,7 +296,6 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         if not pages:
             logger.debug("post-web-fetch: no text extracted from %s", url)
             return {}
-        # Join extracted markdown sections for ingestion.
         clean_text = "\n\n".join(p.text for p in pages)
         result = ingest_content(
             clean_text,
@@ -406,7 +408,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         logger.debug("pre-compact: missing transcript_path or session_id")
         return {}
 
-    # Defense-in-depth: only read JSONL files from Claude's data directory.
+    # Defense-in-depth: reject non-JSONL paths (suffix check only).
     tp = Path(transcript_path).resolve()
     if tp.suffix != ".jsonl":
         logger.warning("pre-compact: unexpected suffix %s", tp.suffix)
