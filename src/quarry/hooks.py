@@ -289,24 +289,26 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     # since we strip HTML before ingestion. The URL is preserved as
     # document_name, which is the primary identifier in search results.
     content = _extract_web_fetch_content(payload)
+    result = None
     if content:
         from quarry.html_processor import process_html_text  # noqa: PLC0415
 
         pages = process_html_text(content, url, url)
-        if not pages:
-            logger.debug("post-web-fetch: no text extracted from %s", url)
-            return {}
-        clean_text = "\n\n".join(p.text for p in pages)
-        result = ingest_content(
-            clean_text,
-            url,
-            db,
-            settings,
-            collection=_WEB_CAPTURES_COLLECTION,
-            format_hint="markdown",
-        )
-    else:
-        # Fallback: re-fetch if tool_response is missing/empty.
+        if pages:
+            clean_text = "\n\n".join(p.text for p in pages)
+            result = ingest_content(
+                clean_text,
+                url,
+                db,
+                settings,
+                collection=_WEB_CAPTURES_COLLECTION,
+                format_hint="markdown",
+            )
+        else:
+            logger.debug("post-web-fetch: no text in tool_response, falling back")
+
+    if result is None:
+        # Fallback: re-fetch if tool_response is missing/empty/boilerplate.
         result = ingest_url(
             url,
             db,

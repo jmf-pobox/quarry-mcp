@@ -537,6 +537,36 @@ class TestHandlePostWebFetch:
         assert mock_url.call_args[1]["collection"] == "web-captures"
         mock_content.assert_not_called()
 
+    def test_falls_back_when_html_is_boilerplate(self) -> None:
+        """Falls back to ingest_url when tool_response has no extractable text."""
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<nav>Menu</nav>"}),
+        }
+        mock_ingest_result = {
+            "document_name": "https://example.com/page",
+            "collection": "web-captures",
+            "chunks": 3,
+        }
+
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=MagicMock(),
+            ),
+            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._is_already_ingested", return_value=False),
+            patch("quarry.html_processor.process_html_text", return_value=[]),
+            patch(
+                "quarry.hooks.ingest_url",
+                return_value=mock_ingest_result,
+            ) as mock_url,
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+        mock_url.assert_called_once()
+
     def test_skips_already_ingested_url(self) -> None:
         payload: dict[str, object] = {"tool_input": {"url": "https://example.com/old"}}
 
