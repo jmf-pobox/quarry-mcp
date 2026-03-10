@@ -16,6 +16,14 @@ across `transform`, `index`, and `connector`).
 
 ## [1.3.2] - 2026-03-09
 
+### Fixed
+
+- **Session start hook hang** — `sys.stdin.read()` blocks until EOF.
+  When Claude Code does not close the stdin pipe for SessionStart hooks,
+  `quarry hooks session-start` hung forever, freezing session resume.
+  Added `_read_hook_stdin()` using non-blocking `os.read()` in a
+  `select` loop with 50ms inter-chunk timeout. See biff DES-027.
+
 ## [1.3.1] - 2026-03-09
 
 ## [1.3.0] - 2026-03-09
