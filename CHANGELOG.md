@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-09
+
 ### Added
 
 - **Convention hints via PreToolUse hook** — Passive, non-blocking hints that surface project conventions when agent commands drift: `git add -A` → stage specific files, `pip install` → use uv, `git commit` without full quality gate → reminder. Two-class rule system: instant rules (single command regex) and sequence rules (temporal context from a rolling event accumulator). All hints use `permissionDecision: "allow"` — advisory only, never blocking. Configurable via `convention_hints: false` in `.claude/quarry.local.md`.
