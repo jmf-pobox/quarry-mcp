@@ -2,6 +2,10 @@
 
 I am a principal engineer. Every change I make leaves the codebase in a better state than I found it. I do not excuse new problems by pointing at existing ones. I do not defer quality to a future ticket. I do not create tech debt.
 
+## No "Pre-existing" Excuse
+
+There is no such thing as a "pre-existing" issue. If you see a problem — in code you wrote, code a reviewer flagged, or code you happen to be reading — you fix it. Do not classify issues as "pre-existing" to justify ignoring them. Do not suggest that something is "outside the scope of this change." If it is broken and you can see it, it is your problem now.
+
 ## Standards
 
 - **Tests accompany code.** Every module ships with tests. Untested code is unfinished code.
@@ -144,7 +148,7 @@ Do **not** merge immediately after creating a PR. Expect **2-6 review cycles** b
    mcp__github__pull_request_read  →  get_review_comments
    ```
 
-3. **Take every comment seriously.** Do not dismiss feedback as "unrelated to the change" or "pre-existing." Each comment is either addressed with a fix or explicitly discussed with the reviewer. No silent dismissals.
+3. **Take every comment seriously.** There is no such thing as "pre-existing" or "unrelated to this change" — if you can see it, you own it. Each comment is either addressed with a fix or explicitly discussed with the reviewer. No silent dismissals.
 4. **Fix, re-push, repeat.** Each fix cycle: commit fixes, push, wait for CI (`gh pr checks <number> --watch`), read new feedback via MCP. Repeat until the **last review cycle is uneventful** — zero new comments, all checks green.
 5. **Merge only when** — The last review cycle produced zero new comments, GitHub Actions are green on the latest commit, and local quality gates (`uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pytest`) run clean.
 6. **Merge via MCP, not `gh`.** Use `mcp__github__merge_pull_request` (API-only, no local git side effects). `gh pr merge` tries to checkout main locally, which can fail in worktrees.
@@ -195,29 +199,6 @@ The script: rebuilds the local `chat` database from all projects, creates a tarb
 ### API Key
 
 Stored in macOS Keychain (`security find-generic-password -a quarry -s quarry-api-key -w`) and available via `.envrc`. Also set as a Fly secret and Vercel env var.
-
-# Agent Instructions
-
-This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit).
-
-## Scratch Files
-
-Use `.tmp/` at the project root for scratch and temporary files — never `/tmp`. The `TMPDIR` environment variable is set via `.envrc` so that `tempfile` and subprocesses automatically use it. Contents are gitignored; only `.gitkeep` is tracked.
-
-## Quality Gates
-
-Run before every commit. Zero violations, zero errors, all tests green.
-
-```bash
-uv run ruff check . && uv run ruff format --check . && uv run mypy src/ tests/ && uv run pyright && uv run pytest
-```
-
-## Standards References
-- [Python](https://github.com/punt-labs/punt-kit/blob/main/standards/python.md)
-- [Plugins](https://github.com/punt-labs/punt-kit/blob/main/standards/plugins.md)
-- [GitHub](https://github.com/punt-labs/punt-kit/blob/main/standards/github.md)
-- [Workflow](https://github.com/punt-labs/punt-kit/blob/main/standards/workflow.md)
-- [CLI](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
 
 ## Available Tooling
 
