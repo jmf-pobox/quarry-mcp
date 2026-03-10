@@ -453,12 +453,24 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     return {}
 
 
+def _sanitize_session_id(raw: str) -> str:
+    """Sanitize *raw* to a safe filename component.
+
+    Strips path separators and non-alphanumeric characters to prevent
+    path traversal.  Returns only ``[a-zA-Z0-9_-]`` characters.
+    """
+    import re  # noqa: PLC0415
+
+    return re.sub(r"[^a-zA-Z0-9_-]", "", raw)[:64]
+
+
 def _hint_state_path(session_id: str) -> Path:
     """Return the path to the hint state file for *session_id*."""
     import tempfile  # noqa: PLC0415
 
+    safe_id = _sanitize_session_id(session_id)
     tmpdir = Path(tempfile.gettempdir())
-    return tmpdir / f"hint-state-{session_id}.json"
+    return tmpdir / f"hint-state-{safe_id}.json"
 
 
 def handle_pre_tool_hint(
@@ -495,34 +507,47 @@ def handle_pre_tool_hint(
             logger.debug("pre-tool-hint: disabled by config")
             return {}
 
-    session_id = payload.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
-        session_id = "unknown"
-
-    # Load or create accumulator.
-    state_path = _hint_state_path(session_id)
-    try:
-        state_data = state_path.read_text()
-    except OSError:
-        state_data = "[]"
-
-    acc = HintAccumulator.from_json(state_data)
-
     # Check instant rules first (no accumulator needed).
     hint = check_instant_rules(command)
 
-    # Check sequence rules if no instant hint fired.
-    if hint is None:
-        hint = check_sequence_rules(acc.recent(), command)
+    # Sequence rules require a valid session_id for state persistence.
+    session_id_raw = payload.get("session_id")
+    has_session = isinstance(session_id_raw, str) and bool(session_id_raw)
 
-    # Add the current event to the accumulator.
-    acc.add(ToolEvent(ts=time.time(), tool="Bash", command=command))
+    if has_session:
+        state_path = _hint_state_path(str(session_id_raw))
+        try:
+            state_data = state_path.read_text()
+        except OSError:
+            state_data = "[]"
 
-    # Persist state (fail-open: ignore write errors).
-    try:
-        state_path.write_text(acc.to_json())
-    except OSError:
-        logger.debug("pre-tool-hint: could not write state to %s", state_path)
+        acc = HintAccumulator.from_json(state_data)
+
+        # Check sequence rules if no instant hint fired.
+        if hint is None:
+            hint = check_sequence_rules(acc.recent(), command)
+
+        # Add the current event to the accumulator.
+        acc.add(ToolEvent(ts=time.time(), tool="Bash", command=command))
+
+        # Persist state with restricted permissions (fail-open).
+        try:
+            import os  # noqa: PLC0415
+
+            fd = os.open(
+                str(state_path),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            try:
+                os.write(fd, acc.to_json().encode())
+            finally:
+                os.close(fd)
+        except OSError:
+            logger.debug(
+                "pre-tool-hint: could not write state to %s",
+                state_path,
+            )
 
     if hint:
         return {

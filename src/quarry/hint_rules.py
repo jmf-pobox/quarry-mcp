@@ -16,29 +16,37 @@ from quarry.hint_accumulator import ToolEvent
 
 _INSTANT_RULES: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"git\s+add\s+(-A|\.)\s*$"),
+        re.compile(r"git\s+add\s+(-A|\.)(?=\s|$)"),
         "Reminder: stage specific files by name rather than `git add -A` or "
         "`git add .` — avoids accidentally staging secrets or large binaries.",
     ),
     (
-        re.compile(r"(?<!\buv\s)(?<!\buv\s\s)\bpip\s+install\b"),
+        re.compile(r"(?<!\S)pip\s+install\b"),
         "Reminder: use `uv` for package management, not `pip`.",
     ),
     (
-        re.compile(r"git\s+push\s.*(-f|--force)\b"),
+        re.compile(r"git\s+push\s.*(-f\b|--force(?!-))"),
         "Reminder: force-push is destructive — confirm this is intentional.",
     ),
     (
-        re.compile(r"git\s+commit\s.*(-n\b|--no-verify)"),
+        re.compile(r"git\s+commit\s(?:[^-]|-(?!m\b))*(-n\b|--no-verify)"),
         "Reminder: do not skip hooks (`--no-verify`) unless explicitly asked.",
     ),
 ]
+
+
+def _is_uv_pip(command: str) -> bool:
+    """Check if *command* is ``uv pip install`` (not bare ``pip``)."""
+    return bool(re.search(r"(?:^|\s)uv\s+pip\s+install\b", command))
 
 
 def check_instant_rules(command: str) -> str | None:
     """Return the first matching instant hint, or ``None``."""
     for pattern, hint in _INSTANT_RULES:
         if pattern.search(command):
+            # Exclude uv pip install from the pip rule.
+            if "pip" in hint and _is_uv_pip(command):
+                continue
             return hint
     return None
 
@@ -65,6 +73,11 @@ _SOLO_GATE_PATTERN = re.compile(
 )
 
 
+def _is_solo_gate(command: str) -> bool:
+    """True if *command* is a solo gate tool (not chained with ``&&``)."""
+    return bool(_SOLO_GATE_PATTERN.search(command)) and "&&" not in command
+
+
 def _command_has_full_gate(command: str) -> bool:
     """Check if *command* contains all quality gate components."""
     return all(component in command for component in _GATE_COMPONENTS)
@@ -86,11 +99,11 @@ def check_sequence_rules(events: list[ToolEvent], command: str) -> str | None:
         if not any(_command_has_full_gate(e.command) for e in recent):
             return _FULL_GATE
 
-    # Rule: 2+ consecutive solo gate tools (chained commands don't count)
-    if _SOLO_GATE_PATTERN.search(command) and "&&" not in command:
+    # Rule: 2+ consecutive solo gate tools
+    if _is_solo_gate(command):
         consecutive = 0
         for e in reversed(events):
-            if _SOLO_GATE_PATTERN.search(e.command):
+            if _is_solo_gate(e.command):
                 consecutive += 1
             else:
                 break

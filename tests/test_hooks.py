@@ -955,8 +955,13 @@ class TestHookWiring:
         assert "PreToolUse" in data["hooks"]
         entries = data["hooks"]["PreToolUse"]
         bash_entries = [e for e in entries if e.get("matcher") == "Bash"]
-        assert len(bash_entries) == 1
-        commands = [h["command"] for h in bash_entries[0]["hooks"]]
+        assert bash_entries, "Expected at least one Bash matcher for PreToolUse"
+        commands = [
+            h["command"]
+            for entry in bash_entries
+            for h in entry.get("hooks", [])
+            if "command" in h
+        ]
         assert any("pre-tool-hint.sh" in c for c in commands)
 
 
@@ -991,7 +996,10 @@ class TestHandlePreToolHint:
         result = handle_pre_tool_hint(payload)
         assert result == {}
 
-    def test_instant_hint_fires(self) -> None:
+    def test_instant_hint_fires(self, tmp_path: Path, monkeypatch: object) -> None:
+        import tempfile
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         payload: dict[str, object] = {
             "tool_input": {"command": "git add -A"},
             "session_id": "test-instant",
@@ -1003,7 +1011,12 @@ class TestHandlePreToolHint:
         assert output["permissionDecision"] == "allow"
         assert "stage specific files" in str(output["additionalContext"])
 
-    def test_no_hint_for_safe_command(self) -> None:
+    def test_no_hint_for_safe_command(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        import tempfile
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         payload: dict[str, object] = {
             "tool_input": {"command": "ls -la"},
             "session_id": "test-safe",
@@ -1011,8 +1024,11 @@ class TestHandlePreToolHint:
         result = handle_pre_tool_hint(payload)
         assert result == {}
 
-    def test_sequence_hint_fires(self, tmp_path: Path) -> None:
+    def test_sequence_hint_fires(self, tmp_path: Path, monkeypatch: object) -> None:
         """Commit without gate triggers sequence rule."""
+        import tempfile
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         session_id = "test-sequence"
 
         # Pre-populate state with a solo mypy run (not full gate).
@@ -1033,28 +1049,33 @@ class TestHandlePreToolHint:
             result["hookSpecificOutput"]["additionalContext"]  # type: ignore[index]
         )
 
-        # Clean up state file.
-        state_path.unlink(missing_ok=True)
+    def test_state_persists_across_calls(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        import tempfile
 
-    def test_state_persists_across_calls(self) -> None:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         session_id = "test-persist"
-        state_path = _hint_state_path(session_id)
-        state_path.unlink(missing_ok=True)
 
         payload: dict[str, object] = {
             "tool_input": {"command": "ls"},
             "session_id": session_id,
         }
         handle_pre_tool_hint(payload)
+
+        state_path = _hint_state_path(session_id)
         assert state_path.exists()
 
         data = json.loads(state_path.read_text())
         assert len(data) == 1
         assert data[0]["command"] == "ls"
 
-        state_path.unlink(missing_ok=True)
+    def test_corrupt_state_file_handled(
+        self, tmp_path: Path, monkeypatch: object
+    ) -> None:
+        import tempfile
 
-    def test_corrupt_state_file_handled(self) -> None:
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
         session_id = "test-corrupt"
         state_path = _hint_state_path(session_id)
         state_path.write_text("not valid json{{{")
@@ -1070,4 +1091,25 @@ class TestHandlePreToolHint:
         data = json.loads(state_path.read_text())
         assert len(data) == 1
 
-        state_path.unlink(missing_ok=True)
+    def test_no_session_id_skips_sequence_rules(self) -> None:
+        """Without session_id, instant rules work but sequence rules skip."""
+        payload: dict[str, object] = {
+            "tool_input": {"command": "git add -A"},
+        }
+        result = handle_pre_tool_hint(payload)
+        assert "hookSpecificOutput" in result  # instant rule fires
+
+    def test_state_file_permissions(self, tmp_path: Path, monkeypatch: object) -> None:
+        import tempfile
+
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))  # type: ignore[attr-defined]
+
+        payload: dict[str, object] = {
+            "tool_input": {"command": "ls"},
+            "session_id": "test-perms",
+        }
+        handle_pre_tool_hint(payload)
+
+        state_path = _hint_state_path("test-perms")
+        mode = state_path.stat().st_mode & 0o777
+        assert mode == 0o600

@@ -206,16 +206,13 @@ Add a **PreToolUse hook** that accumulates recent tool calls in a state file and
 Adapted from biff's `DisplayQueue` pattern (`biff/src/biff/server/display_queue.py`): a timestamped rolling window of recent tool calls, persisted to a JSON file so state survives across hook invocations within a session.
 
 ```text
-State file: $TMPDIR/hint-state.json
+State file: $TMPDIR/hint-state-{session_id}.json
 
-{
-  "session_id": "abc123",
-  "events": [
-    {"ts": 1741556400.0, "tool": "Bash", "command": "uv run mypy src/"},
-    {"ts": 1741556410.0, "tool": "Bash", "command": "uv run ruff check ."},
-    {"ts": 1741556420.0, "tool": "Bash", "command": "git commit -m \"fix: ...\""}
-  ]
-}
+[
+  {"ts": 1741556400.0, "tool": "Bash", "command": "uv run mypy src/"},
+  {"ts": 1741556410.0, "tool": "Bash", "command": "uv run ruff check ."},
+  {"ts": 1741556420.0, "tool": "Bash", "command": "git commit -m \"fix: ...\""}
+]
 ```
 
 Properties (following biff's accumulator discipline):

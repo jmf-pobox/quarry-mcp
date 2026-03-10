@@ -38,12 +38,25 @@ class TestPipInstallRule:
         assert check_instant_rules("uv add requests") is None
 
 
+class TestGitAddVariants:
+    def test_git_add_dash_a_with_path(self) -> None:
+        """git add -A src/ is still a broad stage."""
+        assert check_instant_rules("git add -A src/") is not None
+
+    def test_git_add_dot_with_flag(self) -> None:
+        assert check_instant_rules("git add . --update") is not None
+
+
 class TestForcePushRule:
     def test_force_push_long_flag(self) -> None:
         assert check_instant_rules("git push --force origin main") is not None
 
     def test_force_push_short_flag(self) -> None:
         assert check_instant_rules("git push -f origin main") is not None
+
+    def test_force_with_lease_no_trigger(self) -> None:
+        """--force-with-lease is the safe alternative — no hint."""
+        assert check_instant_rules("git push --force-with-lease origin main") is None
 
     def test_regular_push(self) -> None:
         assert check_instant_rules("git push origin main") is None
@@ -63,6 +76,10 @@ class TestNoVerifyRule:
 
     def test_normal_commit(self) -> None:
         assert check_instant_rules('git commit -m "feat: add thing"') is None
+
+    def test_no_false_positive_on_message_with_n(self) -> None:
+        """'-n' in commit message should not trigger."""
+        assert check_instant_rules('git commit -m "fix -n edge"') is None
 
 
 class TestNonMatchingCommands:
@@ -138,4 +155,10 @@ class TestSoloGateToolRule:
         events = [_event("uv run mypy src/")]
         full = "uv run ruff check . && uv run pytest"
         hint = check_sequence_rules(events, full)
+        assert hint is None
+
+    def test_chained_past_event_not_counted(self) -> None:
+        """Past chained commands should not count as solo gate tools."""
+        events = [_event("uv run ruff check . && uv run pytest")]
+        hint = check_sequence_rules(events, "uv run mypy src/")
         assert hint is None
