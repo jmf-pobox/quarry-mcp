@@ -29,7 +29,7 @@ _INSTANT_RULES: list[tuple[re.Pattern[str], str]] = [
         "Reminder: force-push is destructive — confirm this is intentional.",
     ),
     (
-        re.compile(r"git\s+commit\s(?:[^-]|-(?!m\b))*(-n\b|--no-verify)"),
+        re.compile(r"git\s+commit\b"),
         "Reminder: do not skip hooks (`--no-verify`) unless explicitly asked.",
     ),
 ]
@@ -40,12 +40,26 @@ def _is_uv_pip(command: str) -> bool:
     return bool(re.search(r"(?:^|\s)uv\s+pip\s+install\b", command))
 
 
+_STRIP_QUOTES = re.compile(r""""[^"]*"|'[^']*'""")
+
+_NO_VERIFY_FLAG = re.compile(r"\s(-n\b|--no-verify)\b")
+
+
+def _has_no_verify_flag(command: str) -> bool:
+    """Check for ``-n`` or ``--no-verify`` outside quoted strings."""
+    stripped = _STRIP_QUOTES.sub("", command)
+    return bool(_NO_VERIFY_FLAG.search(stripped))
+
+
 def check_instant_rules(command: str) -> str | None:
     """Return the first matching instant hint, or ``None``."""
     for pattern, hint in _INSTANT_RULES:
         if pattern.search(command):
             # Exclude uv pip install from the pip rule.
             if "pip" in hint and _is_uv_pip(command):
+                continue
+            # Require actual --no-verify/-n flag outside quoted strings.
+            if "no-verify" in hint and not _has_no_verify_flag(command):
                 continue
             return hint
     return None

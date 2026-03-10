@@ -77,6 +77,16 @@ class TestNoVerifyRule:
     def test_normal_commit(self) -> None:
         assert check_instant_rules('git commit -m "feat: add thing"') is None
 
+    def test_no_verify_after_message(self) -> None:
+        """--no-verify after -m 'message' must still trigger."""
+        hint = check_instant_rules('git commit -m "fix" --no-verify')
+        assert hint is not None
+
+    def test_short_n_after_message(self) -> None:
+        """-n after -m 'message' must still trigger."""
+        hint = check_instant_rules('git commit -m "fix" -n')
+        assert hint is not None
+
     def test_no_false_positive_on_message_with_n(self) -> None:
         """'-n' in commit message should not trigger."""
         assert check_instant_rules('git commit -m "fix -n edge"') is None
