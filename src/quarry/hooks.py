@@ -8,6 +8,7 @@ Hook events:
     session-start    — SessionStart: auto-register and sync the current repo.
     post-web-fetch   — PostToolUse on WebFetch: auto-ingest fetched URLs.
     pre-compact      — PreCompact: capture compaction summaries.
+    pre-tool-hint    — PreToolUse on Bash: emit convention hints.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class HookConfig:
     session_sync: bool = True
     web_fetch: bool = True
     compaction: bool = True
+    convention_hints: bool = True
 
 
 def load_hook_config(cwd: str) -> HookConfig:
@@ -91,11 +93,15 @@ def load_hook_config(cwd: str) -> HookConfig:
     session_sync_val = auto.get("session_sync", True)
     web_fetch_val = auto.get("web_fetch", True)
     compaction_val = auto.get("compaction", True)
+    convention_hints_val = auto.get("convention_hints", True)
 
     return HookConfig(
         session_sync=session_sync_val if isinstance(session_sync_val, bool) else True,
         web_fetch=web_fetch_val if isinstance(web_fetch_val, bool) else True,
         compaction=compaction_val if isinstance(compaction_val, bool) else True,
+        convention_hints=(
+            convention_hints_val if isinstance(convention_hints_val, bool) else True
+        ),
     )
 
 
@@ -444,4 +450,86 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         result["chunks"],
         len(text),
     )
+    return {}
+
+
+def _hint_state_path(session_id: str) -> Path:
+    """Return the path to the hint state file for *session_id*."""
+    import tempfile  # noqa: PLC0415
+
+    tmpdir = Path(tempfile.gettempdir())
+    return tmpdir / f"hint-state-{session_id}.json"
+
+
+def handle_pre_tool_hint(
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Handle PreToolUse on Bash: emit convention hints.
+
+    Accumulates recent tool calls in a session-scoped state file and
+    checks both instant and sequence rules.  Returns an allow decision
+    with ``additionalContext`` when a hint fires, otherwise ``{}``.
+    """
+    import time  # noqa: PLC0415
+
+    from quarry.hint_accumulator import HintAccumulator, ToolEvent  # noqa: PLC0415
+    from quarry.hint_rules import (  # noqa: PLC0415
+        check_instant_rules,
+        check_sequence_rules,
+    )
+
+    # Extract command from payload.
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return {}
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return {}
+
+    # Check config toggle.
+    cwd_obj = payload.get("cwd")
+    cwd = cwd_obj if isinstance(cwd_obj, str) else ""
+    if cwd:
+        config = load_hook_config(cwd)
+        if not config.convention_hints:
+            logger.debug("pre-tool-hint: disabled by config")
+            return {}
+
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        session_id = "unknown"
+
+    # Load or create accumulator.
+    state_path = _hint_state_path(session_id)
+    try:
+        state_data = state_path.read_text()
+    except OSError:
+        state_data = "[]"
+
+    acc = HintAccumulator.from_json(state_data)
+
+    # Check instant rules first (no accumulator needed).
+    hint = check_instant_rules(command)
+
+    # Check sequence rules if no instant hint fired.
+    if hint is None:
+        hint = check_sequence_rules(acc.recent(), command)
+
+    # Add the current event to the accumulator.
+    acc.add(ToolEvent(ts=time.time(), tool="Bash", command=command))
+
+    # Persist state (fail-open: ignore write errors).
+    try:
+        state_path.write_text(acc.to_json())
+    except OSError:
+        logger.debug("pre-tool-hint: could not write state to %s", state_path)
+
+    if hint:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "additionalContext": hint,
+            },
+        }
     return {}
