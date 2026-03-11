@@ -4,6 +4,11 @@ Each handler receives the parsed stdin JSON from Claude Code and returns
 a dict that will be serialized to stdout.  All handlers are fail-open:
 exceptions are logged but never propagated to the caller.
 
+Heavy imports (lancedb, pydantic, onnxruntime) are deferred to the
+handler functions that actually need them.  The module-level imports
+are stdlib-only so that ``quarry-hook`` can load this module without
+paying the full dependency tax.
+
 Hook events:
     session-start    — SessionStart: auto-register and sync the current repo.
     post-web-fetch   — PostToolUse on WebFetch: auto-ingest fetched URLs.
@@ -16,93 +21,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from quarry.config import Settings, load_settings, resolve_db_paths
-from quarry.database import get_db, list_documents
-from quarry.pipeline import ingest_content, ingest_url
-from quarry.sync_registry import (
-    DirectoryRegistration,
-    get_registration,
-    list_registrations,
-    open_registry,
-    register_directory,
-)
-from quarry.types import LanceDB
+from quarry._stdlib import load_hook_config
+
+if TYPE_CHECKING:
+    from quarry.config import Settings
+    from quarry.sync_registry import DirectoryRegistration
+    from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
-
-_CONFIG_FILENAME = ".claude/quarry.local.md"
-
-
-@dataclass(frozen=True)
-class HookConfig:
-    """Per-project hook configuration from ``.claude/quarry.local.md``."""
-
-    session_sync: bool = True
-    web_fetch: bool = True
-    compaction: bool = True
-    convention_hints: bool = True
-
-
-def load_hook_config(cwd: str) -> HookConfig:
-    """Load hook config from YAML frontmatter in the project's config file.
-
-    Returns defaults (all enabled) if the file is missing or unparseable.
-    """
-    path = Path(cwd) / _CONFIG_FILENAME
-    if not path.is_file():
-        return HookConfig()
-
-    try:
-        text = path.read_text()
-    except (OSError, UnicodeDecodeError):
-        return HookConfig()
-
-    # Parse YAML frontmatter between --- delimiter lines.
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return HookConfig()
-
-    end_index = None
-    for i, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            end_index = i
-            break
-
-    if end_index is None:
-        return HookConfig()
-    frontmatter = "\n".join(lines[1:end_index]).strip()
-
-    import yaml  # noqa: PLC0415
-
-    try:
-        data = yaml.safe_load(frontmatter)
-    except Exception:  # noqa: BLE001
-        logger.warning("hook-config: invalid YAML in %s", path)
-        return HookConfig()
-
-    if not isinstance(data, dict):
-        return HookConfig()
-
-    auto = data.get("auto_capture")
-    if not isinstance(auto, dict):
-        return HookConfig()
-
-    session_sync_val = auto.get("session_sync", True)
-    web_fetch_val = auto.get("web_fetch", True)
-    compaction_val = auto.get("compaction", True)
-    convention_hints_val = auto.get("convention_hints", True)
-
-    return HookConfig(
-        session_sync=session_sync_val if isinstance(session_sync_val, bool) else True,
-        web_fetch=web_fetch_val if isinstance(web_fetch_val, bool) else True,
-        compaction=compaction_val if isinstance(compaction_val, bool) else True,
-        convention_hints=(
-            convention_hints_val if isinstance(convention_hints_val, bool) else True
-        ),
-    )
 
 
 def _find_registration(
@@ -126,6 +55,8 @@ def _unique_collection_name(
     same leaf name), appends the parent directory name to disambiguate:
     ``leaf-parent``.
     """
+    from quarry.sync_registry import get_registration  # noqa: PLC0415
+
     candidate = directory.name
     if get_registration(conn, candidate) is None:
         return candidate
@@ -143,6 +74,8 @@ def _unique_collection_name(
 
 def _resolve_settings() -> Settings:
     """Load settings resolved for the default database."""
+    from quarry.config import load_settings, resolve_db_paths  # noqa: PLC0415
+
     return resolve_db_paths(load_settings(), None)
 
 
@@ -184,6 +117,12 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     ``additionalContext`` immediately so Claude knows quarry is available
     without waiting for the sync to complete.
     """
+    from quarry.sync_registry import (  # noqa: PLC0415
+        list_registrations,
+        open_registry,
+        register_directory,
+    )
+
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if not cwd:
@@ -278,6 +217,8 @@ def _extract_web_fetch_content(payload: dict[str, object]) -> str | None:
 
 def _is_already_ingested(url: str, db: LanceDB) -> bool:
     """Check if *url* is already in the web-captures collection."""
+    from quarry.database import list_documents  # noqa: PLC0415
+
     docs = list_documents(db, collection_filter=_WEB_CAPTURES_COLLECTION)
     return any(d["document_name"] == url for d in docs)
 
@@ -291,6 +232,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     payload lacks content.  Skips URLs already ingested (dedup by
     document_name).
     """
+    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.pipeline import ingest_content, ingest_url  # noqa: PLC0415
+
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:
@@ -423,6 +367,9 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Each compaction creates a new document keyed by session ID and
     timestamp.
     """
+    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.pipeline import ingest_content  # noqa: PLC0415
+
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
     if cwd:

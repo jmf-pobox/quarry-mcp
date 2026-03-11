@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from quarry.__main__ import _read_hook_stdin, app
+from quarry.__main__ import app
+from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
-    HookConfig,
     _extract_transcript_text,
     _extract_url,
     _extract_web_fetch_content,
@@ -23,7 +23,6 @@ from quarry.hooks import (
     handle_pre_compact,
     handle_pre_tool_hint,
     handle_session_start,
-    load_hook_config,
 )
 from quarry.sync_registry import (
     DirectoryRegistration,
@@ -466,7 +465,7 @@ class TestHandlePostWebFetch:
             "cwd": str(project),
             "tool_input": {"url": "https://example.com/page"},
         }
-        with patch("quarry.hooks.ingest_content") as mock_ingest:
+        with patch("quarry.pipeline.ingest_content") as mock_ingest:
             result = handle_post_web_fetch(payload)
         assert result == {}
         mock_ingest.assert_not_called()
@@ -500,17 +499,17 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch(
                 "quarry.html_processor.process_html_text",
                 return_value=mock_pages,
             ),
             patch(
-                "quarry.hooks.ingest_content",
+                "quarry.pipeline.ingest_content",
                 return_value=mock_ingest_result,
             ) as mock_content,
-            patch("quarry.hooks.ingest_url") as mock_url,
+            patch("quarry.pipeline.ingest_url") as mock_url,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -539,13 +538,13 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch(
-                "quarry.hooks.ingest_url",
+                "quarry.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
-            patch("quarry.hooks.ingest_content") as mock_content,
+            patch("quarry.pipeline.ingest_content") as mock_content,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -572,11 +571,11 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=False),
             patch("quarry.html_processor.process_html_text", return_value=[]),
             patch(
-                "quarry.hooks.ingest_url",
+                "quarry.pipeline.ingest_url",
                 return_value=mock_ingest_result,
             ) as mock_url,
         ):
@@ -593,9 +592,9 @@ class TestHandlePostWebFetch:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
             patch("quarry.hooks._is_already_ingested", return_value=True),
-            patch("quarry.hooks.ingest_url") as mock_ingest,
+            patch("quarry.pipeline.ingest_url") as mock_ingest,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -745,7 +744,7 @@ class TestHandlePreCompact:
             "transcript_path": str(transcript),
             "session_id": "abc123",
         }
-        with patch("quarry.hooks.ingest_content") as mock_ingest:
+        with patch("quarry.pipeline.ingest_content") as mock_ingest:
             result = handle_pre_compact(payload)
         assert result == {}
         mock_ingest.assert_not_called()
@@ -787,9 +786,9 @@ class TestHandlePreCompact:
                 "quarry.hooks._resolve_settings",
                 return_value=MagicMock(),
             ),
-            patch("quarry.hooks.get_db", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
             patch(
-                "quarry.hooks.ingest_content",
+                "quarry.pipeline.ingest_content",
                 return_value=mock_result,
             ) as mock_ingest,
         ):
@@ -811,7 +810,7 @@ class TestHandlePreCompact:
         transcript = tmp_path / "empty.jsonl"
         transcript.write_text("")
 
-        with patch("quarry.hooks.ingest_content") as mock_ingest:
+        with patch("quarry.pipeline.ingest_content") as mock_ingest:
             result = handle_pre_compact(
                 {
                     "transcript_path": str(transcript),
@@ -974,7 +973,7 @@ class TestHookWiring:
 
 
 class TestReadHookStdin:
-    """Verify _read_hook_stdin doesn't block on open pipes (DES-027)."""
+    """Verify read_hook_stdin doesn't block on open pipes (DES-027)."""
 
     def test_empty_stdin_returns_empty(self) -> None:
         """EOF with no data returns empty string."""
@@ -982,7 +981,7 @@ class TestReadHookStdin:
         os.close(w_fd)
         r = os.fdopen(r_fd, "r")
         with patch.object(sys, "stdin", r):
-            result = _read_hook_stdin()
+            result = read_hook_stdin()
         r.close()
         assert result == ""
 
@@ -994,7 +993,7 @@ class TestReadHookStdin:
         os.close(w_fd)
         r = os.fdopen(r_fd, "r")
         with patch.object(sys, "stdin", r):
-            result = _read_hook_stdin()
+            result = read_hook_stdin()
         r.close()
         assert result == payload
 
@@ -1010,7 +1009,7 @@ class TestReadHookStdin:
         r = os.fdopen(r_fd, "r")
         try:
             with patch.object(sys, "stdin", r):
-                result = _read_hook_stdin()
+                result = read_hook_stdin()
         finally:
             r.close()
             os.close(w_fd)
@@ -1022,7 +1021,7 @@ class TestReadHookStdin:
         r = os.fdopen(r_fd, "r")
         try:
             with patch.object(sys, "stdin", r):
-                result = _read_hook_stdin()
+                result = read_hook_stdin()
         finally:
             r.close()
             os.close(w_fd)

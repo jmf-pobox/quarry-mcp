@@ -780,89 +780,40 @@ def version() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_hook_stdin() -> str:
-    """Read hook payload from stdin without blocking on EOF.
-
-    Claude Code pipes JSON to hook subprocesses but may not close the
-    pipe promptly.  ``sys.stdin.read()`` blocks until EOF — hanging the
-    hook (and the session) indefinitely.
-
-    Instead we use ``select`` + ``os.read`` to consume whatever bytes
-    are available within a tight timeout window, then return.
-
-    Falls back to ``sys.stdin.read()`` when stdin is not a real file
-    descriptor (e.g. under test harnesses like ``CliRunner``).
-    """
-    import os  # noqa: PLC0415
-    import select  # noqa: PLC0415
-    import sys  # noqa: PLC0415
-
-    try:
-        fd = sys.stdin.fileno()
-    except (AttributeError, OSError):
-        # Not a real fd (CliRunner, StringIO, etc.) — safe to read().
-        return sys.stdin.read()
-
-    # Wait up to 100ms for initial data.
-    if not select.select([fd], [], [], 0.1)[0]:
-        return ""
-    chunks: list[bytes] = []
-    while True:
-        chunk = os.read(fd, 65536)
-        if not chunk:  # EOF
-            break
-        chunks.append(chunk)
-        # 50ms inter-chunk timeout — stop when no more data arrives.
-        if not select.select([fd], [], [], 0.05)[0]:
-            break
-    return b"".join(chunks).decode()
-
-
-def _run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
-    """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open."""
-    import sys  # noqa: PLC0415
-
-    try:
-        raw = _read_hook_stdin()
-        payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
-        result = handler(payload)
-        sys.stdout.write(json.dumps(result))
-        sys.stdout.write("\n")
-    except Exception:
-        logger.exception("Hook %s failed (fail-open)", handler.__name__)
-        sys.stdout.write("{}\n")
-
-
 @hooks_app.command(name="session-start")
 def hook_session_start() -> None:
     """SessionStart: auto-register and sync the current repo."""
+    from quarry._stdlib import run_hook  # noqa: PLC0415
     from quarry.hooks import handle_session_start  # noqa: PLC0415
 
-    _run_hook(handle_session_start)
+    run_hook(handle_session_start)
 
 
 @hooks_app.command(name="post-web-fetch")
 def hook_post_web_fetch() -> None:
     """PostToolUse on WebFetch: auto-ingest fetched URLs."""
+    from quarry._stdlib import run_hook  # noqa: PLC0415
     from quarry.hooks import handle_post_web_fetch  # noqa: PLC0415
 
-    _run_hook(handle_post_web_fetch)
+    run_hook(handle_post_web_fetch)
 
 
 @hooks_app.command(name="pre-compact")
 def hook_pre_compact() -> None:
     """PreCompact: capture compaction summaries."""
+    from quarry._stdlib import run_hook  # noqa: PLC0415
     from quarry.hooks import handle_pre_compact  # noqa: PLC0415
 
-    _run_hook(handle_pre_compact)
+    run_hook(handle_pre_compact)
 
 
 @hooks_app.command(name="pre-tool-hint")
 def hook_pre_tool_hint() -> None:
     """PreToolUse on Bash: emit convention hints."""
+    from quarry._stdlib import run_hook  # noqa: PLC0415
     from quarry.hooks import handle_pre_tool_hint  # noqa: PLC0415
 
-    _run_hook(handle_pre_tool_hint)
+    run_hook(handle_pre_tool_hint)
 
 
 if __name__ == "__main__":

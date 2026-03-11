@@ -60,6 +60,7 @@ dev = [
 
 [project.scripts]
 quarry = "quarry.__main__:app"
+quarry-hook = "quarry._hook_entry:main"
 
 [project.urls]
 Homepage = "https://github.com/punt-labs/quarry"
