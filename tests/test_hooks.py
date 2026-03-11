@@ -209,6 +209,29 @@ class TestLoadHookConfig:
 
 
 # ---------------------------------------------------------------------------
+# _sync_in_background tests
+# ---------------------------------------------------------------------------
+
+
+class TestSyncInBackground:
+    def test_returns_true_on_success(self) -> None:
+        import subprocess as _subprocess
+
+        from quarry.hooks import _sync_in_background
+
+        with patch.object(_subprocess, "Popen"):
+            assert _sync_in_background() is True
+
+    def test_returns_false_on_oserror(self) -> None:
+        import subprocess as _subprocess
+
+        from quarry.hooks import _sync_in_background
+
+        with patch.object(_subprocess, "Popen", side_effect=OSError("No such file")):
+            assert _sync_in_background() is False
+
+
+# ---------------------------------------------------------------------------
 # Handler tests
 # ---------------------------------------------------------------------------
 
@@ -236,7 +259,7 @@ class TestHandleSessionStart:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch("quarry.hooks._sync_in_background", return_value=True) as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -248,7 +271,7 @@ class TestHandleSessionStart:
         assert output["hookEventName"] == "SessionStart"
         ctx = str(output["additionalContext"])
         assert "myproject" in ctx
-        assert "Background sync" in ctx
+        assert "Background sync in progress." in ctx
 
         # Verify it was registered in the registry.
         conn = open_registry(settings.registry_path)
@@ -256,6 +279,25 @@ class TestHandleSessionStart:
         conn.close()
         assert len(regs) == 1
         assert regs[0].collection == "myproject"
+
+    def test_context_reflects_sync_failure(self, tmp_path: Path) -> None:
+        project = tmp_path / "failproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value=False),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "Background sync skipped" in ctx
 
     def test_skips_registration_when_already_registered(self, tmp_path: Path) -> None:
         project = tmp_path / "existing"

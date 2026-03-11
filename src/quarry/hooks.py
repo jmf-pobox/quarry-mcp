@@ -146,7 +146,7 @@ def _resolve_settings() -> Settings:
     return resolve_db_paths(load_settings(), None)
 
 
-def _sync_in_background() -> None:
+def _sync_in_background() -> bool:
     """Fire-and-forget sync via detached subprocess.
 
     Uses ``sys.executable -m quarry`` to avoid PATH trust issues (the
@@ -155,18 +155,25 @@ def _sync_in_background() -> None:
     child from holding Claude Code's stdin pipe open after the parent
     exits.  The subprocess gets its own process group so it survives
     the hook process.
+
+    Returns True if the subprocess was launched, False on failure.
     """
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
-    subprocess.Popen(  # noqa: S603
-        [sys.executable, "-m", "quarry", "sync"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    try:
+        subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "quarry", "sync"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        logger.error("session-start: failed to launch background sync: %s", exc)
+        return False
     logger.info("session-start: background sync launched")
+    return True
 
 
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
@@ -206,12 +213,17 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             logger.info("session-start: registered %s as '%s'", directory, collection)
 
         # Return context immediately; sync runs in background.
-        _sync_in_background()
+        launched = _sync_in_background()
 
+        sync_line = (
+            "Background sync in progress."
+            if launched
+            else "Background sync skipped (could not launch)."
+        )
         context = (
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
-            "Background sync in progress.\n"
+            f"{sync_line}\n"
             "Use the quarry MCP tools (search_documents, get_page) to search "
             "this codebase semantically."
         )

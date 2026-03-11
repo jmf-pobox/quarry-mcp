@@ -21,7 +21,8 @@ across `transform`, `index`, and `connector`).
   session startup for 10+ seconds on projects with changed files. The sync
   (file discovery, text extraction, ONNX embedding) is a pure side effect
   that the hook's return value doesn't depend on. Moved sync to a detached
-  `quarry sync` subprocess via `_sync_in_background()`. Registration and
+  `quarry sync` subprocess via `_sync_in_background()`, which syncs all
+  registered directories (not just the current project). Registration and
   context injection remain synchronous; sync runs fire-and-forget. Present
   since v0.10.0 (2026-02-24), 12 releases affected.
 
