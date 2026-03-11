@@ -267,6 +267,18 @@ class TestLoadHookConfig:
         assert config.session_sync is False
         assert config.web_fetch is False
 
+    def test_comment_lines_in_auto_capture_block(self, tmp_path: Path) -> None:
+        """Indented comment lines should not terminate parsing."""
+        config_dir = tmp_path / ".claude"
+        config_dir.mkdir()
+        (config_dir / "quarry.local.md").write_text(
+            "---\nauto_capture:\n  session_sync: false\n"
+            "  # disable web fetch too\n  web_fetch: false\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.session_sync is False
+        assert config.web_fetch is False
+
 
 # ---------------------------------------------------------------------------
 # _sync_in_background tests

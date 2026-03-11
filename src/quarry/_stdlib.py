@@ -105,15 +105,16 @@ def _parse_auto_capture(lines: list[str]) -> dict[str, str] | None:
             # Skip blank / whitespace-only lines within the block.
             if not stripped:
                 continue
-            # Indented continuation lines belong to the block.
-            if line.startswith((" ", "\t")) and ":" in stripped:
+            # Non-indented, non-blank line ends the block.
+            if not line.startswith((" ", "\t")):
+                break
+            # Indented key: value lines are parsed; other indented lines
+            # (comments, list items) are ignored without ending the block.
+            if ":" in stripped:
                 key, _, val = stripped.partition(":")
                 # Strip inline YAML comments.
                 val = val.split("#")[0].strip()
                 result[key.strip()] = val
-            else:
-                # Non-indented, non-blank line ends the block.
-                break
     return result if in_block else None
 
 
