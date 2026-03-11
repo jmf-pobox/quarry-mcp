@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 # Format quarry MCP tool output for the UI panel.
 #
 # updatedMCPToolOutput sets the text displayed in the tool-result panel.

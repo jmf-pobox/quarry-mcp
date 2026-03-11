@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
