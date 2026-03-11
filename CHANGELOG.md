@@ -14,6 +14,23 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **Hook cold start 6x faster** — New `quarry-hook` console script dispatches
+  hook events via dict lookup without importing the full CLI stack (typer,
+  pydantic, lancedb, onnxruntime). Extracted stdlib-only helpers into
+  `_stdlib.py` and added PEP 562 lazy loading to `__init__.py`. Shell scripts
+  now invoke `quarry-hook` instead of `quarry hooks`. Cold start dropped from
+  1.48s to 0.24s. (`infra`)
+
+### Fixed
+
+- **Config parser handles blank lines and comments** — The stdlib YAML parser
+  for `.claude/quarry.local.md` now correctly skips blank lines and indented
+  comment lines within the `auto_capture` block instead of terminating parsing
+  early. Also supports YAML boolean aliases (`yes`/`no`/`on`/`off`) and fails
+  closed on unrecognized values. (`infra`)
+
 ## [1.3.8] - 2026-03-11
 
 ## [1.3.7] - 2026-03-10
