@@ -22,7 +22,6 @@ from pathlib import Path
 from quarry.config import Settings, load_settings, resolve_db_paths
 from quarry.database import get_db, list_documents
 from quarry.pipeline import ingest_content, ingest_url
-from quarry.sync import SyncResult, sync_collection
 from quarry.sync_registry import (
     DirectoryRegistration,
     get_registration,
@@ -117,27 +116,6 @@ def _find_registration(
     return None
 
 
-def _format_context(collection: str, directory: str, result: SyncResult) -> str:
-    """Build the additionalContext string for SessionStart."""
-    parts = [
-        "Quarry semantic search is active for this project.",
-        f'Collection: "{collection}" ({directory})',
-    ]
-    total = result.ingested + result.skipped + result.deleted + result.failed
-    if total > 0:
-        parts.append(
-            f"Sync: {result.ingested} ingested, {result.deleted} deleted, "
-            f"{result.skipped} unchanged, {result.failed} failed."
-        )
-    else:
-        parts.append("Sync: collection is empty (no supported files found).")
-    parts.append(
-        "Use the quarry MCP tools (search_documents, get_page) to search "
-        "this codebase semantically."
-    )
-    return "\n".join(parts)
-
-
 def _unique_collection_name(
     conn: sqlite3.Connection,
     directory: Path,
@@ -168,12 +146,43 @@ def _resolve_settings() -> Settings:
     return resolve_db_paths(load_settings(), None)
 
 
+def _sync_in_background() -> bool:
+    """Fire-and-forget sync via detached subprocess.
+
+    Uses ``sys.executable -m quarry`` to avoid PATH trust issues (the
+    hook runs automatically on SessionStart with no user confirmation).
+    Redirects all stdio to DEVNULL — especially stdin, to prevent the
+    child from holding Claude Code's stdin pipe open after the parent
+    exits.  The subprocess gets its own process group so it survives
+    the hook process.
+
+    Returns True if the subprocess was launched, False on failure.
+    """
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    try:
+        subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "quarry", "sync"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        logger.error("session-start: failed to launch background sync: %s", exc)
+        return False
+    logger.info("session-start: background sync launched")
+    return True
+
+
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     """Handle SessionStart hook.
 
     Auto-registers the current working directory (from the payload ``cwd``
-    field) with quarry and runs an incremental sync.  Returns
-    ``additionalContext`` so Claude knows quarry is available.
+    field) with quarry and kicks off a background sync.  Returns
+    ``additionalContext`` immediately so Claude knows quarry is available
+    without waiting for the sync to complete.
     """
     cwd_obj = payload.get("cwd")
     cwd = cwd_obj if isinstance(cwd_obj, str) else ""
@@ -203,11 +212,21 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             register_directory(conn, directory, collection)
             logger.info("session-start: registered %s as '%s'", directory, collection)
 
-        db = get_db(settings.lancedb_path)
-        result = sync_collection(directory, collection, db, settings, conn)
+        # Return context immediately; sync runs in background.
+        launched = _sync_in_background()
 
-        context = _format_context(collection, str(directory), result)
-        logger.info("session-start: synced '%s' — %s", collection, result)
+        sync_line = (
+            "Background sync in progress."
+            if launched
+            else "Background sync skipped (could not launch)."
+        )
+        context = (
+            "Quarry semantic search is active for this project.\n"
+            f'Collection: "{collection}" ({directory})\n'
+            f"{sync_line}\n"
+            "Use the quarry MCP tools (search_documents, get_page) to search "
+            "this codebase semantically."
+        )
         return {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
