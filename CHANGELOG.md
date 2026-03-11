@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.3.9] - 2026-03-11
+
 ### Changed
 
 - **Hook cold start 6x faster** — New `quarry-hook` console script dispatches
