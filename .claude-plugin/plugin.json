@@ -9,9 +9,9 @@
   "mcpServers": {
     "quarry": {
       "type": "stdio",
-      "command": "quarry",
+      "command": "mcp-proxy",
       "args": [
-        "mcp"
+        "ws://localhost:8420/mcp"
       ]
     }
   }

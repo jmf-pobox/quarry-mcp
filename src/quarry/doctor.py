@@ -462,7 +462,7 @@ def run_install() -> int:
 
     # Step 1: data directory
     data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
-    print("[1/4] Creating data directory...")  # noqa: T201
+    print("[1/5] Creating data directory...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         print(f"  \u2713 {data_dir}")  # noqa: T201
@@ -471,7 +471,7 @@ def run_install() -> int:
         failed = True
 
     # Step 2: embedding model
-    print("[2/4] Downloading embedding model...")  # noqa: T201
+    print("[2/5] Downloading embedding model...")  # noqa: T201
     try:
         from quarry.embeddings import download_model_files  # noqa: PLC0415
 
@@ -482,12 +482,23 @@ def run_install() -> int:
         failed = True
 
     # Step 3: MCP clients
-    print("[3/4] Configuring MCP clients...")  # noqa: T201
+    print("[3/5] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
-    # Step 4: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[4/4] Registering quarry daemon...")  # noqa: T201
+    # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
+    print("[4/5] Installing mcp-proxy...")  # noqa: T201
+    try:
+        from quarry.proxy import install as proxy_install  # noqa: PLC0415
+
+        msg = proxy_install()
+        print(f"  \u2713 {msg}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
+
+    # Step 5: daemon service (best-effort — not available in CI, containers, SSH)
+    print("[5/5] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
 

@@ -27,6 +27,10 @@ across `transform`, `index`, and `connector`).
   system daemon (launchd on macOS, systemd on Linux). The daemon runs
   `quarry serve --port 8420`, starts at login, and restarts on crash.
   New `quarry uninstall` command removes the service.
+- **mcp-proxy auto-install** — `quarry install` downloads the `mcp-proxy`
+  binary from GitHub Releases (platform-specific, SHA256-verified) to
+  `~/.local/bin/`. The quarry plugin uses mcp-proxy as its MCP transport,
+  eliminating Python startup cost for every Claude Code session.
 
 ### Changed
 
