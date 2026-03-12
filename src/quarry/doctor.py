@@ -279,26 +279,30 @@ _MCP_SERVER_NAME = "quarry"
 def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
     """Build ``sh -c`` command that prefers mcp-proxy, falls back to ``quarry mcp``.
 
-    When *resolve_paths* is True (Claude Desktop), embeds absolute paths
-    because Desktop runs with a minimal PATH.
+    When *resolve_paths* is True (Claude Desktop), embeds shell-quoted
+    absolute paths because Desktop runs with a minimal PATH.  The
+    ``command -v`` check always uses bare names so the fallback works
+    even if the binary is removed after install.
     """
+    import shlex  # noqa: PLC0415
+
     from quarry.config import DEFAULT_PORT  # noqa: PLC0415
 
     ws_url = f"ws://localhost:{DEFAULT_PORT}/mcp"
 
     if resolve_paths:
-        proxy = shutil.which("mcp-proxy") or "mcp-proxy"
-        quarry_cmd = shutil.which("quarry") or "quarry"
+        proxy_exec = shlex.quote(shutil.which("mcp-proxy") or "mcp-proxy")
+        quarry_exec = shlex.quote(shutil.which("quarry") or "quarry")
         sh = shutil.which("sh") or "/bin/sh"
     else:
-        proxy = "mcp-proxy"
-        quarry_cmd = "quarry"
+        proxy_exec = "mcp-proxy"
+        quarry_exec = "quarry"
         sh = "sh"
 
     script = (
-        f"if command -v {proxy} >/dev/null 2>&1; "
-        f"then exec {proxy} {ws_url}; "
-        f"else exec {quarry_cmd} mcp; fi"
+        "if command -v mcp-proxy >/dev/null 2>&1; "
+        f"then exec {proxy_exec} {ws_url}; "
+        f"else exec {quarry_exec} mcp; fi"
     )
     return sh, ["-c", script]
 
