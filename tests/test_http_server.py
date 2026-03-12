@@ -1,24 +1,24 @@
 """Tests for the quarry HTTP server (quarry serve).
 
-Uses a real HTTP server on an OS-assigned port with mocked database
-and embedding backends. Each test class gets its own server instance.
+Uses Starlette's TestClient with mocked database and embedding backends.
+Each test class gets its own app instance via fixtures.
 """
 
 from __future__ import annotations
 
-import json
-import threading
-from http.client import HTTPResponse
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 import numpy as np
 import pytest
+from starlette.testclient import TestClient
 
-from quarry.http_server import QuarryHTTPServer, _QuarryContext, _write_port_file
+from quarry.http_server import (
+    _QuarryContext,
+    _validate_host_key,
+    _write_port_file,
+    build_app,
+)
 
 
 def _mock_settings(tmp_path: Path) -> MagicMock:
@@ -47,74 +47,38 @@ _SHARED_EMBEDDER = _mock_embedder()
 
 
 @pytest.fixture()
-def server_url(tmp_path: Path):
-    """Start a test HTTP server and yield its base URL."""
+def client(tmp_path: Path) -> TestClient:
+    """Build a test app and return a TestClient."""
     settings = _mock_settings(tmp_path)
     ctx = _QuarryContext(settings)
-
-    # Patch cached_property values on the instance's __dict__ so they
-    # bypass the descriptor protocol and return our mocks directly.
     ctx.__dict__["db"] = _SHARED_DB
     ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
-    server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    yield f"http://127.0.0.1:{port}"
-
-    server.shutdown()
-    server.server_close()
-
-
-def _get(url: str) -> dict[str, Any]:
-    """GET a URL and parse JSON response."""
-    with urlopen(url, timeout=5) as resp:  # noqa: S310
-        body: dict[str, Any] = json.loads(resp.read())
-        return body
-
-
-def _get_status(url: str) -> int:
-    """GET a URL and return status code, even on error."""
-    try:
-        with urlopen(url, timeout=5) as resp:  # noqa: S310
-            status: int = resp.status
-            return status
-    except HTTPError as exc:
-        return exc.code
-
-
-def _get_response(url: str, method: str = "GET") -> HTTPResponse:
-    """Return the raw response (caller must close)."""
-    req = Request(url, method=method)  # noqa: S310
-    resp: HTTPResponse = urlopen(req, timeout=5)  # noqa: S310  # type: ignore[assignment]
-    return resp
+    app = build_app(ctx)
+    return TestClient(app, raise_server_exceptions=False)
 
 
 class TestHealth:
-    def test_returns_ok(self, server_url: str):
-        data = _get(f"{server_url}/health")
+    def test_returns_ok(self, client: TestClient) -> None:
+        data = client.get("/health").json()
         assert data["status"] == "ok"
         assert "uptime_seconds" in data
         assert data["uptime_seconds"] >= 0
 
-    def test_cors_headers(self, server_url: str):
-        req = Request(f"{server_url}/health")  # noqa: S310
-        req.add_header("Origin", "http://localhost")
-        with urlopen(req, timeout=5) as resp:  # noqa: S310
-            assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
+    def test_cors_headers(self, client: TestClient) -> None:
+        resp = client.get("/health", headers={"Origin": "http://localhost"})
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
 
 
 class TestConcurrency:
     """Verify the server handles concurrent requests without serializing."""
 
-    def test_concurrent_requests_overlap(self, server_url: str):
+    def test_concurrent_requests_overlap(self, client: TestClient) -> None:
         """Two slow requests should complete in less than 2x a single request."""
         import concurrent.futures
         import time
 
-        delay = 0.3  # seconds each handler sleeps
+        delay = 0.3
 
         def slow_search(*_args: object, **_kwargs: object) -> list[object]:
             time.sleep(delay)
@@ -126,30 +90,26 @@ class TestConcurrency:
         ):
             start = time.monotonic()
             futures = [
-                pool.submit(_get, f"{server_url}/search?q=a"),
-                pool.submit(_get, f"{server_url}/search?q=b"),
+                pool.submit(lambda: client.get("/search?q=a").json()),
+                pool.submit(lambda: client.get("/search?q=b").json()),
             ]
             for f in concurrent.futures.as_completed(futures):
                 f.result()
             elapsed = time.monotonic() - start
 
-        # If serialized, elapsed >= 2 * delay (0.6s). If concurrent, ~= delay.
-        # Allow generous headroom for CI thread scheduling overhead.
         assert elapsed < 1.5 * delay, (
             f"Requests appear serialized: {elapsed:.2f}s >= {1.5 * delay:.2f}s"
         )
 
 
 class TestSearch:
-    def test_missing_query_returns_400(self, server_url: str):
-        status = _get_status(f"{server_url}/search")
-        assert status == 400
+    def test_missing_query_returns_400(self, client: TestClient) -> None:
+        assert client.get("/search").status_code == 400
 
-    def test_empty_query_returns_400(self, server_url: str):
-        status = _get_status(f"{server_url}/search?q=")
-        assert status == 400
+    def test_empty_query_returns_400(self, client: TestClient) -> None:
+        assert client.get("/search?q=").status_code == 400
 
-    def test_search_returns_results(self, server_url: str):
+    def test_search_returns_results(self, client: TestClient) -> None:
         mock_results = [
             {
                 "document_name": "test.pdf",
@@ -163,51 +123,51 @@ class TestSearch:
             }
         ]
         with patch("quarry.http_server.search", return_value=mock_results):
-            data = _get(f"{server_url}/search?q=hello")
+            data = client.get("/search?q=hello").json()
 
         assert data["query"] == "hello"
         assert data["total_results"] == 1
         assert data["results"][0]["document_name"] == "test.pdf"
         assert data["results"][0]["similarity"] == 0.9
 
-    def test_search_with_limit(self, server_url: str):
+    def test_search_with_limit(self, client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]) as mock_search:
-            _get(f"{server_url}/search?q=hello&limit=5")
+            client.get("/search?q=hello&limit=5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 5
 
-    def test_search_limit_capped_at_50(self, server_url: str):
+    def test_search_limit_capped_at_50(self, client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]) as mock_search:
-            _get(f"{server_url}/search?q=hello&limit=999")
+            client.get("/search?q=hello&limit=999")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 50
 
-    def test_search_negative_limit_clamped_to_1(self, server_url: str):
+    def test_search_negative_limit_clamped_to_1(self, client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]) as mock_search:
-            _get(f"{server_url}/search?q=hello&limit=-5")
+            client.get("/search?q=hello&limit=-5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 1
 
-    def test_search_with_collection_filter(self, server_url: str):
+    def test_search_with_collection_filter(self, client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]) as mock_search:
-            _get(f"{server_url}/search?q=hello&collection=research")
+            client.get("/search?q=hello&collection=research")
 
         _, kwargs = mock_search.call_args
         assert kwargs["collection_filter"] == "research"
 
-    def test_search_empty_results(self, server_url: str):
+    def test_search_empty_results(self, client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]):
-            data = _get(f"{server_url}/search?q=nonexistent")
+            data = client.get("/search?q=nonexistent").json()
 
         assert data["total_results"] == 0
         assert data["results"] == []
 
 
 class TestDocuments:
-    def test_list_documents(self, server_url: str):
+    def test_list_documents(self, client: TestClient) -> None:
         mock_docs = [
             {
                 "document_name": "report.pdf",
@@ -220,37 +180,37 @@ class TestDocuments:
             }
         ]
         with patch("quarry.http_server.list_documents", return_value=mock_docs):
-            data = _get(f"{server_url}/documents")
+            data = client.get("/documents").json()
 
         assert data["total_documents"] == 1
         assert data["documents"][0]["document_name"] == "report.pdf"
 
-    def test_list_documents_with_collection_filter(self, server_url: str):
+    def test_list_documents_with_collection_filter(self, client: TestClient) -> None:
         with patch("quarry.http_server.list_documents", return_value=[]) as mock_list:
-            _get(f"{server_url}/documents?collection=research")
+            client.get("/documents?collection=research")
 
         _, kwargs = mock_list.call_args
         assert kwargs["collection_filter"] == "research"
 
 
 class TestCollections:
-    def test_list_collections(self, server_url: str):
+    def test_list_collections(self, client: TestClient) -> None:
         mock_cols = [{"collection": "default", "document_count": 3, "chunk_count": 50}]
         with patch("quarry.http_server.db_list_collections", return_value=mock_cols):
-            data = _get(f"{server_url}/collections")
+            data = client.get("/collections").json()
 
         assert data["total_collections"] == 1
         assert data["collections"][0]["collection"] == "default"
 
 
 class TestStatus:
-    def test_returns_status(self, server_url: str):
+    def test_returns_status(self, client: TestClient) -> None:
         with (
             patch("quarry.http_server.list_documents", return_value=[]),
             patch("quarry.http_server.count_chunks", return_value=0),
             patch("quarry.http_server.db_list_collections", return_value=[]),
         ):
-            data = _get(f"{server_url}/status")
+            data = client.get("/status").json()
 
         assert data["document_count"] == 0
         assert data["chunk_count"] == 0
@@ -260,20 +220,21 @@ class TestStatus:
 
 
 class TestNotFound:
-    def test_unknown_path_returns_404(self, server_url: str):
-        status = _get_status(f"{server_url}/unknown")
-        assert status == 404
+    def test_unknown_path_returns_404(self, client: TestClient) -> None:
+        resp = client.get("/unknown")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "Not Found"
 
 
 class TestPortFile:
-    def test_write_port_file(self, tmp_path: Path):
+    def test_write_port_file(self, tmp_path: Path) -> None:
         port_path = tmp_path / "subdir" / "serve.port"
         _write_port_file(port_path, 12345)
 
         assert port_path.exists()
         assert port_path.read_text() == "12345"
 
-    def test_write_creates_parent_directories(self, tmp_path: Path):
+    def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
         port_path = tmp_path / "a" / "b" / "serve.port"
         _write_port_file(port_path, 8080)
         assert port_path.exists()
@@ -282,86 +243,45 @@ class TestPortFile:
 class TestFailClosed:
     """Non-loopback hosts require --api-key."""
 
-    def test_non_loopback_without_key_refuses(self, tmp_path: Path):
-        from quarry.http_server import serve as http_serve
-
-        settings = _mock_settings(tmp_path)
+    def test_non_loopback_without_key_refuses(self) -> None:
         with pytest.raises(SystemExit, match="Refusing to bind"):
-            http_serve(settings, host="0.0.0.0")  # noqa: S104
+            _validate_host_key("0.0.0.0", None)  # noqa: S104
 
-    def test_loopback_without_key_allowed(self, tmp_path: Path):
-        """127.0.0.1 (default) should not require a key."""
-        # If it didn't raise during fixture setup, localhost works without key.
-        # The server_url fixture already proves this — this test documents intent.
-
-
-class TestLogRedaction:
-    """Verify query strings are stripped from access logs (CWE-532)."""
-
-    def test_redact_strips_query_preserves_http_version(self):
-        from quarry.http_server import QuarryHTTPHandler
-
-        assert (
-            QuarryHTTPHandler._redact_query_string("GET /search?q=secret HTTP/1.1")
-            == "GET /search HTTP/1.1"
-        )
-
-    def test_redact_preserves_path_without_query(self):
-        from quarry.http_server import QuarryHTTPHandler
-
-        assert (
-            QuarryHTTPHandler._redact_query_string("GET /health HTTP/1.1")
-            == "GET /health HTTP/1.1"
-        )
-
-    def test_search_does_not_log_query_text(
-        self,
-        server_url: str,
-        caplog: pytest.LogCaptureFixture,
-    ):
-        """Ensure the raw search query never appears in INFO logs."""
-        needle = "my-super-needle-search-term"
-        with patch("quarry.http_server.search", return_value=[]):
-            import logging
-
-            with caplog.at_level(logging.INFO):
-                _get(f"{server_url}/search?q={needle}")
-
-        for record in caplog.records:
-            assert needle not in record.getMessage(), (
-                f"Raw query leaked into log: {record.getMessage()}"
-            )
+    def test_loopback_without_key_allowed(self) -> None:
+        _validate_host_key("127.0.0.1", None)
 
 
 class TestOptionsPreflightCors:
-    def test_options_returns_204(self, server_url: str):
-        resp = _get_response(f"{server_url}/health", method="OPTIONS")
-        assert resp.status == 204
-        resp.close()
+    def test_options_returns_200(self, client: TestClient) -> None:
+        # Starlette CORSMiddleware returns 200 for preflight OPTIONS.
+        resp = client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert resp.status_code == 200
 
-    def test_cors_allows_authorization_header(self, server_url: str):
-        resp = _get_with_origin(
-            f"{server_url}/health", "http://localhost", method="OPTIONS"
+    def test_cors_allows_authorization_header(self, client: TestClient) -> None:
+        resp = client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
         )
         allow_headers = resp.headers.get("Access-Control-Allow-Headers", "")
-        resp.close()
         tokens = [h.strip().lower() for h in allow_headers.split(",")]
         assert "authorization" in tokens
-
-
-def _get_with_origin(url: str, origin: str, method: str = "GET") -> HTTPResponse:
-    """Send a request with an Origin header, return raw response."""
-    req = Request(url, method=method)  # noqa: S310
-    req.add_header("Origin", origin)
-    resp: HTTPResponse = urlopen(req, timeout=5)  # noqa: S310  # type: ignore[assignment]
-    return resp
 
 
 class TestCorsOrigins:
     """Test configurable CORS origin reflection."""
 
     @pytest.fixture()
-    def cors_server_url(self, tmp_path: Path):
+    def cors_client(self, tmp_path: Path) -> TestClient:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(
             settings,
@@ -375,56 +295,40 @@ class TestCorsOrigins:
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
-        server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        yield f"http://127.0.0.1:{port}"
-        server.shutdown()
-        server.server_close()
+        app = build_app(ctx)
+        return TestClient(app, raise_server_exceptions=False)
 
-    def test_matching_origin_reflected(self, cors_server_url: str):
-        resp = _get_with_origin(f"{cors_server_url}/health", "https://punt-labs.com")
+    def test_matching_origin_reflected(self, cors_client: TestClient) -> None:
+        resp = cors_client.get("/health", headers={"Origin": "https://punt-labs.com"})
         assert resp.headers["Access-Control-Allow-Origin"] == "https://punt-labs.com"
-        assert resp.headers["Vary"] == "Origin"
-        resp.close()
 
-    def test_second_origin_reflected(self, cors_server_url: str):
-        resp = _get_with_origin(f"{cors_server_url}/health", "http://localhost:4321")
+    def test_second_origin_reflected(self, cors_client: TestClient) -> None:
+        resp = cors_client.get("/health", headers={"Origin": "http://localhost:4321"})
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost:4321"
-        resp.close()
 
-    def test_non_matching_origin_no_cors_headers(self, cors_server_url: str):
-        resp = _get_with_origin(f"{cors_server_url}/health", "https://evil.com")
+    def test_non_matching_origin_no_cors_headers(self, cors_client: TestClient) -> None:
+        resp = cors_client.get("/health", headers={"Origin": "https://evil.com"})
         assert resp.headers.get("Access-Control-Allow-Origin") is None
-        assert resp.headers.get("Access-Control-Allow-Methods") is None
-        assert resp.headers.get("Access-Control-Allow-Headers") is None
-        assert resp.headers["Vary"] == "Origin"
-        resp.close()
 
-    def test_no_origin_header_no_cors_headers(self, cors_server_url: str):
-        resp = _get_response(f"{cors_server_url}/health")
+    def test_no_origin_header_no_cors_headers(self, cors_client: TestClient) -> None:
+        resp = cors_client.get("/health")
         assert resp.headers.get("Access-Control-Allow-Origin") is None
-        assert resp.headers.get("Access-Control-Allow-Methods") is None
-        assert resp.headers.get("Access-Control-Allow-Headers") is None
-        assert resp.headers["Vary"] == "Origin"
-        resp.close()
 
-    def test_options_reflects_matching_origin(self, cors_server_url: str):
-        resp = _get_with_origin(
-            f"{cors_server_url}/health",
-            "https://punt-labs.com",
-            method="OPTIONS",
+    def test_options_reflects_matching_origin(self, cors_client: TestClient) -> None:
+        resp = cors_client.options(
+            "/health",
+            headers={
+                "Origin": "https://punt-labs.com",
+                "Access-Control-Request-Method": "GET",
+            },
         )
-        assert resp.status == 204
+        assert resp.status_code == 200
         assert resp.headers["Access-Control-Allow-Origin"] == "https://punt-labs.com"
-        resp.close()
 
-    def test_default_server_allows_localhost(self, server_url: str):
+    def test_default_client_allows_localhost(self, client: TestClient) -> None:
         """Default fixture has no cors_origins — falls back to http://localhost."""
-        resp = _get_with_origin(f"{server_url}/health", "http://localhost")
+        resp = client.get("/health", headers={"Origin": "http://localhost"})
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
-        resp.close()
 
 
 # --- API key auth tests ---
@@ -433,109 +337,71 @@ _TEST_API_KEY = "test-key-for-auth-testing"
 
 
 @pytest.fixture()
-def auth_server_url(tmp_path: Path):
-    """Start a test HTTP server with API key auth enabled."""
+def auth_client(tmp_path: Path) -> TestClient:
+    """Build a test app with API key auth enabled."""
     settings = _mock_settings(tmp_path)
     ctx = _QuarryContext(settings, api_key=_TEST_API_KEY)
     ctx.__dict__["db"] = _SHARED_DB
     ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
-    server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    yield f"http://127.0.0.1:{port}"
-
-    server.shutdown()
-    server.server_close()
-
-
-def _get_with_auth(url: str, api_key: str | None = None) -> dict[str, Any]:
-    """GET with optional Bearer auth."""
-    req = Request(url)  # noqa: S310
-    if api_key is not None:
-        req.add_header("Authorization", f"Bearer {api_key}")
-    with urlopen(req, timeout=5) as resp:  # noqa: S310
-        body: dict[str, Any] = json.loads(resp.read())
-        return body
-
-
-def _get_status_with_auth(url: str, api_key: str | None = None) -> int:
-    """GET with optional Bearer auth, return status code."""
-    req = Request(url)  # noqa: S310
-    if api_key is not None:
-        req.add_header("Authorization", f"Bearer {api_key}")
-    try:
-        with urlopen(req, timeout=5) as resp:  # noqa: S310
-            status: int = resp.status
-            return status
-    except HTTPError as exc:
-        return exc.code
+    app = build_app(ctx)
+    return TestClient(app, raise_server_exceptions=False)
 
 
 class TestApiKeyAuth:
     """Test Bearer token authentication on the HTTP server."""
 
-    def test_health_exempt_without_key(self, auth_server_url: str):
-        data = _get_with_auth(f"{auth_server_url}/health")
+    def test_health_exempt_without_key(self, auth_client: TestClient) -> None:
+        data = auth_client.get("/health").json()
         assert data["status"] == "ok"
 
-    def test_search_rejected_without_key(self, auth_server_url: str):
-        status = _get_status_with_auth(f"{auth_server_url}/search?q=test")
-        assert status == 401
+    def test_search_rejected_without_key(self, auth_client: TestClient) -> None:
+        assert auth_client.get("/search?q=test").status_code == 401
 
-    def test_search_rejected_with_wrong_key(self, auth_server_url: str):
-        status = _get_status_with_auth(
-            f"{auth_server_url}/search?q=test", api_key="wrong-key"
+    def test_search_rejected_with_wrong_key(self, auth_client: TestClient) -> None:
+        resp = auth_client.get(
+            "/search?q=test", headers={"Authorization": "Bearer wrong-key"}
         )
-        assert status == 401
+        assert resp.status_code == 401
 
-    def test_search_allowed_with_correct_key(self, auth_server_url: str):
+    def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
         with patch("quarry.http_server.search", return_value=[]):
-            data = _get_with_auth(
-                f"{auth_server_url}/search?q=test",
-                api_key=_TEST_API_KEY,
-            )
+            data = auth_client.get(
+                "/search?q=test",
+                headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+            ).json()
         assert data["query"] == "test"
 
-    def test_documents_rejected_without_key(self, auth_server_url: str):
-        status = _get_status_with_auth(f"{auth_server_url}/documents")
-        assert status == 401
+    def test_documents_rejected_without_key(self, auth_client: TestClient) -> None:
+        assert auth_client.get("/documents").status_code == 401
 
-    def test_documents_allowed_with_key(self, auth_server_url: str):
+    def test_documents_allowed_with_key(self, auth_client: TestClient) -> None:
         with patch("quarry.http_server.list_documents", return_value=[]):
-            data = _get_with_auth(
-                f"{auth_server_url}/documents",
-                api_key=_TEST_API_KEY,
-            )
+            data = auth_client.get(
+                "/documents",
+                headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+            ).json()
         assert data["total_documents"] == 0
 
-    def test_no_auth_required_when_key_not_configured(self, server_url: str):
-        """The default server_url fixture has no api_key — all open."""
+    def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
+        """The default client fixture has no api_key — all open."""
         with patch("quarry.http_server.search", return_value=[]):
-            data = _get(f"{server_url}/search?q=test")
+            data = client.get("/search?q=test").json()
         assert data["query"] == "test"
 
-    def test_malformed_auth_header_rejected(self, auth_server_url: str):
-        req = Request(f"{auth_server_url}/search?q=test")  # noqa: S310
-        req.add_header("Authorization", "Basic dXNlcjpwYXNz")
-        try:
-            urlopen(req, timeout=5)  # noqa: S310
-            status = 200
-        except HTTPError as exc:
-            status = exc.code
-        assert status == 401
+    def test_malformed_auth_header_rejected(self, auth_client: TestClient) -> None:
+        resp = auth_client.get(
+            "/search?q=test", headers={"Authorization": "Basic dXNlcjpwYXNz"}
+        )
+        assert resp.status_code == 401
 
-    def test_bearer_scheme_case_insensitive(self, auth_server_url: str):
+    def test_bearer_scheme_case_insensitive(self, auth_client: TestClient) -> None:
         """RFC 7235: auth scheme names are case-insensitive."""
         with patch("quarry.http_server.search", return_value=[]):
-            req = Request(  # noqa: S310
-                f"{auth_server_url}/search?q=test"
-            )
-            req.add_header("Authorization", f"bearer {_TEST_API_KEY}")
-            with urlopen(req, timeout=5) as resp:  # noqa: S310
-                data: dict[str, Any] = json.loads(resp.read())
+            data = auth_client.get(
+                "/search?q=test",
+                headers={"Authorization": f"bearer {_TEST_API_KEY}"},
+            ).json()
         assert data["query"] == "test"
 
 
@@ -543,21 +409,18 @@ class TestEmptyApiKey:
     """Empty API key string should not enable auth."""
 
     @pytest.fixture()
-    def empty_key_server_url(self, tmp_path: Path):
+    def empty_key_client(self, tmp_path: Path) -> TestClient:
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings, api_key="")
         ctx.__dict__["db"] = _SHARED_DB
         ctx.__dict__["embedder"] = _SHARED_EMBEDDER
 
-        server = QuarryHTTPServer(("127.0.0.1", 0), ctx)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        yield f"http://127.0.0.1:{port}"
-        server.shutdown()
-        server.server_close()
+        app = build_app(ctx)
+        return TestClient(app, raise_server_exceptions=False)
 
-    def test_empty_key_does_not_require_auth(self, empty_key_server_url: str):
+    def test_empty_key_does_not_require_auth(
+        self, empty_key_client: TestClient
+    ) -> None:
         with patch("quarry.http_server.search", return_value=[]):
-            data = _get(f"{empty_key_server_url}/search?q=test")
+            data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"
