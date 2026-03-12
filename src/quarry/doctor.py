@@ -486,7 +486,7 @@ def run_install() -> int:
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
-    # Step 4: daemon service
+    # Step 4: daemon service (best-effort — not available in CI, containers, SSH)
     print("[4/4] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
@@ -494,8 +494,8 @@ def run_install() -> int:
         msg = svc_install()
         print(f"  \u2713 {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        print(f"  \u2717 Daemon registration failed: {exc}")  # noqa: T201
-        failed = True
+        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
 
     # Verification
     print()  # noqa: T201
