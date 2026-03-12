@@ -66,22 +66,18 @@ def _latest_version() -> str:
 
 def _download_url(version: str, asset: str) -> str:
     """Construct the download URL for a release asset."""
-    return (
-        f"https://github.com/{_REPO}/releases"
-        f"/download/{version}/{asset}"
-    )
+    return f"https://github.com/{_REPO}/releases/download/{version}/{asset}"
 
 
 def _checksums_url(version: str) -> str:
     """Construct the download URL for the checksums file."""
-    return (
-        f"https://github.com/{_REPO}/releases"
-        f"/download/{version}/checksums.txt"
-    )
+    return f"https://github.com/{_REPO}/releases/download/{version}/checksums.txt"
 
 
 def _verify_checksum(
-    binary_path: Path, version: str, asset: str,
+    binary_path: Path,
+    version: str,
+    asset: str,
 ) -> None:
     """Verify SHA256 checksum of downloaded binary against release checksums."""
     url = _checksums_url(version)
@@ -104,10 +100,7 @@ def _verify_checksum(
     actual = hashlib.sha256(binary_path.read_bytes()).hexdigest()
     if actual != expected:
         binary_path.unlink(missing_ok=True)
-        msg = (
-            f"Checksum mismatch for {asset}: "
-            f"expected {expected}, got {actual}"
-        )
+        msg = f"Checksum mismatch for {asset}: expected {expected}, got {actual}"
         raise ValueError(msg)
 
 
@@ -136,7 +129,8 @@ def install(*, version: str | None = None) -> str:
     logger.info("Downloading %s %s", _BINARY_NAME, version)
     req = _request(url)
     fd, tmp_name = tempfile.mkstemp(
-        dir=_INSTALL_DIR, suffix=".tmp",
+        dir=_INSTALL_DIR,
+        suffix=".tmp",
     )
     tmp_path = Path(tmp_name)
     try:
@@ -150,10 +144,7 @@ def install(*, version: str | None = None) -> str:
 
         # Make executable
         tmp_path.chmod(
-            tmp_path.stat().st_mode
-            | stat.S_IXUSR
-            | stat.S_IXGRP
-            | stat.S_IXOTH,
+            tmp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
         )
 
         # Atomic rename into place
