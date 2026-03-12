@@ -23,6 +23,10 @@ across `transform`, `index`, and `connector`).
   for `_db_name`, so `use_database("work")` in one session doesn't affect others.
 - **WebSocket auth** — Bearer token authentication checked before WebSocket
   accept (close code 1008 on failure). Auth-exempt when no API key configured.
+- **Daemon lifecycle management** — `quarry install` now registers quarry as a
+  system daemon (launchd on macOS, systemd on Linux). The daemon runs
+  `quarry serve --port 8420`, starts at login, and restarts on crash.
+  New `quarry uninstall` command removes the service.
 
 ### Changed
 

@@ -778,6 +778,20 @@ def version() -> None:
     _emit({"version": ver}, ver)
 
 
+@app.command()
+@_cli_errors
+def uninstall() -> None:
+    """Remove quarry system daemon and service file.
+
+    Stops the daemon and removes the launchd plist (macOS) or systemd unit
+    (Linux).  Clean inverse of the daemon step in ``quarry install``.
+    """
+    from quarry.service import uninstall as svc_uninstall  # noqa: PLC0415
+
+    msg = svc_uninstall()
+    console.print(msg)
+
+
 # ---------------------------------------------------------------------------
 # Hook subcommands — called by Claude Code hook scripts.
 # All hooks are fail-open: exceptions are caught, logged, and the process

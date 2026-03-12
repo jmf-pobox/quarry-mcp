@@ -462,7 +462,7 @@ def run_install() -> int:
 
     # Step 1: data directory
     data_dir = Path.home() / ".quarry" / "data" / "default" / "lancedb"
-    print("[1/3] Creating data directory...")  # noqa: T201
+    print("[1/4] Creating data directory...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         print(f"  \u2713 {data_dir}")  # noqa: T201
@@ -471,7 +471,7 @@ def run_install() -> int:
         failed = True
 
     # Step 2: embedding model
-    print("[2/3] Downloading embedding model...")  # noqa: T201
+    print("[2/4] Downloading embedding model...")  # noqa: T201
     try:
         from quarry.embeddings import download_model_files  # noqa: PLC0415
 
@@ -482,9 +482,20 @@ def run_install() -> int:
         failed = True
 
     # Step 3: MCP clients
-    print("[3/3] Configuring MCP clients...")  # noqa: T201
+    print("[3/4] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
+
+    # Step 4: daemon service
+    print("[4/4] Registering quarry daemon...")  # noqa: T201
+    try:
+        from quarry.service import install as svc_install  # noqa: PLC0415
+
+        msg = svc_install()
+        print(f"  \u2713 {msg}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2717 Daemon registration failed: {exc}")  # noqa: T201
+        failed = True
 
     # Verification
     print()  # noqa: T201
