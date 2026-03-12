@@ -4,7 +4,9 @@ import functools
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
@@ -46,6 +48,13 @@ from quarry.sync_registry import (
 )
 from quarry.types import LanceDB
 
+if TYPE_CHECKING:
+    from anyio.streams.memory import (
+        MemoryObjectReceiveStream,
+        MemoryObjectSendStream,
+    )
+    from mcp.shared.message import SessionMessage
+
 configure_logging(load_settings())
 logger = logging.getLogger(__name__)
 
@@ -61,7 +70,7 @@ mcp = FastMCP(
     ),
 )
 
-_db_name: str | None = None
+_db_name: ContextVar[str | None] = ContextVar("db_name", default=None)
 
 
 def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
@@ -79,7 +88,7 @@ def _handle_errors(fn: Callable[..., str]) -> Callable[..., str]:
 
 
 def _settings() -> Settings:
-    return resolve_db_paths(load_settings(), _db_name)
+    return resolve_db_paths(load_settings(), _db_name.get())
 
 
 def _db() -> LanceDB:
@@ -281,7 +290,7 @@ def list_resources(
     if kind == "databases":
         settings = _settings()
         databases = discover_databases(settings.quarry_root)
-        return format_databases(databases, current=_db_name or "default")
+        return format_databases(databases, current=_db_name.get() or "default")
     if kind == "registrations":
         settings = _settings()
         conn = open_registry(settings.registry_path)
@@ -503,19 +512,35 @@ def use_database(name: str) -> str:
         name: Database name (e.g., 'coding', 'work'). Use 'default' for
               the default database.
     """
-    global _db_name
-    previous = _db_name or "default"
+    previous = _db_name.get() or "default"
     new_name = name if name != "default" else None
     # Validate before mutating: resolve_db_paths raises ValueError for
     # names containing path separators or traversal segments.
     test_settings = resolve_db_paths(load_settings(), new_name)
-    _db_name = new_name
-    return format_switch_summary(previous, name, str(test_settings.lancedb_path))
+    summary = format_switch_summary(previous, name, str(test_settings.lancedb_path))
+    _db_name.set(new_name)
+    return summary
+
+
+async def run_mcp_session(
+    read_stream: MemoryObjectReceiveStream[SessionMessage | Exception],
+    write_stream: MemoryObjectSendStream[SessionMessage],
+) -> None:
+    """Run an MCP session on the given streams (WebSocket, stdio, etc.).
+
+    This is the public entry point for non-stdio transports.  Each call
+    gets its own ``ServerSession`` with isolated ContextVar state.
+    """
+    server = mcp._mcp_server  # pyright: ignore[reportPrivateUsage]
+    await server.run(
+        read_stream,
+        write_stream,
+        server.create_initialization_options(),
+    )
 
 
 def main(db_name: str | None = None) -> None:
-    global _db_name
-    _db_name = db_name
+    _db_name.set(db_name)
     mcp.run(transport="stdio")
 
 

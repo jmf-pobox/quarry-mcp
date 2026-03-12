@@ -14,6 +14,30 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **MCP-over-WebSocket endpoint** (`/mcp`) — Multiple Claude Code sessions can
+  share a single `quarry serve` daemon over WebSocket instead of spawning
+  separate MCP server processes. Uses `mcp-proxy` compatible JSON-RPC framing.
+- **Per-session database isolation** — Each MCP session gets its own ContextVar
+  for `_db_name`, so `use_database("work")` in one session doesn't affect others.
+- **WebSocket auth** — Bearer token authentication checked before WebSocket
+  accept (close code 1008 on failure). Auth-exempt when no API key configured.
+
+### Changed
+
+- **HTTP server migrated to Starlette + uvicorn** — Replaced stdlib
+  `ThreadingHTTPServer` with async ASGI for native WebSocket support and
+  concurrent request handling. All existing REST endpoints preserved.
+- **Port file written after confirmed bind** — Port file now written only after
+  uvicorn has bound the socket, eliminating the race where readers could see a
+  port that isn't yet listening.
+
+### Fixed
+
+- **`mcp` dependency pinned to `<2.0.0`** — Protects against private API
+  (`_mcp_server`) breakage on major version bumps.
+
 ## [1.3.9] - 2026-03-11
 
 ### Changed

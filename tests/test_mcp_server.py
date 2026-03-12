@@ -650,9 +650,9 @@ class TestDbNamePropagation:
         """Verify _settings() calls resolve_db_paths with the module _db_name."""
         import quarry.mcp_server as mcp_mod
 
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = "work"
+            mcp_mod._db_name.set("work")
             with patch(
                 "quarry.mcp_server.resolve_db_paths",
             ) as mock_resolve:
@@ -661,15 +661,15 @@ class TestDbNamePropagation:
             mock_resolve.assert_called_once()
             assert mock_resolve.call_args[0][1] == "work"
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_settings_default_none(self, tmp_path: Path) -> None:
         """Without db_name set, resolve_db_paths receives None."""
         import quarry.mcp_server as mcp_mod
 
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = None
+            mcp_mod._db_name.set(None)
             with patch(
                 "quarry.mcp_server.resolve_db_paths",
             ) as mock_resolve:
@@ -677,7 +677,7 @@ class TestDbNamePropagation:
                 mcp_mod._settings()
             assert mock_resolve.call_args[0][1] is None
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
 
 class TestListDatabases:
@@ -714,9 +714,9 @@ class TestListDatabases:
         mock_dbs = [
             {"name": "work", "document_count": 0, "size_bytes": 0},
         ]
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = "work"
+            mcp_mod._db_name.set("work")
             with (
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
@@ -724,7 +724,7 @@ class TestListDatabases:
                 result = mcp_list("databases")
             assert "* work" in result
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_default_when_no_db_name(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
@@ -733,9 +733,9 @@ class TestListDatabases:
         mock_dbs = [
             {"name": "default", "document_count": 0, "size_bytes": 0},
         ]
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = None
+            mcp_mod._db_name.set(None)
             with (
                 patch("quarry.mcp_server._settings", return_value=settings),
                 patch("quarry.mcp_server.discover_databases", return_value=mock_dbs),
@@ -743,7 +743,7 @@ class TestListDatabases:
                 result = mcp_list("databases")
             assert "* default" in result
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_empty_root(self, tmp_path: Path) -> None:
         settings = _settings(tmp_path)
@@ -760,66 +760,108 @@ class TestUseDatabase:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = None
+            mcp_mod._db_name.set(None)
             with patch("quarry.mcp_server._settings", return_value=settings):
                 result = use_database("coding")
             assert "default" in result
             assert "coding" in result
-            assert mcp_mod._db_name == "coding"
+            assert mcp_mod._db_name.get() == "coding"
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_switches_back_to_default(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = "coding"
+            mcp_mod._db_name.set("coding")
             with patch("quarry.mcp_server._settings", return_value=settings):
                 result = use_database("default")
             assert "coding" in result
             assert "default" in result
-            assert mcp_mod._db_name is None
+            assert mcp_mod._db_name.get() is None
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_returns_database_path(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = None
+            mcp_mod._db_name.set(None)
             result = use_database("work")
             assert "lancedb" in result
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_switch_between_named_databases(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
         settings = _settings(tmp_path)
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = "coding"
+            mcp_mod._db_name.set("coding")
             with patch("quarry.mcp_server._settings", return_value=settings):
                 result = use_database("work")
             assert "coding" in result
             assert "work" in result
-            assert mcp_mod._db_name == "work"
+            assert mcp_mod._db_name.get() == "work"
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
 
     def test_invalid_name_does_not_corrupt_state(self, tmp_path: Path) -> None:
         import quarry.mcp_server as mcp_mod
 
-        original = mcp_mod._db_name
+        original = mcp_mod._db_name.get()
         try:
-            mcp_mod._db_name = "good"
+            mcp_mod._db_name.set("good")
             result = use_database("../evil")
             assert "Error" in result
-            assert mcp_mod._db_name == "good"
+            assert mcp_mod._db_name.get() == "good"
         finally:
-            mcp_mod._db_name = original
+            mcp_mod._db_name.set(original)
+
+
+class TestContextVarIsolation:
+    """ContextVar must not leak between concurrent asyncio tasks.
+
+    Each MCP WebSocket session runs in its own asyncio Task.  If session A
+    calls use_database("work"), session B must still see the default.
+    """
+
+    def test_db_name_isolated_across_tasks(self) -> None:
+        import asyncio
+
+        import quarry.mcp_server as mcp_mod
+
+        original = mcp_mod._db_name.get()
+        barrier = asyncio.Barrier(2)
+
+        async def session_a() -> str | None:
+            mcp_mod._db_name.set("work")
+            await barrier.wait()  # sync with B
+            await barrier.wait()  # wait for B to read
+            return mcp_mod._db_name.get()
+
+        async def session_b() -> str | None:
+            await barrier.wait()  # A has set "work"
+            value = mcp_mod._db_name.get()
+            await barrier.wait()  # let A continue
+            return value
+
+        async def run() -> tuple[str | None, str | None]:
+            a, b = await asyncio.gather(
+                asyncio.create_task(session_a()),
+                asyncio.create_task(session_b()),
+            )
+            return a, b
+
+        try:
+            a_val, b_val = asyncio.run(run())
+            assert a_val == "work", "Task A should see its own mutation"
+            assert b_val is None, "Task B should NOT see Task A's mutation"
+        finally:
+            mcp_mod._db_name.set(original)
