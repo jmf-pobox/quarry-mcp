@@ -37,7 +37,7 @@ def _asset_name() -> str:
 
     if system not in ("darwin", "linux"):
         msg = f"Unsupported platform: {system}"
-        raise SystemExit(msg)
+        raise ValueError(msg)
 
     arch_map = {
         "arm64": "arm64",
@@ -48,7 +48,7 @@ def _asset_name() -> str:
     arch = arch_map.get(machine)
     if arch is None:
         msg = f"Unsupported architecture: {machine}"
-        raise SystemExit(msg)
+        raise ValueError(msg)
 
     return f"mcp-proxy-{system}-{arch}"
 
@@ -128,16 +128,18 @@ def install(*, version: str | None = None) -> str:
     # Download to tempfile, verify checksum, then atomic rename
     logger.info("Downloading %s %s", _BINARY_NAME, version)
     req = _request(url)
+    import os  # noqa: PLC0415
+
     fd, tmp_name = tempfile.mkstemp(
         dir=_INSTALL_DIR,
         suffix=".tmp",
     )
     tmp_path = Path(tmp_name)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            import os  # noqa: PLC0415
-
-            os.write(fd, resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                os.write(fd, resp.read())
+        finally:
             os.close(fd)
 
         _verify_checksum(tmp_path, version, asset)

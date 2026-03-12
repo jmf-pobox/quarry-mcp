@@ -44,7 +44,7 @@ class TestAssetName:
     def test_unsupported_platform(self) -> None:
         with (
             patch.object(platform, "system", return_value="Windows"),
-            pytest.raises(SystemExit, match="Unsupported platform"),
+            pytest.raises(ValueError, match="Unsupported platform"),
         ):
             _asset_name()
 
@@ -52,7 +52,7 @@ class TestAssetName:
         with (
             patch.object(platform, "system", return_value="Darwin"),
             patch.object(platform, "machine", return_value="ppc64"),
-            pytest.raises(SystemExit, match="Unsupported architecture"),
+            pytest.raises(ValueError, match="Unsupported architecture"),
         ):
             _asset_name()
 

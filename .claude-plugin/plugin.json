@@ -9,9 +9,10 @@
   "mcpServers": {
     "quarry": {
       "type": "stdio",
-      "command": "mcp-proxy",
+      "command": "sh",
       "args": [
-        "ws://localhost:8420/mcp"
+        "-c",
+        "if command -v mcp-proxy >/dev/null 2>&1; then exec mcp-proxy ws://localhost:8420/mcp; else exec quarry mcp; fi"
       ]
     }
   }
