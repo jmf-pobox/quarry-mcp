@@ -274,8 +274,34 @@ def _human_size(nbytes: int) -> str:
 
 
 _MCP_SERVER_NAME = "quarry"
-_MCP_COMMAND = "uvx"
-_MCP_ARGS = ["--from", "punt-quarry", "quarry", "mcp"]
+
+
+def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
+    """Build ``sh -c`` command that prefers mcp-proxy, falls back to ``quarry mcp``.
+
+    When *resolve_paths* is True (Claude Desktop), embeds absolute paths
+    because Desktop runs with a minimal PATH.
+    """
+    from quarry.config import DEFAULT_PORT  # noqa: PLC0415
+
+    ws_url = f"ws://localhost:{DEFAULT_PORT}/mcp"
+
+    if resolve_paths:
+        proxy = shutil.which("mcp-proxy") or "mcp-proxy"
+        quarry_cmd = shutil.which("quarry") or "quarry"
+        sh = shutil.which("sh") or "/bin/sh"
+    else:
+        proxy = "mcp-proxy"
+        quarry_cmd = "quarry"
+        sh = "sh"
+
+    script = (
+        f"if command -v {proxy} >/dev/null 2>&1; "
+        f"then exec {proxy} {ws_url}; "
+        f"else exec {quarry_cmd} mcp; fi"
+    )
+    return sh, ["-c", script]
+
 
 _DESKTOP_CONFIG_PATH = (
     Path.home()
@@ -296,8 +322,9 @@ def _configure_claude_code() -> CheckResult:
             message="claude CLI not found on PATH",
             required=False,
         )
+    command, args = _mcp_fallback_script()
     result = subprocess.run(  # noqa: S603
-        [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", _MCP_COMMAND, *_MCP_ARGS],
+        [claude_path, "mcp", "add", _MCP_SERVER_NAME, "--", command, *args],
         capture_output=True,
         text=True,
     )
@@ -336,9 +363,8 @@ def _configure_claude_desktop() -> CheckResult:
             required=False,
         )
 
-    uvx_path = shutil.which(_MCP_COMMAND)
-    command = uvx_path if uvx_path else _MCP_COMMAND
-    server_entry = {"command": command, "args": _MCP_ARGS}
+    command, args = _mcp_fallback_script(resolve_paths=True)
+    server_entry = {"command": command, "args": args}
 
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
 
@@ -501,13 +527,9 @@ def run_install() -> int:
         print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
         failed = True
 
-    # Step 3: MCP clients
-    print("[3/5] Configuring MCP clients...")  # noqa: T201
-    for check in [_configure_claude_code(), _configure_claude_desktop()]:
-        _print_check(check)
-
-    # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
-    print("[4/5] Installing mcp-proxy...")  # noqa: T201
+    # Step 3: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
+    # Installed before MCP client config so Desktop can resolve the absolute path.
+    print("[3/5] Installing mcp-proxy...")  # noqa: T201
     try:
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
@@ -516,6 +538,11 @@ def run_install() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
+
+    # Step 4: MCP clients (uses mcp-proxy if step 3 succeeded, otherwise quarry mcp)
+    print("[4/5] Configuring MCP clients...")  # noqa: T201
+    for check in [_configure_claude_code(), _configure_claude_desktop()]:
+        _print_check(check)
 
     # Step 5: daemon service (best-effort — not available in CI, containers, SSH)
     print("[5/5] Registering quarry daemon...")  # noqa: T201
