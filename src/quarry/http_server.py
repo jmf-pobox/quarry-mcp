@@ -265,7 +265,7 @@ async def _mcp_websocket_route(websocket: WebSocket) -> None:
 
     # Sanitize user-controlled value before logging (CWE-117).
     raw_key = websocket.query_params.get("session_key", "unknown")
-    session_key = _CONTROL_CHAR_RE.sub("", raw_key)
+    session_key = _CONTROL_CHAR_RE.sub("", raw_key)[:64]
     logger.info("MCP WebSocket connected: session_key=%s", session_key)
 
     try:
@@ -297,11 +297,11 @@ def build_app(
     origins = list(ctx.cors_origins)
 
     routes = [
-        Route("/health", _health_route),
-        Route("/search", _search_route),
-        Route("/documents", _documents_route),
-        Route("/collections", _collections_route),
-        Route("/status", _status_route),
+        Route("/health", _health_route, methods=["GET"]),
+        Route("/search", _search_route, methods=["GET"]),
+        Route("/documents", _documents_route, methods=["GET"]),
+        Route("/collections", _collections_route, methods=["GET"]),
+        Route("/status", _status_route, methods=["GET"]),
         WebSocketRoute("/mcp", _mcp_websocket_route),
     ]
 

@@ -531,7 +531,13 @@ async def run_mcp_session(
     This is the public entry point for non-stdio transports.  Each call
     gets its own ``ServerSession`` with isolated ContextVar state.
     """
-    server = mcp._mcp_server  # pyright: ignore[reportPrivateUsage]
+    server = getattr(mcp, "_mcp_server", None)
+    if server is None:
+        msg = (
+            f"FastMCP._mcp_server not found (mcp=={__import__('mcp').__version__}). "
+            "This private API may have changed; punt-quarry requires mcp<2.0.0."
+        )
+        raise RuntimeError(msg)
     await server.run(
         read_stream,
         write_stream,
