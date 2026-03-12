@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
-from quarry.config import Settings
+from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
     count_chunks,
     get_db,
@@ -381,7 +381,7 @@ def _validate_host_key(host: str, api_key: str | None) -> None:
 
 def serve(
     settings: Settings,
-    port: int = 0,
+    port: int = DEFAULT_PORT,
     *,
     host: str = "127.0.0.1",
     api_key: str | None = None,
@@ -391,7 +391,7 @@ def serve(
 
     Args:
         settings: Resolved application settings.
-        port: Port to bind (0 = OS-assigned).
+        port: Port to bind.  Defaults to :data:`DEFAULT_PORT`.
         host: Address to bind.  ``127.0.0.1`` for local-only (default),
             ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token.  When set, all endpoints except
@@ -428,8 +428,8 @@ def serve(
     )
     server = uvicorn.Server(config)
 
-    # For OS-assigned ports (port == 0), we need the actual port after bind.
-    # Override startup to capture and write the port.
+    # Write the port file after bind so callers always see the actual port
+    # (important when port == 0 requests an OS-assigned ephemeral port).
     original_startup = server.startup
 
     async def _startup_with_port_file(

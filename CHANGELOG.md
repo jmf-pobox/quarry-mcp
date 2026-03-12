@@ -26,6 +26,9 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- **Default port for `quarry serve`** — Changed from `0` (OS-assigned random
+  port) to `8420` (fixed well-known port). Enables static `mcp-proxy` configs
+  pointing at `ws://localhost:8420/mcp`. Override with `--port`.
 - **HTTP server migrated to Starlette + uvicorn** — Replaced stdlib
   `ThreadingHTTPServer` with async ASGI for native WebSocket support and
   concurrent request handling. All existing REST endpoints preserved.

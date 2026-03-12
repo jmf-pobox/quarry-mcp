@@ -196,7 +196,8 @@ quarry status                                  # database dashboard
 quarry version                                 # show version
 quarry list databases                          # list all databases
 quarry doctor                                  # health check
-quarry serve                                   # start HTTP API server
+quarry serve                                   # start HTTP API server on :8420
+quarry serve --port 9000                       # override default port
 quarry serve --host 0.0.0.0 --port 8080       # bind for container deployment
 quarry serve --api-key $QUARRY_API_KEY         # with Bearer token auth
 quarry serve --cors-origin https://punt-labs.com  # allow specific origin
