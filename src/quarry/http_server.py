@@ -51,6 +51,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PORT = 8420
+"""Well-known default port for ``quarry serve``."""
+
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
 _AUTH_EXEMPT_PATHS = frozenset({"/health"})
@@ -381,7 +384,7 @@ def _validate_host_key(host: str, api_key: str | None) -> None:
 
 def serve(
     settings: Settings,
-    port: int = 0,
+    port: int = DEFAULT_PORT,
     *,
     host: str = "127.0.0.1",
     api_key: str | None = None,
@@ -391,7 +394,7 @@ def serve(
 
     Args:
         settings: Resolved application settings.
-        port: Port to bind (0 = OS-assigned).
+        port: Port to bind.  Defaults to :data:`DEFAULT_PORT` (8420).
         host: Address to bind.  ``127.0.0.1`` for local-only (default),
             ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token.  When set, all endpoints except
@@ -428,8 +431,8 @@ def serve(
     )
     server = uvicorn.Server(config)
 
-    # For OS-assigned ports (port == 0), we need the actual port after bind.
-    # Override startup to capture and write the port.
+    # Write the port file after bind so callers always see the actual port
+    # (important when port == 0 requests an OS-assigned ephemeral port).
     original_startup = server.startup
 
     async def _startup_with_port_file(

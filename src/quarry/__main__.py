@@ -725,8 +725,8 @@ def doctor() -> None:
 def serve(
     port: Annotated[
         int,
-        typer.Option("--port", "-p", help="Port to bind (0 = OS-assigned)"),
-    ] = 0,
+        typer.Option("--port", "-p", help="Port to bind (default: 8420)."),
+    ] = 8420,
     host: Annotated[
         str,
         typer.Option(
