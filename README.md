@@ -196,6 +196,8 @@ quarry status                                  # database dashboard
 quarry version                                 # show version
 quarry list databases                          # list all databases
 quarry doctor                                  # health check
+quarry install                                 # data dir + model + MCP clients + daemon
+quarry uninstall                               # remove daemon service
 quarry serve                                   # start HTTP API server on :8420
 quarry serve --port 9000                       # override default port
 quarry serve --host 0.0.0.0 --port 8080       # bind for container deployment
