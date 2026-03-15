@@ -71,6 +71,19 @@ def _launchd_plist_content() -> str:
 
 def _launchd_install() -> None:
     _LAUNCHD_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Unload any existing service first — handles upgrades where the
+    # old plist pointed to a different binary (e.g. editable install).
+    # Without this, `launchctl load` fails silently or with I/O error
+    # when the label is already registered, and the old binary keeps
+    # respawning via KeepAlive.
+    if _launchd_status():
+        subprocess.run(
+            ["launchctl", "unload", str(_LAUNCHD_PLIST)],
+            check=False,
+        )
+        logger.info("Unloaded existing %s before upgrade", _LABEL)
+
     _LAUNCHD_PLIST.write_text(_launchd_plist_content())
     logger.info("Wrote %s", _LAUNCHD_PLIST)
 
