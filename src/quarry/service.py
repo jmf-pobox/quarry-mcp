@@ -78,11 +78,18 @@ def _launchd_install() -> None:
     # when the label is already registered, and the old binary keeps
     # respawning via KeepAlive.
     if _launchd_status():
-        subprocess.run(
+        result = subprocess.run(
             ["launchctl", "unload", "-w", str(_LAUNCHD_PLIST)],
             check=False,
         )
-        logger.info("Unloaded existing %s before upgrade", _LABEL)
+        if result.returncode == 0:
+            logger.info("Unloaded existing %s before upgrade", _LABEL)
+        else:
+            logger.warning(
+                "Could not unload %s (rc=%d) — proceeding with load",
+                _LABEL,
+                result.returncode,
+            )
 
     _LAUNCHD_PLIST.write_text(_launchd_plist_content())
     logger.info("Wrote %s", _LAUNCHD_PLIST)
