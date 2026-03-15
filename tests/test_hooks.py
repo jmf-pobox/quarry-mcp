@@ -286,21 +286,122 @@ class TestLoadHookConfig:
 
 
 class TestSyncInBackground:
-    def test_returns_true_on_success(self) -> None:
+    def test_returns_true_on_success(self, tmp_path: Path) -> None:
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
 
-        with patch.object(_subprocess, "Popen"):
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        lockfile = tmp_path / "sync.pid"
+        with (
+            patch.object(_subprocess, "Popen", return_value=mock_proc),
+            patch("quarry.hooks._is_sync_running", return_value=False),
+            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
+        ):
             assert _sync_in_background() is True
+            assert lockfile.exists()
+            assert lockfile.read_text() == "99999"
 
-    def test_returns_false_on_oserror(self) -> None:
+    def test_returns_false_on_oserror(self, tmp_path: Path) -> None:
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
 
-        with patch.object(_subprocess, "Popen", side_effect=OSError("No such file")):
+        lockfile = tmp_path / "sync.pid"
+        with (
+            patch.object(_subprocess, "Popen", side_effect=OSError("No such file")),
+            patch("quarry.hooks._is_sync_running", return_value=False),
+            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
+        ):
             assert _sync_in_background() is False
+            assert not lockfile.exists()  # Lock cleaned up on failure
+
+    def test_skips_when_already_running(self) -> None:
+        from quarry.hooks import _sync_in_background
+
+        with patch("quarry.hooks._is_sync_running", return_value=True):
+            assert _sync_in_background() is False
+
+    def test_skips_when_lock_held(self, tmp_path: Path) -> None:
+        """Atomic lock prevents TOCTOU race — second caller gets None."""
+        from quarry.hooks import _sync_in_background
+
+        lockfile = tmp_path / "sync.pid"
+        lockfile.write_text("12345")  # Pre-existing lock file
+        with (
+            patch("quarry.hooks._is_sync_running", return_value=False),
+            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
+        ):
+            assert _sync_in_background() is False
+
+    def test_pidfile_write_failure_still_returns_true(self, tmp_path: Path) -> None:
+        """If Popen succeeds but PID write fails, sync is running — return True."""
+        import subprocess as _subprocess
+
+        from quarry.hooks import _sync_in_background
+
+        lockfile = tmp_path / "sync.pid"
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+
+        # Create lock atomically, then make os.write fail.
+        with (
+            patch.object(_subprocess, "Popen", return_value=mock_proc),
+            patch("quarry.hooks._is_sync_running", return_value=False),
+            patch("quarry.hooks._sync_lockfile", return_value=lockfile),
+            patch("os.write", side_effect=OSError("disk full")),
+        ):
+            assert _sync_in_background() is True  # Sync launched despite write failure
+
+
+class TestIsSyncRunning:
+    def test_no_pidfile_returns_false(self, tmp_path: Path) -> None:
+        from quarry.hooks import _is_sync_running
+
+        with patch("quarry.hooks._sync_lockfile", return_value=tmp_path / "sync.pid"):
+            assert _is_sync_running() is False
+
+    def test_stale_pid_returns_false(self, tmp_path: Path) -> None:
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text("999999999")  # PID that doesn't exist
+        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
+            assert _is_sync_running() is False
+            assert not pidfile.exists()  # Stale file cleaned up
+
+    def test_live_pid_returns_true(self, tmp_path: Path) -> None:
+        import os
+
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text(str(os.getpid()))  # Current process — definitely alive
+        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
+            assert _is_sync_running() is True
+
+    def test_eperm_treated_as_running(self, tmp_path: Path) -> None:
+        """PermissionError (EPERM) means process exists but not ours."""
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text("1")  # PID 1 (init) — will get EPERM
+        with (
+            patch("quarry.hooks._sync_lockfile", return_value=pidfile),
+            patch("os.kill", side_effect=PermissionError("EPERM")),
+        ):
+            assert _is_sync_running() is True
+            assert pidfile.exists()  # Not cleaned up — process is alive
+
+    def test_negative_pid_treated_as_stale(self, tmp_path: Path) -> None:
+        from quarry.hooks import _is_sync_running
+
+        pidfile = tmp_path / "sync.pid"
+        pidfile.write_text("-1")
+        with patch("quarry.hooks._sync_lockfile", return_value=pidfile):
+            assert _is_sync_running() is False
+            assert not pidfile.exists()
 
 
 # ---------------------------------------------------------------------------

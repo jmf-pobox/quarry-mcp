@@ -79,6 +79,69 @@ def _resolve_settings() -> Settings:
     return resolve_db_paths(load_settings(), None)
 
 
+def _sync_lockfile() -> Path:
+    """Return the path to the sync lock file in a user-owned directory."""
+    return Path.home() / ".quarry" / "sync.pid"
+
+
+def _is_sync_running() -> bool:
+    """Check if a quarry sync process is already running via PID file.
+
+    Returns True if a live sync process exists, False otherwise.
+    Stale PID files (process no longer running) are cleaned up.
+
+    Handles signal-0 results correctly:
+    - ProcessLookupError → process is gone (stale)
+    - PermissionError (EPERM) → process exists, another user (running)
+    - ValueError → corrupt PID file (stale)
+    """
+    import os  # noqa: PLC0415
+
+    pidfile = _sync_lockfile()
+    if not pidfile.exists():
+        return False
+    try:
+        pid = int(pidfile.read_text().strip())
+        if pid <= 0:
+            raise ValueError("non-positive PID")
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        # EPERM: process exists but we can't signal it — treat as running.
+        return True
+    except (ValueError, ProcessLookupError):
+        # Stale PID file — process is gone or PID is garbage.
+        with contextlib.suppress(OSError):
+            pidfile.unlink()
+        return False
+
+
+def _acquire_sync_lock() -> int | None:
+    """Atomically create the sync lock file and return the fd.
+
+    Uses O_CREAT|O_EXCL to prevent TOCTOU races: if the file already
+    exists, os.open raises FileExistsError and no lock is acquired.
+
+    Returns the file descriptor on success, None if the lock is held
+    or on any OS error.
+    """
+    import os  # noqa: PLC0415
+
+    pidfile = _sync_lockfile()
+    pidfile.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return os.open(
+            str(pidfile),
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        return None
+    except OSError as exc:
+        logger.error("session-start: failed to create lock file: %s", exc)
+        return None
+
+
 def _sync_in_background() -> bool:
     """Fire-and-forget sync via detached subprocess.
 
@@ -89,13 +152,29 @@ def _sync_in_background() -> bool:
     exits.  The subprocess gets its own process group so it survives
     the hook process.
 
-    Returns True if the subprocess was launched, False on failure.
+    Guards against concurrent syncs via an atomic lock file in
+    ``~/.quarry/sync.pid``.  Uses O_CREAT|O_EXCL to prevent TOCTOU
+    races between concurrent SessionStart hooks.
+
+    Returns True if the subprocess was launched, False if skipped or failed.
     """
+    import os  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
+    # Fast path: if a sync is already running, skip without trying the lock.
+    if _is_sync_running():
+        logger.debug("session-start: sync already running, skipping")
+        return False
+
+    # Atomic lock acquisition — prevents TOCTOU races.
+    fd = _acquire_sync_lock()
+    if fd is None:
+        logger.debug("session-start: could not acquire sync lock, skipping")
+        return False
+
     try:
-        subprocess.Popen(  # noqa: S603
+        proc = subprocess.Popen(  # noqa: S603
             [sys.executable, "-m", "quarry", "sync"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -104,8 +183,21 @@ def _sync_in_background() -> bool:
         )
     except OSError as exc:
         logger.error("session-start: failed to launch background sync: %s", exc)
+        # Clean up the lock file since no sync is running.
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            _sync_lockfile().unlink()
         return False
-    logger.info("session-start: background sync launched")
+
+    # Write the PID to the lock file (fd is already open).
+    try:
+        os.write(fd, str(proc.pid).encode())
+    except OSError as exc:
+        logger.warning("session-start: sync launched but pidfile write failed: %s", exc)
+    finally:
+        os.close(fd)
+
+    logger.info("session-start: background sync launched (pid=%d)", proc.pid)
     return True
 
 
