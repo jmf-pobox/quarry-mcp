@@ -47,7 +47,7 @@ class TestQuarryExecArgs:
 class TestInstallMacOS:
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
-    def test_writes_plist_and_loads(
+    def test_fresh_install_writes_plist_and_loads(
         self, _sys: MagicMock, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         plist_path = tmp_path / "com.punt-labs.quarry.plist"
@@ -55,8 +55,14 @@ class TestInstallMacOS:
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
         ):
-            # launchctl list returns 0 = running
-            mock_run.return_value = MagicMock(returncode=0)
+            # First call: launchctl list → not found (fresh install)
+            # Second call: launchctl load → success
+            # Third call: launchctl list → running
+            mock_run.side_effect = [
+                MagicMock(returncode=113),  # list: not found
+                MagicMock(returncode=0),  # load: success
+                MagicMock(returncode=0),  # list: running
+            ]
 
             msg = install()
 
@@ -69,10 +75,45 @@ class TestInstallMacOS:
             assert "running" in msg
             assert str(DEFAULT_PORT) in msg
 
-            # Verify launchctl load was called
-            load_call = mock_run.call_args_list[0]
-            assert "launchctl" in load_call.args[0][0]
-            assert "load" in load_call.args[0]
+            # Fresh install: no unload, just load
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            assert not any("unload" in c for c in calls), (
+                "fresh install must not unload"
+            )
+            assert any("load" in c for c in calls)
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    def test_upgrade_unloads_before_loading(
+        self, _sys: MagicMock, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        plist_path.write_text("<plist>old binary</plist>")
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+        ):
+            # First call: launchctl list → found (existing service)
+            # Second call: launchctl unload → success
+            # Third call: launchctl load → success
+            # Fourth call: launchctl list → running
+            mock_run.side_effect = [
+                MagicMock(returncode=0),  # list: found (upgrade)
+                MagicMock(returncode=0),  # unload: success
+                MagicMock(returncode=0),  # load: success
+                MagicMock(returncode=0),  # list: running
+            ]
+
+            msg = install()
+
+            assert plist_path.exists()
+            assert "running" in msg
+
+            # Upgrade: unload before load
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            unload_idx = next(i for i, c in enumerate(calls) if "unload" in c)
+            load_idx = next(i for i, c in enumerate(calls) if "load" in c)
+            assert unload_idx < load_idx
 
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
