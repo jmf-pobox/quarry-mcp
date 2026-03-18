@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build clean
+.PHONY: help test lint type check format build clean depot
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -27,3 +27,10 @@ build: ## Build wheel and sdist
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/
+
+DEPOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))../.depot
+
+depot: build ## Build and copy wheel to local depot
+	@mkdir -p $(DEPOT)
+	@cp dist/*.whl $(DEPOT)/
+	@echo "depot: $$(ls dist/*.whl | xargs -n1 basename) -> $(DEPOT)/"
