@@ -77,3 +77,6 @@ prfaq*.run.xml
 
 # MCP project-local
 .mcp.json
+
+# Local uv overrides (depot find-links, etc.)
+uv.toml
