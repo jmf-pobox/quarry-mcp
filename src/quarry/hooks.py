@@ -12,7 +12,7 @@ paying the full dependency tax.
 Hook events:
     session-start    — SessionStart: auto-register and sync the current repo.
     post-web-fetch   — PostToolUse on WebFetch: auto-ingest fetched URLs.
-    pre-compact      — PreCompact: capture compaction summaries.
+    pre-compact      — PreCompact: ingest the pre-compaction conversation transcript.
 """
 
 from __future__ import annotations
