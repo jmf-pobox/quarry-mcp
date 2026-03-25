@@ -109,6 +109,8 @@ _SOLO_GATE_TARGETS = re.compile(r"^make\s+(lint|type|test)(?:\s|$)")
 
 def _is_solo_gate(command: str) -> bool:
     """True if *command* runs a single make sub-target (lint, type, test)."""
+    if "&&" in command or ";" in command:
+        return False
     return bool(_SOLO_GATE_TARGETS.match(command))
 
 

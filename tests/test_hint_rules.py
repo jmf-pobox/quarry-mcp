@@ -160,6 +160,18 @@ class TestSoloGateToolRule:
         hint = check_sequence_rules(events, "make check")
         assert hint is None
 
+    def test_chained_make_not_flagged(self) -> None:
+        """Chained make commands are not solo targets."""
+        events = [_event("make lint")]
+        hint = check_sequence_rules(events, "make lint && make test")
+        assert hint is None
+
+    def test_chained_past_event_not_counted(self) -> None:
+        """Past chained commands should not count as solo targets."""
+        events = [_event("make lint && make test")]
+        hint = check_sequence_rules(events, "make type")
+        assert hint is None
+
     def test_uv_run_tools_not_detected(self) -> None:
         """Raw uv run commands are no longer detected as gate tools."""
         events = [_event("uv run mypy src/")]
