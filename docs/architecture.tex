@@ -329,41 +329,45 @@ CLI and daemon can access the same database simultaneously.
 % ===================================================================
 
 \begin{center}
-\begin{longtable}{llp{5.5cm}l}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{longtable}{lp{3.5cm}p{3.2cm}l}
 \toprule
 \textbf{Tool} & \textbf{Key Parameters} & \textbf{Purpose} &
-  \textbf{Execution} \\
+  \textbf{Exec} \\
 \midrule
 \endfirsthead
 \toprule
 \textbf{Tool} & \textbf{Key Parameters} & \textbf{Purpose} &
-  \textbf{Execution} \\
+  \textbf{Exec} \\
 \midrule
 \endhead
 \tool{find}        & \field{query}, \field{limit},
   \field{collection}       & Semantic search            & Sync \\
 \tool{ingest}      & \field{source}, \field{overwrite},
-  \field{collection}       & Ingest file or URL         & Background \\
-\tool{remember}    & \field{content}, \field{document\_name}
-                           & Ingest inline text         & Background \\
-\tool{list}        & \field{kind} (documents, collections,
-  databases, registrations) & List indexed data         & Sync \\
-\tool{show}        & \field{document\_name}, \field{page\_number}
-                           & Document metadata or page  & Sync \\
+  \field{collection}       & Ingest file or URL         & Bg \\
+\tool{remember}    & \field{content},
+  \field{document\_name}   & Ingest inline text         & Bg \\
+\tool{list}        & \field{kind}
+                           & List indexed data          & Sync \\
+\tool{show}        & \field{document\_name},
+  \field{page\_number}     & Document metadata or page  & Sync \\
 \tool{delete}      & \field{name}, \field{kind}
-                           & Delete document or collection & Background \\
+                           & Delete document or
+                             collection                 & Bg \\
 \tool{register\_directory}   & \field{directory},
-  \field{collection}       & Register for sync          & Background \\
+  \field{collection}       & Register for sync          & Bg \\
 \tool{deregister\_directory} & \field{collection},
-  \field{keep\_data}       & Remove registration        & Background \\
-\tool{sync\_all\_registrations} & ---
-                           & Sync all registered dirs   & Background \\
+  \field{keep\_data}       & Remove registration        & Bg \\
+\tool{sync\_all}   & ---  & Sync all registered dirs   & Bg \\
 \tool{status}      & ---  & Database stats             & Sync \\
 \tool{use}         & \field{name}
                            & Switch active database     & Sync \\
 \bottomrule
 \end{longtable}
 \end{center}
+
+Bg = background (\texttt{ThreadPoolExecutor}).
 
 Background tools use a bounded \texttt{ThreadPoolExecutor(max\_workers=4)}.
 They return an optimistic response immediately.  Settings and database
@@ -423,7 +427,9 @@ lifespan context.
 All settings are environment variables read via pydantic-settings.
 
 \begin{center}
-\begin{longtable}{llp{6cm}}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{longtable}{llp{6.5cm}}
 \toprule
 \textbf{Variable} & \textbf{Default} & \textbf{Description} \\
 \midrule
@@ -467,8 +473,9 @@ All settings are environment variables read via pydantic-settings.
 path under \texttt{QUARRY\_ROOT}.  Each database is fully isolated ---
 its own LanceDB directory, sync registry, and vector index.  Names containing path separators (\texttt{/} or
 \texttt{\textbackslash}) or the literal traversal segments \texttt{.}
-or \texttt{..} are rejected; names like \texttt{foo.bar} are allowed.  If \texttt{LANCEDB\_PATH} was explicitly
-overridden, the override is preserved.
+or \texttt{..} are rejected; names like \texttt{foo.bar} are allowed.
+If \texttt{LANCEDB\_PATH} was explicitly overridden, the override is
+preserved.
 
 The persistent default database is stored in
 \texttt{\~{}/.quarry/config.toml} as \texttt{[default] database = "name"}.
@@ -648,10 +655,10 @@ Origin-based cross-site WebSocket hijacking protection:
 
 \subsection{CORS}
 
-\texttt{CORSMiddleware} with \texttt{allow\_methods=["GET","OPTIONS"]},
-\texttt{allow\_headers=["Authorization","Content-Type"]}.
-Default allowed origin: \texttt{http://localhost}.  Configurable via
-\texttt{-{}-cors-origin} (repeatable).
+\texttt{CORSMiddleware} configured with GET and OPTIONS methods,
+Authorization and Content-Type headers.  Default allowed origin:
+\texttt{http://localhost}.  Configurable via \texttt{-{}-cors-origin}
+(repeatable).
 
 The server reflects the request's \texttt{Origin} header only when it
 matches the allow list, and adds \texttt{Vary: Origin} to signal
@@ -697,9 +704,8 @@ Multi-stage Dockerfile, three stages:
     \texttt{uv}, runs \texttt{uv sync -{}-frozen -{}-no-dev}.  Two-pass
     for Docker layer caching (deps first, then source).
   \item \textbf{model} (extends \texttt{deps}): downloads the
-    embedding model at build time via
-    \texttt{quarry.embeddings.download\_model\_files()}.  $\sim$120\,MB,
-    cached as a separate Docker layer.
+    embedding model at build time ($\sim$120\,MB, int8 quantized).
+    Cached as a separate Docker layer.
   \item \textbf{runtime} (\texttt{python:3.13-slim}): copies
     \texttt{/app} from deps, copies model cache from model stage.
     \texttt{QUARRY\_ROOT=/data}, port 8080.
@@ -731,8 +737,7 @@ End-to-end search  & $<$100\,ms    & After model is loaded \\
 \subsection{Fire-and-Forget MCP Pattern}
 
 Side-effect MCP tools return immediately and process in a bounded
-\texttt{ThreadPoolExecutor(max\_workers=4)}.  This is necessary
-because:
+thread pool (4 workers).  This is necessary because:
 
 \begin{enumerate}
   \item MCP tool calls block the LLM's response stream.  A 30-second
