@@ -18,7 +18,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/25eaa96/install.sh | sh
 ```
 
-Restart Claude Code. Type `/find "something you know is indexed"` to verify.
+Restart Claude Code. The plugin auto-indexes your current project on session start. Try `/find "a function or concept in this codebase"` to search it, or `/ingest report.pdf` to add a document.
 
 <details>
 <summary>Manual install (if you already have uv)</summary>
