@@ -40,14 +40,11 @@ class TestQuarryExecArgs:
         fake_bin = tmp_path / "quarry"
         fake_bin.write_text("#!/bin/sh\n")
         fake_bin.chmod(0o755)
-        with patch("quarry.service.Path.home", return_value=tmp_path.parent):
-            # Patch to make ~/.local/bin/quarry point to our fake
-            with patch("quarry.service.Path.home", return_value=tmp_path):
-                # Create the expected path structure
-                local_bin = tmp_path / ".local" / "bin" / "quarry"
-                local_bin.parent.mkdir(parents=True, exist_ok=True)
-                local_bin.symlink_to(fake_bin)
-                args = _quarry_exec_args()
+        local_bin = tmp_path / ".local" / "bin" / "quarry"
+        local_bin.parent.mkdir(parents=True, exist_ok=True)
+        local_bin.symlink_to(fake_bin)
+        with patch("quarry.service.Path.home", return_value=tmp_path):
+            args = _quarry_exec_args()
         assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
         assert str(fake_bin) == args[0]
 
