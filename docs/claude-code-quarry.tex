@@ -943,19 +943,25 @@ PostToolUse & Edit|Write & InjectKnowledge\-Hint &
   File-type hints & No \\
 PostToolUse & Bash & InjectKnowledge\-Hint &
   Workflow hints & No \\
-PostToolUse & quarry\_\_use & SwitchDatabase &
+PostToolUse & quarry\_\_use$^\dagger$ & SwitchDatabase &
   Change active DB & No \\
-PostToolUse & quarry\_\_find & SearchKnowledge &
+PostToolUse & quarry\_\_find$^\dagger$ & SearchKnowledge &
   Inject results & No \\
-PostToolUse & quarry\_\_* & (suppress output) &
+PostToolUse & quarry\_\_*$^\dagger$ & (suppress output) &
   Format display & No \\
 PreCompact & * & CaptureBefore\-Compact &
   Save session notes & No \\
-SessionEnd & * & EndSession &
+SessionEnd$^\ddagger$ & * & EndSession &
   Clear state & No \\
 \hline
 \end{tabular}
 }
+
+\noindent
+$^\dagger$Conceptual matcher; actual regex is
+\texttt{mcp\_\_(plugin\_quarry...)?quarry(-proxy)?\_\_.*}
+(see \texttt{hooks.json}).\\
+$^\ddagger$Not yet wired --- no SessionEnd hook is registered.
 
 % ============================================================
 \section{Implementation Validation}

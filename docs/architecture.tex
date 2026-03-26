@@ -904,9 +904,9 @@ The specification covers:
   \item Pre-compaction transcript capture into \texttt{session-notes}
   \item Database switching via \texttt{use} tool
   \item Knowledge hint injection at tool boundaries
-  \item Compaction safety invariant: no path reaches
-    \texttt{CompactContext} without the capture flag being set (when
-    enabled)
+  \item Compaction observability: a capture flag records whether
+    capture preceded compaction; the hook system enforces
+    capture-before-compaction on a best-effort basis
   \item Clean session boundaries: all quarry state cleared on
     \texttt{EndSession}
 \end{itemize}
