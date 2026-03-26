@@ -289,7 +289,7 @@ Quarry works with zero configuration. These environment variables are available 
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
-For advanced settings (embedding model, paths), see [Architecture](docs/architecture.tex) §6 Configuration.
+For advanced settings (embedding model, paths), see [Architecture](docs/architecture.tex) §7 Configuration.
 
 ## MCP Tools Reference
 

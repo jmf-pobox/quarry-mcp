@@ -186,7 +186,7 @@ PDF           & \modpath{pdf\_analyzer.py}           & PDF (text via
                 PyMuPDF, OCR fallback for image pages) \\
 Image         & \modpath{image\_analyzer.py}          & PNG, JPG, TIFF,
                 BMP, WebP (OCR) \\
-Text          & \modpath{text\_processor.py}          & TXT, MD, DOCX \\
+Text          & \modpath{text\_processor.py}          & TXT, MD, LaTeX, DOCX \\
 Code          & \modpath{code\_processor.py}          & 30+ languages
                 (AST-aware splitting) \\
 HTML          & \modpath{html\_processor.py}          & HTML
@@ -195,10 +195,8 @@ Spreadsheet   & \modpath{spreadsheet\_processor.py}   & XLSX, CSV
                 (tabular serialization) \\
 Presentation  & \modpath{presentation\_processor.py}  & PPTX
                 (slide-per-chunk with notes) \\
-LaTeX         & \modpath{latex\_utils.py}             & LaTeX
-                (command stripping) \\
-Dispatcher    & \modpath{text\_extractor.py}          & Routes to
-                the appropriate processor \\
+Dispatcher    & \modpath{text\_extractor.py}          & Extracts text
+                from text-based PDF pages (PyMuPDF) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -442,8 +440,9 @@ All settings are environment variables read via pydantic-settings.
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
-\texttt{LOG\_PATH}        & \texttt{<root>/quarry.log} &
-  Log file (rotating, 5\,MB, 3 backups) \\
+\texttt{LOG\_PATH}        & \texttt{\~{}/.quarry/data/quarry.log} &
+  Log file (rotating, 5\,MB, 3 backups; independent of
+  \texttt{QUARRY\_ROOT}) \\
 \midrule
 \multicolumn{3}{l}{\textbf{Chunking}} \\
 \midrule
@@ -466,9 +465,9 @@ All settings are environment variables read via pydantic-settings.
 
 \texttt{resolve\_db\_paths(settings, name)} maps a database name to a
 path under \texttt{QUARRY\_ROOT}.  Each database is fully isolated ---
-its own LanceDB directory, sync registry, and vector index.  Names
-containing \texttt{/}, \texttt{\textbackslash}, \texttt{.}, or
-\texttt{..} are rejected.  If \texttt{LANCEDB\_PATH} was explicitly
+its own LanceDB directory, sync registry, and vector index.  Names containing path separators (\texttt{/} or
+\texttt{\textbackslash}) or the literal traversal segments \texttt{.}
+or \texttt{..} are rejected; names like \texttt{foo.bar} are allowed.  If \texttt{LANCEDB\_PATH} was explicitly
 overridden, the override is preserved.
 
 The persistent default database is stored in
