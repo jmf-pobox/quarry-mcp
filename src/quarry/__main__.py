@@ -617,20 +617,8 @@ def list_registrations_cmd() -> None:
     _emit(json_data, text)
 
 
-_CLOUD_BACKENDS = frozenset({"textract", "sagemaker"})
-
-
-def _auto_workers(settings: Settings) -> int:
-    """Select worker count based on configured backends.
-
-    Cloud backends (Textract, SageMaker) are network-bound and benefit from
-    parallelism.  Local backends are CPU-bound — extra workers just contend.
-    """
-    if (
-        settings.ocr_backend in _CLOUD_BACKENDS
-        or settings.embedding_backend in _CLOUD_BACKENDS
-    ):
-        return 4
+def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
+    """Select worker count. Local backends are CPU-bound — 1 worker."""
     return 1
 
 
@@ -642,7 +630,7 @@ def sync_cmd(
         typer.Option(
             "--workers",
             "-w",
-            help="Parallel workers (auto: 4 for cloud backends, 1 for local)",
+            help="Parallel workers (default: 1)",
         ),
     ] = None,
 ) -> None:

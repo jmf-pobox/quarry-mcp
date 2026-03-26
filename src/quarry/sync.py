@@ -198,13 +198,10 @@ def sync_collection(
     Computes the delta, ingests new/changed files in parallel,
     removes deleted files, and updates the registry.
 
-    Catches OSError, ValueError, RuntimeError, TimeoutError, and
-    botocore.exceptions.ClientError (AWS auth/throttling/service) for
+    Catches OSError, ValueError, RuntimeError, and TimeoutError for
     individual file ingest/delete failures so sync continues when one fails.
     """
-    from botocore.exceptions import ClientError  # noqa: PLC0415
-
-    _recoverable = (OSError, ValueError, RuntimeError, TimeoutError, ClientError)
+    _recoverable = (OSError, ValueError, RuntimeError, TimeoutError)
 
     def _progress(msg: str) -> None:
         logger.info(msg)

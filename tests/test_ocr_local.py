@@ -25,14 +25,7 @@ if TYPE_CHECKING:
 
 
 def _settings(**overrides: object) -> Settings:
-    defaults: dict[str, object] = {
-        "aws_access_key_id": "test",
-        "aws_secret_access_key": "test",
-        "textract_poll_initial": 0,
-        "textract_max_wait": 1,
-    }
-    defaults.update(overrides)
-    return Settings.model_validate(defaults)
+    return Settings.model_validate(overrides)
 
 
 def _mock_ocr_result(texts: list[str] | None) -> _OcrResult:

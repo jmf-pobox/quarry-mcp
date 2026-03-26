@@ -82,37 +82,6 @@ def _check_data_directory() -> CheckResult:
     )
 
 
-def _check_aws_credentials() -> CheckResult:
-    import botocore.session  # noqa: PLC0415
-
-    session = botocore.session.get_session()
-    try:
-        credentials = session.get_credentials()
-        resolved = credentials.get_frozen_credentials()
-        key = resolved.access_key
-    except Exception:  # noqa: BLE001
-        return CheckResult(
-            name="AWS credentials",
-            passed=False,
-            message="Not configured (optional — needed for OCR_BACKEND=textract)",
-            required=False,
-        )
-    if not key:
-        return CheckResult(
-            name="AWS credentials",
-            passed=False,
-            message="Not configured (optional — needed for OCR_BACKEND=textract)",
-            required=False,
-        )
-    masked = key[:4] + "****" + key[-4:]
-    method = getattr(credentials, "method", "unknown")
-    return CheckResult(
-        name="AWS credentials",
-        passed=True,
-        message=f"{masked} (via {method})",
-    )
-
-
 def _check_embedding_model() -> CheckResult:
     from huggingface_hub import try_to_load_from_cache  # noqa: PLC0415
 
@@ -177,7 +146,6 @@ def _check_imports() -> CheckResult:
         "huggingface_hub",
         "fitz",
         "PIL",
-        "boto3",
         "rapidocr",
         "onnxruntime",
         "cv2",
@@ -199,50 +167,6 @@ def _check_imports() -> CheckResult:
         passed=False,
         message=f"Failed: {', '.join(failed)}",
     )
-
-
-def _check_sagemaker_endpoint() -> CheckResult | None:
-    """Check SageMaker embedding endpoint availability.
-
-    Only runs when EMBEDDING_BACKEND=sagemaker or SAGEMAKER_ENDPOINT_NAME is
-    set.  Returns None when neither is configured (skips check).
-    """
-    embedding_backend = os.environ.get("EMBEDDING_BACKEND", "onnx")
-    endpoint_name = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "")
-    if embedding_backend != "sagemaker" and not endpoint_name:
-        return None
-    if not endpoint_name:
-        return CheckResult(
-            name="SageMaker endpoint",
-            passed=False,
-            message="SAGEMAKER_ENDPOINT_NAME not set",
-            required=False,
-        )
-    try:
-        import boto3  # noqa: PLC0415
-
-        client = boto3.client("sagemaker")
-        response = client.describe_endpoint(EndpointName=endpoint_name)
-        status = response.get("EndpointStatus", "Unknown")
-        if status == "InService":
-            return CheckResult(
-                name="SageMaker endpoint",
-                passed=True,
-                message=f"{endpoint_name} (InService)",
-            )
-        return CheckResult(
-            name="SageMaker endpoint",
-            passed=False,
-            message=f"{endpoint_name} (status: {status})",
-            required=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="SageMaker endpoint",
-            passed=False,
-            message=f"{endpoint_name}: {exc}",
-            required=False,
-        )
 
 
 def _check_storage() -> CheckResult:
@@ -579,13 +503,11 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_python_version(),
             _check_data_directory(),
             _check_local_ocr(),
-            _check_aws_credentials(),
             _check_embedding_model(),
             _check_imports(),
             _check_mcp_proxy(),
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
-            _check_sagemaker_endpoint(),
             _check_storage(),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]

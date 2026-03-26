@@ -12,11 +12,7 @@ from quarry.models import Chunk, PageAnalysis, PageContent, PageType
 
 
 def _settings() -> Settings:
-    return Settings(
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-        textract_poll_initial=0,
-    )
+    return Settings()
 
 
 def _make_page_content(
