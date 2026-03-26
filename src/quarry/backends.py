@@ -28,9 +28,9 @@ def get_ocr_backend(settings: Settings) -> OcrBackend:
     return _ocr_cache[key]
 
 
-def get_embedding_backend(settings: Settings) -> EmbeddingBackend:
+def get_embedding_backend(settings: Settings) -> EmbeddingBackend:  # noqa: ARG001
     """Return a cached ONNX embedding backend instance."""
-    key = settings.embedding_model
+    key = "onnx"
     if key not in _embedding_cache:
         with _lock:
             if key not in _embedding_cache:
