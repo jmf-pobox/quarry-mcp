@@ -20,7 +20,6 @@ There is no such thing as a "pre-existing" issue. If you see a problem — in co
 - **Quality gates pass before every commit.** `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy src/ tests/`, `uv run pyright`, `uv run pytest`. Zero violations, zero errors, all tests green.
 - **Running tests.** The full test suite (896 tests) needs `timeout=300000` on the Bash tool (5 minutes). During development, prefer targeted tests for files you changed: `uv run pytest tests/test_foo.py -v`. Never retry a command that produces no output — diagnose first.
 - **Double quotes.** Line length 88. Ruff with comprehensive rules.
-- **AWS credentials from environment variables only.** No profiles, no `.env` files committed, no hardcoded keys.
 
 ## Development Workflow
 

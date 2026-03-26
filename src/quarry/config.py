@@ -1,8 +1,7 @@
 """Application settings and logging configuration.
 
-Settings are grouped by concern: AWS (credentials, region, S3), LanceDB paths,
-embedding model and backend, chunking params, OCR backend choice,
-Textract/async tuning, and SageMaker endpoint.
+Settings are grouped by concern: LanceDB paths, embedding model,
+and chunking params.
 """
 
 from __future__ import annotations
@@ -22,28 +21,15 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 class Settings(BaseSettings):
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
-    aws_default_region: str = "us-east-1"
-    s3_bucket: str = ""
-
     quarry_root: Path = Path.home() / ".quarry" / "data"
     lancedb_path: Path = Path.home() / ".quarry" / "data" / "default" / "lancedb"
     registry_path: Path = Path.home() / ".quarry" / "data" / "default" / "registry.db"
     log_path: Path = Path.home() / ".quarry" / "data" / "quarry.log"
-    ocr_backend: str = "local"
-    embedding_backend: str = "onnx"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
     embedding_dimension: int = 768
-    sagemaker_endpoint_name: str = ""
 
     chunk_max_chars: int = 1800
     chunk_overlap_chars: int = 200
-
-    textract_poll_initial: float = 5.0
-    textract_poll_max: float = 30.0
-    textract_max_wait: int = 900
-    textract_max_image_bytes: int = 10_485_760  # 10 MiB sync API limit
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

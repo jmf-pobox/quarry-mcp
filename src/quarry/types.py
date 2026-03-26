@@ -1,6 +1,6 @@
 """Protocol definitions for quarry.
 
-Infrastructure protocols (LanceDB, Textract, S3) abstract external libraries.
+Infrastructure protocols (LanceDB) abstract external libraries.
 Domain protocols (OcrBackend, EmbeddingBackend) define backend contracts.
 """
 
@@ -59,62 +59,6 @@ class LanceDB(Protocol):
         data: list[dict[str, object]],
         schema: object,
     ) -> LanceTable: ...
-
-
-# --- Infrastructure: AWS (Textract, S3) ---
-
-
-class TextractClient(Protocol):
-    def detect_document_text(
-        self,
-        *,
-        Document: dict[str, object],  # noqa: N803
-    ) -> dict[str, object]: ...
-
-    def start_document_text_detection(
-        self,
-        *,
-        DocumentLocation: dict[str, object],  # noqa: N803
-    ) -> dict[str, object]: ...
-
-    def get_document_text_detection(
-        self,
-        *,
-        JobId: str,  # noqa: N803
-        NextToken: str | None = ...,  # noqa: N803
-    ) -> dict[str, object]: ...
-
-
-class S3Client(Protocol):
-    def upload_file(
-        self,
-        filename: str,
-        bucket: str,
-        key: str,
-    ) -> None: ...
-
-    def delete_object(
-        self,
-        *,
-        Bucket: str,  # noqa: N803
-        Key: str,  # noqa: N803
-    ) -> None: ...
-
-
-class ReadableBody(Protocol):
-    """Minimal protocol for streaming response bodies (e.g. SageMaker)."""
-
-    def read(self) -> bytes: ...
-
-
-class SageMakerRuntimeClient(Protocol):
-    def invoke_endpoint(
-        self,
-        *,
-        EndpointName: str,  # noqa: N803
-        ContentType: str,  # noqa: N803
-        Body: bytes,  # noqa: N803
-    ) -> dict[str, object]: ...
 
 
 # --- Domain: OCR and Embedding backends ---

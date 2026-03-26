@@ -36,7 +36,7 @@ def _extract_title(soup: BeautifulSoup) -> str:
     """Extract and return the <title> text, or empty string."""
     title_tag = soup.find("title")
     if isinstance(title_tag, Tag):
-        return title_tag.get_text(strip=True)
+        return str(title_tag.get_text(strip=True))
     return ""
 
 

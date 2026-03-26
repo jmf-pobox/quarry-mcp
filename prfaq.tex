@@ -357,9 +357,7 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{Does my data leave my computer?}\label{faq:privacy}
   No. Quarry runs entirely on your machine. The vector database (LanceDB), the
   embedding model (snowflake-arctic-embed-m-v1.5 via ONNX Runtime), and the OCR
-  engine (RapidOCR) all run locally. No data is sent to any cloud service. The
-  only optional cloud component is AWS Textract for higher-quality OCR of
-  degraded scans, and that is opt-in.
+  engine (RapidOCR) all run locally. No data is sent to any cloud service.
 \end{faqpair}
 
 \begin{faqpair}{How much does it cost?}\label{faq:cost}
@@ -485,10 +483,9 @@ run \texttt{quarry install}, and start searching.
   changes---a model upgrade is a configuration change, not an architecture change.
 
   \textbf{OCR accuracy on degraded scans (low risk):} RapidOCR produces
-  good-enough text for semantic search but lower character accuracy than cloud
-  OCR. Mitigation: Textract backend available for higher fidelity. Semantic
-  search is tolerant of OCR errors because it matches by meaning, not exact
-  characters.
+  good-enough text for semantic search but lower character accuracy than
+  commercial OCR. Mitigation: semantic search is tolerant of OCR errors
+  because it matches by meaning, not exact characters.
 
   \textbf{LanceDB scalability (low risk):} At tens of thousands of documents,
   query latency and index size may become concerns. Mitigation: the database

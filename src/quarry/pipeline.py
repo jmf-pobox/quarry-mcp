@@ -567,7 +567,7 @@ def ingest_image(
     image_bytes = _prepare_image_bytes(
         file_path,
         needs_conversion=analysis.needs_conversion,
-        max_bytes=settings.textract_max_image_bytes,
+        max_bytes=0,
     )
     ocr = get_ocr_backend(settings)
     page = ocr.ocr_image_bytes(

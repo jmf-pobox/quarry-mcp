@@ -13,19 +13,12 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # Environment variables that .envrc / shell may set and that pydantic-settings
 # would otherwise silently inject into Settings instances created in tests.
 _QUARRY_ENV_VARS = (
-    "AWS_ACCESS_KEY_ID",
-    "AWS_DEFAULT_REGION",
-    "AWS_SECRET_ACCESS_KEY",
-    "EMBEDDING_BACKEND",
     "EMBEDDING_DIMENSION",
     "EMBEDDING_MODEL",
     "LANCEDB_PATH",
     "LOG_PATH",
-    "OCR_BACKEND",
     "QUARRY_ROOT",
     "REGISTRY_PATH",
-    "S3_BUCKET",
-    "SAGEMAKER_ENDPOINT_NAME",
 )
 
 
@@ -33,9 +26,8 @@ _QUARRY_ENV_VARS = (
 def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip quarry-related env vars so tests get deterministic Settings defaults.
 
-    Without this, .envrc exports (e.g. EMBEDDING_BACKEND=sagemaker) leak into
-    every Settings() call, causing spurious failures when the test assumes the
-    code-level default.
+    Without this, .envrc exports leak into every Settings() call, causing
+    spurious failures when the test assumes the code-level default.
     """
     for var in _QUARRY_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -51,12 +43,7 @@ def _warm_embedding_model(embedding_model_name: str) -> None:
     """Load ONNX embedding model once per session."""
     from quarry.backends import get_embedding_backend
 
-    settings = Settings(
-        aws_access_key_id="test-not-used",
-        aws_secret_access_key="test-not-used",
-        embedding_backend="onnx",
-        embedding_model=embedding_model_name,
-    )
+    settings = Settings(embedding_model=embedding_model_name)
     get_embedding_backend(settings).embed_texts(["warm up"])
 
 
@@ -64,35 +51,8 @@ def _warm_embedding_model(embedding_model_name: str) -> None:
 def integration_settings(
     embedding_model_name: str, _warm_embedding_model: None
 ) -> Settings:
-    """Settings with real embedding model, dummy AWS creds."""
-    return Settings(
-        aws_access_key_id="test-not-used",
-        aws_secret_access_key="test-not-used",
-        embedding_backend="onnx",
-        embedding_model=embedding_model_name,
-        textract_poll_initial=0,
-    )
-
-
-@pytest.fixture()
-def aws_settings(embedding_model_name: str, _warm_embedding_model: None) -> Settings:
-    """Settings with real AWS creds. Skip if no credentials available."""
-    import botocore.session
-
-    session = botocore.session.get_session()
-    creds = session.get_credentials()
-    if creds is None:  # pyright: ignore[reportUnnecessaryComparison]  # botocore stubs lie
-        pytest.skip("No AWS credentials available")
-    resolved = creds.get_frozen_credentials()
-    if not resolved.access_key or not resolved.secret_key:
-        pytest.skip("AWS credentials incomplete")
-    return Settings(
-        aws_access_key_id=resolved.access_key,
-        aws_secret_access_key=resolved.secret_key,
-        embedding_backend="onnx",
-        embedding_model=embedding_model_name,
-        textract_poll_initial=1,
-    )
+    """Settings with real embedding model."""
+    return Settings(embedding_model=embedding_model_name)
 
 
 @pytest.fixture()

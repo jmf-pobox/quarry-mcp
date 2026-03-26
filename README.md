@@ -80,8 +80,8 @@ Without the proxy, every Claude Code tab spawns a separate Python process, each 
 | Source | What happens |
 |--------|-------------|
 | PDF (text pages) | Text extraction via PyMuPDF |
-| PDF (image pages) | OCR (local by default; optional cloud backend) |
-| Images (PNG, JPG, TIFF, BMP, WebP) | OCR (local by default; optional cloud backend) |
+| PDF (image pages) | Local OCR (RapidOCR) |
+| Images (PNG, JPG, TIFF, BMP, WebP) | Local OCR (RapidOCR) |
 | Spreadsheets (XLSX, CSV) | Tabular serialization preserving structure |
 | Presentations (PPTX) | Slide-per-chunk with tables and speaker notes |
 | HTML / webpages | Boilerplate stripping, converted to Markdown |
@@ -285,41 +285,11 @@ Quarry works with zero configuration. These environment variables are available 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `QUARRY_API_KEY` | *(none)* | Bearer token for `quarry serve`. When set, all endpoints except `/health` require `Authorization: Bearer <key>` |
-| `OCR_BACKEND` | `local` | `local` (offline, no setup) or `textract` (AWS, better for degraded scans) |
 | `QUARRY_ROOT` | `~/.quarry/data` | Base directory for all databases (log path configured separately via `LOG_PATH`) |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
 | `CHUNK_OVERLAP_CHARS` | `200` | Overlap between consecutive chunks |
 
-For advanced settings (Textract polling, embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
-
-## Cloud Backends (Optional)
-
-Quarry works entirely offline by default. Cloud backends are available for specialized use cases.
-
-### AWS Textract (OCR)
-
-Better character accuracy on degraded scans, faxes, and low-resolution images. For clean digital documents, local OCR produces equivalent search results.
-
-```bash
-export OCR_BACKEND=textract
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_DEFAULT_REGION=us-east-1
-export S3_BUCKET=my-bucket
-```
-
-See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for IAM policies and full setup.
-
-### SageMaker Embedding
-
-Cloud-accelerated embedding for large-scale batch ingestion (thousands of files). Search always uses the local model regardless of this setting.
-
-```bash
-export EMBEDDING_BACKEND=sagemaker
-export SAGEMAKER_ENDPOINT_NAME=quarry-embedding
-```
-
-Deploy with `./infra/manage-stack.sh deploy`. See [docs/AWS-SETUP.md](docs/AWS-SETUP.md) for details.
+For advanced settings (embedding model, paths), see [Advanced Configuration](docs/ADVANCED-CONFIG.md).
 
 ## MCP Tools Reference
 
@@ -365,7 +335,6 @@ Quarry is fully typed (`py.typed`) and can be used as a Python library. See [DES
 - [Design](DESIGN.md) — architecture and design decisions
 - [Changelog](CHANGELOG.md)
 - [mcp-proxy](https://github.com/punt-labs/mcp-proxy) — the stdio-to-WebSocket bridge that eliminates per-session startup cost
-- [AWS Setup Guide](docs/AWS-SETUP.md) — IAM, S3, SageMaker deployment
 - [Search Quality and Tuning](docs/SEARCH-TUNING.md)
 - [Backend Abstraction Design](docs/BACKEND-ABSTRACTION.md)
 - [Non-Functional Design](docs/NON-FUNCTIONAL-DESIGN.md)

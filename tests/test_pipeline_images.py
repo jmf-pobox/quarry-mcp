@@ -16,11 +16,7 @@ if TYPE_CHECKING:
 
 
 def _settings() -> Settings:
-    return Settings(
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-        textract_poll_initial=0,
-    )
+    return Settings()
 
 
 def _make_chunks(document_name: str, path: str) -> list[Chunk]:

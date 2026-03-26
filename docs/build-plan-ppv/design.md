@@ -1,6 +1,6 @@
-# Design: Passive Knowledge Capture Hooks
+# Design: Passive Knowledge Capture
 
-**Beads**: quarry-fon (P1 removal), quarry-ppv (P2 knowledge capture)
+**Bead**: quarry-ppv (P2 feature)
 **Status**: Draft
 **Date**: 2026-03-25
 
@@ -8,190 +8,178 @@
 
 ## Problem
 
-Quarry's PreToolUse/Bash hook enforces dev workflow conventions: quality gates before committing, `uv` instead of `pip`, git safety reminders. These are dev-time concerns that belong in CLAUDE.md, not in a product that ships to users. A user running quarry in a Go project gets told to run `make check` and `uv`. Several rules duplicate Claude Code's built-in safety behavior.
+Knowledge flows through every Claude Code session and evaporates — web research, document reads, debugging discoveries, architectural decisions. Quarry's three shipped hooks capture some of this, but incompletely:
 
-The README describes quarry's hooks as "passive knowledge capture" — knowledge flows through sessions and the plugin captures it. The pre-tool-hint hook violates this contract. It should be replaced with infrastructure that serves quarry's actual mission: growing the knowledge base.
+- **PreCompact** extracts only user/assistant message text, discards tool results, and does not preserve the raw transcript file.
+- **PostToolUse/WebFetch** auto-ingests URLs but uses a vague collection name (`web-captures`).
+- **No recall signal.** The agent doesn't know to check quarry before doing fresh web research on a topic quarry already has indexed.
 
-## Decision
+## Three capabilities
 
-Remove all dev-convention hook infrastructure. Replace the Bash-command accumulator with a knowledge event accumulator that tracks research activity and enriches session captures.
+### 1. Full conversation capture before compaction
 
-Two PRs. PR 1 is pure deletion (quarry-fon). PR 2 adds the knowledge accumulator (quarry-ppv).
+Every conversation is stored before compaction. Both a raw archive and a search-optimized version.
 
----
+**Raw archive**: Copy the JSONL transcript to `{quarry_root}/../sessions/{repo}-{session_id[:8]}-{timestamp}.jsonl`. This follows the quarry config system — resolves to `~/.quarry/sessions/` today, `~/.punt-labs/quarry/sessions/` after migration. The raw file is the complete record, never modified.
 
-## PR 1: Remove dev conventions (quarry-fon)
+**Searchable version**: Ingest curated text into the `quarry-conversations` collection. The extraction filter keeps:
 
-### What goes
+- User text blocks (existing behavior)
+- Assistant text blocks (existing behavior)
+- Short tool results (<500 chars) — these carry signal ("3 tests failed", "file written successfully")
 
-| Component | File | Why |
-|-----------|------|-----|
-| Instant rules (git-add, pip, force-push, no-verify) | `src/quarry/hint_rules.py` | Dev conventions, some duplicate Claude Code built-ins |
-| Sequence rules (make check, solo gate) | `src/quarry/hint_rules.py` | Dev workflow enforcement |
-| Bash-command accumulator | `src/quarry/hint_accumulator.py` | Built for wrong purpose — tracks Bash commands, not knowledge events |
-| PreToolUse/Bash hook entry | `hooks/hooks.json` | No longer needed |
-| Hook handler | `src/quarry/hooks.py` `handle_pre_tool_hint` | Dead code |
-| Hook entry point | `src/quarry/_hook_entry.py` | Dead code |
-| CLI dispatch | `src/quarry/__main__.py` | Dead code |
-| Config field | `src/quarry/_stdlib.py` `convention_hints` in `HookConfig` | Dead config |
-| Shell wrapper | `hooks/pre-tool-hint.sh` | Dead code |
-| All tests | `tests/test_hint_rules.py`, `tests/test_hint_accumulator.py`, hint tests in `tests/test_hooks.py` | Testing removed code |
+It excludes:
 
-### What stays
+- Long tool results (pytest stdout, file contents, JSON blobs) — these pollute embeddings with noise that outranks the reasoning around them
+- Tool-use input blocks (the command invoked is less useful for retrieval than the outcome)
+- System messages
 
-Three hooks remain, all serving knowledge capture:
+**Truncation**: The 500k char cap truncates from the front (oldest content), not the back. The tail of a session is the most recent and most relevant.
 
-1. **SessionStart** — auto-registers project directory
-2. **PostToolUse/WebFetch** — auto-ingests fetched URLs
-3. **PreCompact** — captures conversation transcript before compaction
+**Dedup**: Document name includes compaction number: `session-{session_id[:8]}-compact-{N}`. Multiple compactions in one session produce numbered documents rather than duplicates.
 
-### Documentation changes
+**Retention**: Raw JSONL files in `sessions/` are subject to a max age (90 days) enforced lazily on write — when copying a new transcript, delete files older than the threshold. At ~500KB per session, 5 sessions/day, this caps at ~7GB before cleanup kicks in.
 
-- README line 161: "Three hooks" not four. Remove convention hints bullet (line 166) and roadmap row (line 185).
-- README line 168: Remove `convention_hints: false` config example.
-- prfaq.tex FAQ and feature appendix: remove "convention hints" / "accumulator" language.
-- CHANGELOG: removal entry.
+**Fallback**: If `cwd` is not registered (hooks fire before session-start completes), fall back to `quarry-conversations` as a global collection. The design prefers per-project but does not fail on missing registration.
 
----
+### 1b. Session artifact linkage
 
-## PR 2: Knowledge event accumulator (quarry-ppv)
+Conversations produce git artifacts — commits, PRs, merges, branch operations, bead state changes. The design captures this relationship bidirectionally so `quarry find "PR #113"` returns the conversation that produced it, and the conversation document lists what it produced.
 
-### Design
+**Layer 1 — Transcript extraction (lightweight).** The enhanced `_extract_transcript_text` already captures short tool results. Git commit output (`[branch abc1234] type: message`), MCP PR creation results (`{"url": "...pull/113"}`), and merge results are all under 500 chars and will be included in the searchable text. This provides basic searchability with no additional work.
 
-The accumulator tracks knowledge-generating events within a session. It replaces the Bash-command accumulator with a different shape optimized for quarry's mission.
+**Layer 2 — Structured artifacts header.** At PreCompact time, scan the extracted transcript text for git artifacts using reliable patterns:
 
-#### KnowledgeEvent
+| Artifact | Pattern | Source |
+|----------|---------|--------|
+| Commit SHAs | `[a-f0-9]{7,12}` following `commit` or in `[branch sha]` format | git commit output |
+| PR numbers | `#\d+` in context of PR/pull/merge | MCP results, assistant text |
+| Branch names | Token after `checkout -b` or `push.*origin` | git output |
+| Beads | `quarry-[a-z0-9]{3}` pattern | bd commands |
 
-```python
-@dataclass(frozen=True)
-class KnowledgeEvent:
-    ts: float
-    kind: str              # "web_fetch" (PR 2), "read" and "search" (future)
-    source: str            # URL for web_fetch
-    collection: str | None # quarry collection if known; None for web captures
-```
-
-`collection` is `str | None` because web fetches don't belong to a project collection — they go into `web-captures`.
-
-PR 2 tracks only `web_fetch` events (the PostToolUse/WebFetch hook already exists). Future event kinds:
-
-| Kind | Hook | Roadmap |
-|------|------|---------|
-| `web_fetch` | PostToolUse/WebFetch | PR 2 |
-| `read` | PostToolUse/Read (new hook entry) | `quarry learn all` |
-| `search` | PostToolUse on quarry MCP tools | `quarry learn all` |
-
-#### KnowledgeAccumulator
-
-Same rolling-window architecture as the old accumulator:
-
-- **TTL**: 86400s (24h). Events survive the whole session, not just 5 minutes.
-- **max_events**: 200. Higher ceiling — sessions can involve dozens of URLs.
-- **State file**: `/tmp/quarry-knowledge-{safe_session_id}.json`. Volatile, session-scoped. Same `_sanitize_session_id` pattern as old accumulator. No need to survive crashes — if state is lost, PreCompact simply produces a transcript without the research summary.
-- **Clock**: injectable for deterministic testing.
-- **Deserialization**: fail-open (corrupt JSON returns empty accumulator).
-
-#### PostToolUse/WebFetch integration
-
-The existing `handle_post_web_fetch` auto-ingests URLs. Enhancement:
-
-```
-1. Extract URL from payload (_extract_url)
-2. If URL valid:
-   a. Record KnowledgeEvent(kind="web_fetch", source=url)  <-- NEW
-   b. Check dedup (already ingested?)
-   c. If new: ingest content
-```
-
-The event records on every valid URL extraction, before the dedup check. This tracks "URLs Claude researched this session" not "URLs quarry ingested." A URL fetched twice in one session is still one research event (dedup in the accumulator by source).
-
-The `web_fetch` config toggle gates both ingestion AND event recording. If `web_fetch: false`, no events are recorded.
-
-#### PreCompact enrichment
-
-The existing `handle_pre_compact` captures conversation transcripts. Enhancement:
-
-```
-1. Read transcript (existing)
-2. Read knowledge accumulator for this session  <-- NEW
-3. If events exist: prepend research summary    <-- NEW
-4. Ingest as document (existing)
-```
-
-Research summary format, prepended to transcript text:
+Prepend a structured header to the ingested document:
 
 ```markdown
-## Research This Session
-
-URLs fetched:
-- https://example.com/api-docs
-- https://other.example.com/reference
-
----
-
-[transcript follows]
+## Session Artifacts
+Branch: fix/remove-sequence-rules
+Commits: 5619a29, fe8feb8, 1e9c4f1, bc16aac
+PRs created: #112
+PRs merged: #112, #113
+Beads: quarry-5l9, quarry-fon
 ```
 
-If the accumulator is missing, empty, or unreadable: no summary prepended. Fail-open. The transcript is captured regardless.
+This header becomes part of the embedding — queries for any artifact return the conversation that produced it.
 
-#### Session ID consistency
+**Layer 3 — Authoritative git state (follow-up).** At PreCompact time, query git directly for ground-truth artifacts:
 
-The same `session_id` from the payload must be used in PostToolUse/WebFetch (write) and PreCompact (read). Both receive it from Claude Code's hook system. A test must verify the same session ID across both handlers produces the expected enrichment.
-
-### Test plan
-
-| Test | Validates |
-|------|-----------|
-| KnowledgeAccumulator round-trip (JSON serialize/deserialize) | Data integrity |
-| KnowledgeAccumulator TTL expiry (24h) | Events survive session, expire eventually |
-| KnowledgeAccumulator overflow (>200 events) | Oldest events pruned |
-| KnowledgeAccumulator corrupt JSON | Fail-open, returns empty |
-| KnowledgeEvent with collection=None | Optional field works |
-| PostToolUse/WebFetch records event on valid URL | Event recording |
-| PostToolUse/WebFetch records event even on dedup path | Research tracking vs ingestion tracking |
-| PostToolUse/WebFetch respects web_fetch config toggle | Config gating |
-| PreCompact includes research summary when events exist | Enrichment |
-| PreCompact works unchanged when no events | Fail-open |
-| Same session_id across PostToolUse and PreCompact | Integration |
-
-### Documentation changes
-
-- README: describe research tracking in PostToolUse/WebFetch description, update PreCompact to mention research context.
-- CHANGELOG: addition entry.
-
----
-
-## Hooks after both PRs
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": ".../session-start.sh" }] },
-      { "hooks": [{ "type": "command", "command": ".../session-sync.sh" }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "mcp__...quarry...", "hooks": [{ "type": "command", "command": ".../suppress-output.sh" }] },
-      { "matcher": "WebFetch", "hooks": [{ "type": "command", "command": ".../web-fetch.sh" }] }
-    ],
-    "PreCompact": [
-      { "hooks": [{ "type": "command", "command": ".../pre-compact.sh", "timeout": 30000 }] }
-    ]
-  }
-}
+```
+git log --oneline --since={first_transcript_timestamp} --format="%h %s"
 ```
 
-No PreToolUse block. Three hooks, all serving knowledge capture.
+This catches commits the transcript extraction might miss (e.g., commits made by hooks or background processes) and provides canonical short SHAs. Also query for PRs via:
+
+```
+git log --oneline --merges --since={first_transcript_timestamp}
+```
+
+The authoritative layer adds ~1s latency (subprocess calls) and requires `git` in PATH. It runs after transcript extraction and merges results into the artifacts header — git-sourced artifacts override transcript-parsed ones when both are present.
+
+**Trade-offs:**
+
+| Layer | Cost | Dependency | What it catches |
+|-------|------|------------|-----------------|
+| 1 (extraction) | Zero — falls out of short tool-result inclusion | Enhanced `_extract_transcript_text` | Artifacts that appear in tool output |
+| 2 (text scanning) | ~50 lines, pure functions, no I/O | Layer 1 text available | Structured header with deduplicated artifacts |
+| 3 (git query) | ~1s latency, subprocess calls, `git` in PATH | None (reads git directly) | Commits by hooks/background processes, canonical SHAs |
+
+### 2. Web research capture
+
+The PostToolUse/WebFetch hook already auto-ingests fetched URLs. This works. Rename the collection from `web-captures` to `quarry-research` for clarity.
+
+No accumulator needed. The `quarry-research` collection is the accumulator — it persists across sessions and is searchable. The conversation transcript (capability 1) preserves the context around web fetches.
+
+### 3. Knowledge recall hints
+
+The agent should know to check quarry before doing fresh research.
+
+**SessionStart**: Replace the existing `additionalContext` line with a behavioral trigger:
+
+```
+Before doing fresh web research on a topic, check quarry first — prior research and conversations are indexed here.
+Collection: "{collection_name}" ({directory})
+```
+
+This tells the agent _when_ to use quarry (before web research), not just _that_ it exists.
+
+**PreCompact**: After capturing the transcript, return `additionalContext` confirming preservation:
+
+```
+Session transcript captured in quarry. Prior conversations are searchable via quarry find.
+```
+
+Return dict format: `hookSpecificOutput.hookEventName = "PreCompact"`, `permissionDecision = "allow"`, `additionalContext = <text>`.
 
 ---
 
-## Rejected alternatives
+## Collection naming
 
-| Alternative | Why rejected |
-|-------------|-------------|
-| Keep instant rules as "universal safety" | They duplicate Claude Code built-ins. Quarry is not a safety tool. |
-| Replace sequence rules with `make check` | Still dev conventions. Language-agnostic is better but still wrong. |
-| Track all Read events in PR 2 | Needs a new PostToolUse/Read hook entry. High noise. Defer to `quarry learn all`. |
-| Persist accumulator to `~/.quarry/` | Overkill for session-scoped volatile data. /tmp is the right place. |
-| Record events only on fresh ingestion | Misses re-fetched URLs. Research tracking should track research, not ingestion. |
-| Combine both PRs | Reviewers must track removal and addition simultaneously. Split is cleaner. |
+Literal names that say what's in them:
+
+| Collection | Contents | Source hook |
+|------------|----------|-------------|
+| `quarry-code` | Synced project files | SessionStart (auto-register) |
+| `quarry-research` | Web pages fetched during sessions | PostToolUse/WebFetch |
+| `quarry-conversations` | Session transcripts before compaction | PreCompact |
+
+Rename `web-captures` → `quarry-research` and `session-notes` → `quarry-conversations`. The project's registered collection name stays as-is for code (typically the repo slug, e.g., `quarry`). A follow-up can standardize this to `quarry-code` if warranted.
+
+---
+
+## Implementation
+
+### Modify
+
+- **`src/quarry/hooks.py`** (`handle_pre_compact`):
+  - Copy raw JSONL to `{quarry_root}/../sessions/`
+  - Enhance `_extract_transcript_text` to include short tool results (<500 chars)
+  - Truncate from front instead of back
+  - Use `quarry-conversations` collection (rename from `session-notes`)
+  - Add compaction-number dedup to document name
+  - Lazy cleanup of sessions older than 90 days
+  - Extract git artifacts from transcript text (Layer 2) and prepend structured header
+  - Return `additionalContext` with recall hint
+  - Fall back to `quarry-conversations` when cwd not registered
+
+- **`src/quarry/artifacts.py`** (new):
+  - `extract_artifacts(text: str) -> SessionArtifacts` — scan transcript text for commit SHAs, PR numbers, branch names, bead IDs
+  - `format_artifacts_header(artifacts: SessionArtifacts) -> str` — render the structured markdown header
+  - Pure functions, no I/O, fully testable
+
+- **`src/quarry/hooks.py`** (`handle_post_web_fetch`):
+  - Use `quarry-research` collection (rename from `web-captures`)
+
+- **`src/quarry/hooks.py`** (`handle_session_start`):
+  - Replace `additionalContext` text with behavioral trigger
+
+- **`src/quarry/hooks.py`** (`_extract_transcript_text`):
+  - Add short tool-result extraction (text content <500 chars)
+  - Reverse truncation direction (front, not back)
+
+### Migration
+
+Existing documents in `web-captures` and `session-notes` collections are not migrated. New documents go into `quarry-research` and `quarry-conversations`. Old collections remain searchable until explicitly deleted.
+
+---
+
+## Verification
+
+1. Trigger compaction in a session with commits, PRs, and web fetches
+2. Verify raw JSONL exists in `{quarry_root}/../sessions/`
+3. `quarry find "what did we discuss"` in `quarry-conversations` returns transcript
+4. `quarry find "PR #113"` returns the conversation that created/merged it
+5. Verify ingested document starts with `## Session Artifacts` header listing commits, PRs, beads
+6. `quarry find "some URL topic"` in `quarry-research` returns web content
+7. Verify session-start hint says "check quarry first"
+8. Verify short tool results appear in ingested transcript, long ones do not
+9. Verify second compaction produces `compact-2` document, not a duplicate
+10. `make check` — all tests pass
