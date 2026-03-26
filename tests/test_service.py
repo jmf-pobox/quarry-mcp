@@ -36,12 +36,29 @@ class TestDetectPlatform:
 
 
 class TestQuarryExecArgs:
-    def test_prefers_uv_tool_binary(self) -> None:
-        args = _quarry_exec_args()
-        # When ~/.local/bin/quarry exists (uv tool install), use the resolved path.
-        # When it doesn't, fall back to sys.executable -m quarry.
+    def test_prefers_uv_tool_binary(self, tmp_path: Path) -> None:
+        fake_bin = tmp_path / "quarry"
+        fake_bin.write_text("#!/bin/sh\n")
+        fake_bin.chmod(0o755)
+        with patch("quarry.service.Path.home", return_value=tmp_path.parent):
+            # Patch to make ~/.local/bin/quarry point to our fake
+            with patch("quarry.service.Path.home", return_value=tmp_path):
+                # Create the expected path structure
+                local_bin = tmp_path / ".local" / "bin" / "quarry"
+                local_bin.parent.mkdir(parents=True, exist_ok=True)
+                local_bin.symlink_to(fake_bin)
+                args = _quarry_exec_args()
         assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
-        assert "quarry" in args[0]
+        assert str(fake_bin) == args[0]
+
+    def test_falls_back_to_sys_executable(self, tmp_path: Path) -> None:
+        import sys
+
+        with patch("quarry.service.Path.home", return_value=tmp_path):
+            # No ~/.local/bin/quarry exists in tmp_path
+            args = _quarry_exec_args()
+        assert args[0] == sys.executable
+        assert args[1:] == ["-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
 
 
 class TestInstallMacOS:
