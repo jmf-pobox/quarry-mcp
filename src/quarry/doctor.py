@@ -482,14 +482,17 @@ def run_install() -> int:
 
     failed = False
 
-    # Step 1: data directory
+    # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
-    print("[1/6] Creating data directory...")  # noqa: T201
+    logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
+    print("[1/6] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
         print(f"  \u2713 {data_dir}")  # noqa: T201
+        print(f"  \u2713 {logs_dir}")  # noqa: T201
     except OSError as exc:
-        print(f"  \u2717 Failed to create {data_dir}: {exc}")  # noqa: T201
+        print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
         failed = True
 
     # Step 2: embedding model
