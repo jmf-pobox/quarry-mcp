@@ -188,15 +188,19 @@ ignore_missing_imports = true
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
-# Third-party libs without stubs (pyarrow, lancedb, RapidOCR, ONNX, PyMuPDF)
+# These 6 suppressions exist because lancedb, rapidocr, onnxruntime, fitz,
+# and pyarrow ship no type stubs. Every value returned from these libraries
+# is Unknown, cascading 591 errors across the codebase. The alternative is
+# 591 inline pyright:ignore comments — strictly worse.
 reportMissingTypeStubs = false
-reportUnknownLambdaType = false
 reportUnknownMemberType = false
 reportUnknownParameterType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
+reportUnknownLambdaType = false
 
-# Tests legitimately import _-prefixed internals and have pytest-discovered fixtures
+# Tests import _private internals (legitimate), use pytest fixture discovery
+# (functions appear unused), and have fixture params without annotations.
 [[tool.pyright.executionEnvironments]]
 root = "tests"
 reportPrivateUsage = false
