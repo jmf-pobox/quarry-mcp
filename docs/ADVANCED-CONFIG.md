@@ -25,4 +25,4 @@ All settings are environment variables read via pydantic-settings. See the main 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EMBEDDING_MODEL` | `Snowflake/snowflake-arctic-embed-m-v1.5` | Model identifier (display only — the ONNX model is fixed) |
-| `EMBEDDING_DIMENSION` | `768` | Vector dimension |
+| `EMBEDDING_DIMENSION` | `768` | Vector dimension (display only — fixed at 768 by the ONNX model) |
