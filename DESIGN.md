@@ -49,7 +49,7 @@ snowflake-arctic-embed-m-v1.5: 768-dimensional, 512 token context. Auto-download
 
 ### Container Deployment (Fly.io)
 
-> **Moved.** Dockerfile, fly.toml, .dockerignore, and sync-chat-db.sh relocated to `public-website/infra/quarry/`. The Dockerfile now installs `punt-quarry` from PyPI instead of copying source. See `public-website/CLAUDE.md` § "Chat Widget RAG Backend" for infrastructure details.
+> **Moved.** Dockerfile, fly.toml, .dockerignore, and sync-chat-db.sh relocated to [punt-labs/public-website/infra/quarry/](https://github.com/punt-labs/public-website/tree/main/infra/quarry). The Dockerfile now installs `punt-quarry` from PyPI instead of copying source. See [punt-labs/public-website/CLAUDE.md](https://github.com/punt-labs/public-website/blob/main/CLAUDE.md) § "Chat Widget RAG Backend" for infrastructure details.
 
 Design rationale preserved here: multi-stage build downloads the embedding model at build time for fast cold starts (~5s). LanceDB data lives on a Fly persistent volume at `/data` (`QUARRY_ROOT=/data`). The `--host 0.0.0.0` flag binds to all interfaces for container networking. TLS is terminated by Fly's proxy.
 
