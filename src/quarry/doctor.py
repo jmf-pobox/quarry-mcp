@@ -426,23 +426,25 @@ def _print_check(check: CheckResult) -> None:
 
 _QUARRY_CLAUDE_MD_SECTION = """\
 
+<!-- quarry:capabilities -->
 # Quarry
 
 Local semantic search is available via quarry. Use it to search indexed
 documents by meaning, ingest new content, and recall knowledge across sessions.
 
-- **Slash commands**: `/find <query>`, `/ingest <url|file|dir>`, \
-`/remember <name>`, `/explain <topic>`, `/source <claim>`, `/quarry [status|sync]`
-- **Research agent**: `researcher` — combines quarry local search with web \
-research. Use for deep investigation across local docs and the web.
-- **Auto-behaviors**: working directory is auto-indexed at session start; \
-URLs fetched via WebFetch are auto-ingested; transcripts are captured before \
-context compaction.
-- **Search tip**: natural language queries work best ("What were Q3 margins?" \
-outperforms "Q3 margins").
+- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
+  `/quarry`
+- **Research agent**: `researcher` — combines quarry local search with web
+  research. Use for deep investigation across local docs and the web.
+- **Auto-behaviors**: working directory is auto-indexed at session start;
+  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
+  context compaction.
+- **Search tip**: natural language queries work best ("What were Q3 margins?"
+  outperforms "Q3 margins").
+<!-- /quarry:capabilities -->
 """
 
-_QUARRY_SECTION_MARKER = "# Quarry"
+_QUARRY_SECTION_MARKER = "<!-- quarry:capabilities -->"
 
 
 def _inject_claude_md() -> str:

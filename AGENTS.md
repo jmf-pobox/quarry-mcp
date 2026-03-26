@@ -22,7 +22,7 @@ These are the tools you call directly. Read-only tools are synchronous; write to
 
 | Tool | Purpose | Execution |
 |------|---------|-----------|
-| `find` | Semantic search with optional filters (collection, document, page_type, source_format) | Sync |
+| `find` | Semantic search with optional filters (collection, document_filter, page_type, source_format) | Sync |
 | `show` | Retrieve document metadata or a specific page's full text | Sync |
 | `list` | List documents, collections, databases, or registrations | Sync |
 | `status` | Database stats: doc/chunk counts, size, model info | Sync |
@@ -61,7 +61,7 @@ These fire without user action. All are fail-open — errors are logged, never b
 
 | Hook | Event | What it does |
 |------|-------|-------------|
-| **Session start** | `SessionStart` | Auto-registers the working directory and launches a background sync. The codebase is indexed before you start working. |
+| **Session start** | `SessionStart` | Auto-registers the working directory and launches a background sync so the codebase starts getting indexed shortly after session start. |
 | **Web fetch capture** | `PostToolUse` on `WebFetch` | URLs you fetch during research are auto-ingested into the `web-captures` collection. Deduplicates by document name. Uses the already-fetched content (no re-fetch). |
 | **Pre-compact capture** | `PreCompact` | Before context compaction, captures the conversation transcript into the `session-notes` collection. User/assistant messages are extracted, tool-use blocks skipped, capped at 500K chars. |
 | **Output suppression** | `PostToolUse` on quarry tools | Formats quarry tool output for display. |
@@ -106,8 +106,7 @@ The simplest path. Your plugin's hooks or commands call quarry's MCP tools direc
 ```json
 {
   "hooks": {
-    "PostToolUse": [{
-      "matcher": "Edit|Write",
+    "SessionStart": [{
       "hooks": [{
         "type": "command",
         "command": "quarry hooks session-start < /dev/stdin"
