@@ -16,8 +16,6 @@ across `transform`, `index`, and `connector`).
 
 ## [1.6.0] - 2026-03-26
 
-## [1.6.0] - 2026-03-25
-
 ### Added
 
 - **`docs/architecture.tex`** — comprehensive LaTeX architecture document covering system design, daemon model, module responsibilities, wire protocol, configuration, search tuning, logging standards, security, deployment, and test architecture. Consolidates content from four separate markdown files into one authoritative document
@@ -27,15 +25,25 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- **README.md** — rewritten to lead with Claude Code (primary use case), condensed MCP tools to a table, removed quarry-menubar section, reduced from 344 to 178 lines
 - **`DESIGN.md`** — slimmed to ADRs only; architecture and module tables moved to `docs/architecture.tex`
 - **`docs/claude-code-quarry.tex`** — refreshed implementation validation section to reflect current hook wiring status (all three knowledge capture hooks are now wired)
 - **SessionStart context** — fixed stale MCP tool names (`search_documents`/`get_page` → `find`/`show`), added slash command list and researcher agent mention
+- **`session-start.sh`** — refactored from 88-line shell script with business logic to 3-line thin gate per punt-kit hook standard; command deployment and permissions logic moved to Python in `_stdlib.py`
+- **`prfaq.tex`** — merged `prfaq-ambient.tex` into single document reflecting current project state; removed references to deleted features (AWS, convention hints, quarry-menubar)
+- **`TESTING.md`** — moved to `docs/TESTING.md`
+- **Directory standard** — user data moved from `~/.quarry/` to `~/.punt-labs/quarry/` per org filesystem standard. Per-project config moved from `.claude/quarry.local.md` to `.punt-labs/quarry/config.md`. Logs moved to `~/.punt-labs/quarry/logs/`. No automatic migration — run `mv ~/.quarry/data ~/.punt-labs/quarry/data` to preserve existing databases.
 
 ### Removed
 
-- **Convention hint hooks** — removed the entire PreToolUse/Bash hook system (instant rules, sequence rules, Bash-command accumulator). Dev workflow conventions belong in CLAUDE.md, not in a knowledge management product. See `docs/build-plan-ppv/design.md` for the replacement design (knowledge event accumulator for research capture)
+- **Convention hint hooks** — removed the entire PreToolUse/Bash hook system (instant rules, sequence rules, Bash-command accumulator). Dev workflow conventions belong in CLAUDE.md, not in a knowledge management product
 - **AWS backends** — removed Textract OCR and SageMaker embedding backends, all AWS infrastructure (CloudFormation templates, deployment scripts, IAM policies), and boto3/botocore dependencies. Local backends (RapidOCR, ONNX) always outperformed AWS in testing
 - **`docs/ADVANCED-CONFIG.md`**, **`docs/SEARCH-TUNING.md`**, **`docs/NON-FUNCTIONAL-DESIGN.md`** — absorbed into `docs/architecture.tex`
+- **`docs/TOOL-PyPI.md`** — obsolete manual publishing checklist; releases use `.github/workflows/release.yml`
+- **`docs/build-plan-ppv/`** — completed design work, no longer needed
+- **`docs/prd/quarry-menubar.md`**, **`docs/sparc/quarry-menubar-implementation.md`** — quarry-menubar is a separate repo
+- **`prfaq-ambient.tex`** — merged into `prfaq.tex`
+- **`data/`** — stale development-era LanceDB with old table schema
 
 ## [1.5.2] - 2026-03-15
 
