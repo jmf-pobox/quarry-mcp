@@ -35,6 +35,12 @@ def main() -> None:
 # ── Handler dispatch ─────────────────────────────────────────────────
 
 
+def _session_setup() -> None:
+    from quarry._stdlib import handle_session_setup  # noqa: PLC0415
+
+    run_hook(handle_session_setup)
+
+
 def _session_start() -> None:
     from quarry.hooks import handle_session_start  # noqa: PLC0415
 
@@ -54,6 +60,7 @@ def _pre_compact() -> None:
 
 
 _HANDLERS: dict[str, Callable[[], None]] = {
+    "session-setup": _session_setup,
     "session-start": _session_start,
     "post-web-fetch": _post_web_fetch,
     "pre-compact": _pre_compact,
