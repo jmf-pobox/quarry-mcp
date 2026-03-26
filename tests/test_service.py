@@ -36,12 +36,12 @@ class TestDetectPlatform:
 
 
 class TestQuarryExecArgs:
-    def test_uses_current_python(self) -> None:
-        import sys
-
+    def test_prefers_uv_tool_binary(self) -> None:
         args = _quarry_exec_args()
-        assert args[0] == sys.executable
-        assert args[1:] == ["-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+        # When ~/.local/bin/quarry exists (uv tool install), use the resolved path.
+        # When it doesn't, fall back to sys.executable -m quarry.
+        assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
+        assert "quarry" in args[0]
 
 
 class TestInstallMacOS:
@@ -71,7 +71,7 @@ class TestInstallMacOS:
             assert _LABEL in content
             assert "KeepAlive" in content
             assert "RunAtLoad" in content
-            assert "<string>-m</string>" in content
+            assert "<string>serve</string>" in content
             assert "running" in msg
             assert str(DEFAULT_PORT) in msg
 
