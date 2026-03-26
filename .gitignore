@@ -12,7 +12,6 @@ build/
 venv/
 
 # Data (large files, generated)
-data/lancedb/
 *.lance
 
 # Input files (large PDFs)

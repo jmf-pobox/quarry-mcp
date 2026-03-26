@@ -112,7 +112,7 @@ Git operations (commit, push, branch, checkout, tag) remain via the Bash tool.
 
 Before creating a PR, verify:
 
-- [ ] **DESIGN.md updated** if architecture, module responsibilities, or design decisions changed
+- [ ] **DESIGN.md updated** if the change involves a design decision with rejected alternatives. Use the `DES-NNN` format (see biff DESIGN.md for the reference pattern): `## DES-NNN: Title`, Date, Status (PROPOSED/SETTLED), Topic, Design section, Why section, Alternatives Considered
 - [ ] **README updated** if user-facing behavior changed (new flags, commands, defaults, config)
 - [ ] **CHANGELOG entry included in the PR diff** under `## [Unreleased]` (not retroactively on main)
 - [ ] **prfaq.tex updated** if the change shifts product direction or validates/invalidates a risk
