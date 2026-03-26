@@ -21,8 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/25eaa96/install.sh
 Restart Claude Code, then:
 
 ```text
-> /ingest report.pdf                    # index a document
-> /quarry status                        # confirm it's there (1 document, N chunks)
+> /ingest report.pdf                    # index a document (runs in background)
+> /quarry status                        # after a moment, confirm it's there
 > /find "what does the report say about margins"   # search by meaning
 ```
 
@@ -163,11 +163,11 @@ Beyond explicit `/ingest` and `/find` commands, quarry runs as a Claude Code plu
 
 | Hook | When it fires | What it does |
 |------|--------------|-------------|
-| **Session start** | Every session open | Auto-registers your project directory and syncs it in the background. Your codebase is searchable without manual ingestion. |
-| **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into a `web-captures` collection. No re-fetch — uses the content already retrieved. |
+| **Session start** | On every session start | Auto-registers your project directory and syncs it in the background. Your codebase is searchable without manual ingestion. |
+| **Web fetch** | After any `WebFetch` tool call | URLs Claude fetches during research are auto-ingested into a `web-captures` collection. Reuses already-retrieved content when available, falls back to URL ingest otherwise. |
 | **Pre-compact** | Before context compaction | Captures the conversation transcript into a `session-notes` collection. Discoveries that would be lost when the context window shrinks are preserved as searchable chunks. |
 
-All hooks are fail-open (errors are logged, never block Claude Code) and individually toggleable via `.claude/quarry.local.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
+All hooks are fail-open — failures are ignored and never block Claude Code. Each hook is individually toggleable via `.claude/quarry.local.md` YAML frontmatter. See [AGENTS.md](AGENTS.md) for the full integration model.
 
 ## How It Works
 
