@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the CLI. Everything runs locally — no API keys, no cloud accounts. The embedding model (~120 MB, int8 quantized) downloads once on first use.
+Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the CLI. Everything runs locally — no API keys, no cloud accounts. The embedding model (~500 MB) downloads once on first use.
 
 **Platforms:** macOS, Linux
 

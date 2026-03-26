@@ -31,14 +31,15 @@ clean: ## Remove build artifacts
 TEX_DOCS := prfaq docs/architecture docs/claude-code-quarry
 
 docs: ## Build all LaTeX documents
-	@for doc in $(TEX_DOCS); do \
+	@set -e; \
+	for doc in $(TEX_DOCS); do \
 		dir=$$(dirname $$doc); \
 		base=$$(basename $$doc); \
 		echo "Building $$doc.pdf..."; \
-		cd $$dir && pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
-		if [ "$$base" = "prfaq" ]; then biber $$base > /dev/null 2>&1; fi; \
-		pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
-		pdflatex -interaction=nonstopmode $$base.tex > /dev/null 2>&1; \
+		cd $$dir && pdflatex -interaction=nonstopmode -halt-on-error $$base.tex > /dev/null; \
+		if [ "$$base" = "prfaq" ]; then biber $$base > /dev/null || exit 1; fi; \
+		pdflatex -interaction=nonstopmode -halt-on-error $$base.tex > /dev/null; \
+		pdflatex -interaction=nonstopmode -halt-on-error $$base.tex > /dev/null; \
 		cd $(CURDIR); \
 	done
 	@$(MAKE) --no-print-directory docs-clean

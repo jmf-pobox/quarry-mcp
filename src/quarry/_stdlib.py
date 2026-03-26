@@ -305,9 +305,12 @@ def _allow_mcp_tools(plugin_name: str, settings_path: Path) -> str | None:
             return None
 
     allow_list.append(tool_pattern)
+    tmp_path = settings_path.with_suffix(".json.tmp")
     try:
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
+        tmp_path.replace(settings_path)
     except OSError:
+        tmp_path.unlink(missing_ok=True)
         return None
 
     return f"Auto-allowed {plugin_name} MCP tools in permissions"
