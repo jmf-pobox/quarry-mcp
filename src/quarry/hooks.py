@@ -252,6 +252,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             else "Background sync skipped (could not launch)."
         )
         context = (
+            "Before researching a topic, check quarry first — prior research "
+            "and conversations are already indexed here.\n"
             "Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
             f"{sync_line}\n"
@@ -665,4 +667,12 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         result["chunks"],
         len(text),
     )
-    return {}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreCompact",
+            "additionalContext": (
+                f"Session transcript captured in quarry ({result['chunks']} chunks). "
+                "Prior conversations are searchable via /find."
+            ),
+        },
+    }
