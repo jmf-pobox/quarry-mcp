@@ -597,6 +597,25 @@ class TestHandleSessionStart:
         assert "myproject" in collections
         assert "myproject-mine" in collections
 
+    def test_context_includes_recall_hint(self, tmp_path: Path) -> None:
+        project = tmp_path / "hintproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value=True),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert ctx.startswith("Before researching")
+
 
 class TestExtractUrl:
     def test_extracts_url_from_tool_input(self) -> None:
@@ -1184,7 +1203,7 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert result == {}
+        assert "hookSpecificOutput" in result
         mock_ingest.assert_called_once()
         call_args = mock_ingest.call_args
         assert "Build a feature" in call_args[0][0]  # content
@@ -1710,6 +1729,52 @@ class TestHandlePreCompact:
         sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
         new_archives = list(sessions_dir.glob("session-abc12345-*.jsonl"))
         assert len(new_archives) == 1, "archive should survive retention cleanup"
+
+    def test_returns_capture_confirmation(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Confirm capture"}],
+                    },
+                }
+            )
+        )
+
+        mock_result = {
+            "document_name": "session-abc12345-20260224T120000",
+            "collection": "session-notes",
+            "chunks": 3,
+        }
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=MagicMock()),
+            patch("quarry.database.get_db", return_value=MagicMock()),
+            patch("quarry.hooks._collection_for_cwd", return_value=None),
+            patch("quarry.database.list_documents", return_value=[]),
+            patch("quarry.database.delete_document"),
+            patch(
+                "quarry.pipeline.ingest_content",
+                return_value=mock_result,
+            ),
+        ):
+            result = handle_pre_compact(
+                {
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345-full-id",
+                }
+            )
+
+        assert "hookSpecificOutput" in result
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "captured in quarry" in ctx
+        assert "searchable via /find" in ctx
+        assert "3 chunks" in ctx
 
 
 # ---------------------------------------------------------------------------

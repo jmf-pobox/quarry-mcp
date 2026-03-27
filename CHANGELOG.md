@@ -22,6 +22,7 @@ across `transform`, `index`, and `connector`).
 ### Added
 
 - **Raw JSONL archival** — pre-compact hook now copies the raw transcript to `~/.punt-labs/quarry/sessions/` before extraction. Archives are deduplicated per session and pruned after 90 days. Archival is fault-tolerant: failures log and proceed with ingestion.
+- **Knowledge recall hints** — SessionStart context now leads with a behavioral nudge ("check quarry before researching"). PreCompact returns confirmation that the transcript was captured and prior conversations are searchable.
 
 ### Changed
 
