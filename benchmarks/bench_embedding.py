@@ -98,11 +98,7 @@ def _get_rss_mb() -> float:
 def _make_chunks() -> list[str]:
     """Build ~200 realistic text chunks from pipeline.py source."""
     src = Path(__file__).resolve().parent.parent / "src" / "quarry" / "pipeline.py"
-    if src.exists():
-        text = src.read_text()
-    else:
-        # Fallback: generate synthetic text
-        text = ""
+    text = src.read_text() if src.exists() else ""
 
     # If the source file is too short, pad with repeated content
     while len(text) < NUM_CHUNKS * CHUNK_CHARS:
@@ -174,7 +170,9 @@ def _run_inference(
 # ---------------------------------------------------------------------------
 
 
-def run_benchmark(cfg: BenchConfig, tokenizer: object, chunks: list[str]) -> BenchResult:
+def run_benchmark(
+    cfg: BenchConfig, tokenizer: object, chunks: list[str]
+) -> BenchResult:
     """Run a single benchmark configuration."""
     import onnxruntime as ort
 
@@ -210,7 +208,10 @@ def run_benchmark(cfg: BenchConfig, tokenizer: object, chunks: list[str]) -> Ben
     result.active_providers = session.get_providers()
     print(f"  Session created in {result.session_time_s:.2f}s")
     print(f"  Active providers: {result.active_providers}")
-    print(f"  RSS: {rss_before:.0f} MB -> {rss_after_session:.0f} MB (+{rss_after_session - rss_before:.0f} MB)")
+    print(
+        f"  RSS: {rss_before:.0f} MB -> {rss_after_session:.0f} MB"
+        f" (+{rss_after_session - rss_before:.0f} MB)"
+    )
 
     # --- Warmup ---
     print("  Running warmup batch...", flush=True)
@@ -233,10 +234,15 @@ def run_benchmark(cfg: BenchConfig, tokenizer: object, chunks: list[str]) -> Ben
         elapsed = time.perf_counter() - t_batch
         result.batch_times.append(elapsed)
         if (i + 1) % 2 == 0 or i == n_batches - 1:
-            print(f"    batch {i + 1}/{n_batches}: {elapsed:.3f}s ({len(batch)} texts)", flush=True)
+            print(
+                f"    batch {i + 1}/{n_batches}: {elapsed:.3f}s ({len(batch)} texts)",
+                flush=True,
+            )
 
     result.total_time_s = time.perf_counter() - t_total_start
-    result.texts_per_s = n_texts / result.total_time_s if result.total_time_s > 0 else 0.0
+    result.texts_per_s = (
+        n_texts / result.total_time_s if result.total_time_s > 0 else 0.0
+    )
     result.peak_rss_mb = _get_rss_mb()
 
     print(f"  Total: {result.total_time_s:.2f}s, {result.texts_per_s:.1f} texts/s")
@@ -263,10 +269,7 @@ def print_summary(results: list[BenchResult]) -> None:
         f"{'Configuration':<23} | {'Session (s)':>11} | {'Warmup (s)':>10} "
         f"| {'Throughput (texts/s)':>20} | {'Peak RSS (MB)':>13} | Providers"
     )
-    sep = (
-        f"{'-' * 23}-+-{'-' * 11}-+-{'-' * 10}"
-        f"-+-{'-' * 20}-+-{'-' * 13}-+-{'-' * 30}"
-    )
+    sep = f"{'-' * 23}-+-{'-' * 11}-+-{'-' * 10}-+-{'-' * 20}-+-{'-' * 13}-+-{'-' * 30}"
     print(header)
     print(sep)
 
@@ -276,7 +279,8 @@ def print_summary(results: list[BenchResult]) -> None:
         else:
             print(
                 f"{r.name:<23} | {r.session_time_s:>11.2f} | {r.warmup_time_s:>10.2f} "
-                f"| {r.texts_per_s:>20.1f} | {r.peak_rss_mb:>13.0f} | {r.active_providers}"
+                f"| {r.texts_per_s:>20.1f} | {r.peak_rss_mb:>13.0f}"
+                f" | {r.active_providers}"
             )
 
     # Batch timing details
@@ -300,7 +304,11 @@ def _print_gpu_info() -> None:
         import subprocess
 
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+            [  # noqa: S607
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,driver_version",
+                "--format=csv,noheader",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
