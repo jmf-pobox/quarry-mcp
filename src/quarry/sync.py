@@ -242,13 +242,7 @@ def _ingest_files(
                     commit=False,
                 )
                 ingested += 1
-                logger.info(
-                    "sync: [%s] ingested %s in %.2fs",
-                    collection,
-                    document_name,
-                    elapsed,
-                )
-                progress(f"[{collection}] Ingested {document_name}")
+                progress(f"[{collection}] Ingested {document_name} in {elapsed:.2f}s")
             except _RECOVERABLE as exc:
                 failed += 1
                 errors.append(f"{document_name}: {exc}")

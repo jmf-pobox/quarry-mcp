@@ -159,7 +159,7 @@ class OnnxEmbeddingBackend:
             )
             t_batch_elapsed = time.perf_counter() - t_batch_start
             parts.append(np.asarray(sentence_embedding, dtype=np.float32))
-            logger.info(
+            logger.debug(
                 "embedding: batch %d/%d (%d texts) in %.2fs",
                 i + 1,
                 n_batches,

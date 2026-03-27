@@ -1513,8 +1513,8 @@ class TestHandlePreCompact:
         # No chunk count in new format.
         assert "chunks" not in msg
 
-    def test_popen_failure_cleans_up_and_returns_empty(self, tmp_path: Path) -> None:
-        """Popen OSError cleans up temp file and returns empty dict."""
+    def test_popen_failure_cleans_up_and_returns_warning(self, tmp_path: Path) -> None:
+        """Popen OSError cleans up temp file and returns a warning systemMessage."""
         transcript = _make_transcript(tmp_path, "Will not be ingested")
 
         with (
