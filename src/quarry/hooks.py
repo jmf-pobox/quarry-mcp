@@ -668,11 +668,8 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         len(text),
     )
     return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreCompact",
-            "additionalContext": (
-                f"Session transcript captured in quarry ({result['chunks']} chunks). "
-                "Prior conversations are searchable via /find."
-            ),
-        },
+        "systemMessage": (
+            f"Session transcript captured in quarry ({result['chunks']} chunks). "
+            "Prior conversations are searchable via /find."
+        ),
     }
