@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pre-compact deduplication** — each compaction now deletes prior captures for the same session before ingesting the new transcript. Previously, repeated compactions accumulated redundant documents (session 64b2aacf had 14 copies). Dedup is fault-tolerant: failures log and proceed with ingestion.
+
 ### Changed
 
 - **Project-scoped captures** — web fetch auto-ingestion and pre-compact transcript capture now scope to the project's registered collection instead of global `web-captures` / `session-notes` buckets. Falls back to global collections when cwd has no registration.

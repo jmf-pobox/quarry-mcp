@@ -531,16 +531,32 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     # Heavy imports deferred past early-return guards.
     from datetime import UTC, datetime  # noqa: PLC0415
 
-    from quarry.database import get_db  # noqa: PLC0415
+    from quarry.database import delete_document, get_db, list_documents  # noqa: PLC0415
     from quarry.pipeline import ingest_content  # noqa: PLC0415
 
     collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
-    document_name = f"session-{session_id[:8]}-{timestamp}"
-
     settings = _resolve_settings()
     db = get_db(settings.lancedb_path)
+
+    # Deduplicate: remove prior captures for this session in this collection.
+    try:
+        prefix = f"session-{session_id[:8]}-"
+        existing = list_documents(db, collection_filter=collection)
+        prior = [doc for doc in existing if doc["document_name"].startswith(prefix)]
+        for doc in prior:
+            delete_document(db, doc["document_name"], collection=collection)
+        if prior:
+            logger.info(
+                "pre-compact: deleted %d prior capture(s) for session %s",
+                len(prior),
+                session_id[:8],
+            )
+    except Exception:
+        logger.exception("pre-compact: dedup failed, proceeding with ingest")
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    document_name = f"session-{session_id[:8]}-{timestamp}"
 
     result = ingest_content(
         text,
