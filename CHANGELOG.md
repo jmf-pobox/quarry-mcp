@@ -14,6 +14,10 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **infra**: PreCompact hook returned invalid `hookSpecificOutput` schema (hookEventName "PreCompact" not recognized by Claude Code); use top-level `systemMessage` instead
+
 ## [1.7.0] - 2026-03-26
 
 ### Fixed

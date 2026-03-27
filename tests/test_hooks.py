@@ -1203,7 +1203,10 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert "hookSpecificOutput" in result
+        assert "systemMessage" in result
+        msg = str(result["systemMessage"])
+        assert "captured in quarry" in msg
+        assert "searchable via /find" in msg
         mock_ingest.assert_called_once()
         call_args = mock_ingest.call_args
         assert "Build a feature" in call_args[0][0]  # content
@@ -1768,10 +1771,8 @@ class TestHandlePreCompact:
                 }
             )
 
-        assert "hookSpecificOutput" in result
-        output = result["hookSpecificOutput"]
-        assert isinstance(output, dict)
-        ctx = str(output["additionalContext"])
+        assert "systemMessage" in result
+        ctx = str(result["systemMessage"])
         assert "captured in quarry" in ctx
         assert "searchable via /find" in ctx
         assert "3 chunks" in ctx
