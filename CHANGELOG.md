@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-03-26
+
 ### Fixed
 
 - **Pre-compact deduplication** — each compaction now deletes prior captures for the same session before ingesting the new transcript. Previously, repeated compactions accumulated redundant documents (session 64b2aacf had 14 copies). Dedup is fault-tolerant: failures log and proceed with ingestion.
