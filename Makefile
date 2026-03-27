@@ -1,4 +1,4 @@
-.PHONY: help test lint type check format build clean depot docs docs-clean
+.PHONY: help test lint type check format build clean depot bench-cuda docs docs-clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -56,3 +56,8 @@ depot: build ## Build and copy wheel to local depot
 	@mkdir -p $(DEPOT)
 	@cp dist/*.whl $(DEPOT)/
 	@echo "depot: $$(ls dist/*.whl | xargs -n1 basename) -> $(DEPOT)/"
+
+bench-cuda: ## Benchmark embedding providers (requires NVIDIA GPU)
+	-uv pip uninstall onnxruntime
+	uv pip install onnxruntime-gpu
+	uv run python benchmarks/bench_embedding.py
