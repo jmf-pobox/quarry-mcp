@@ -213,43 +213,49 @@ def run_benchmark(
         f" (+{rss_after_session - rss_before:.0f} MB)"
     )
 
-    # --- Warmup ---
-    print("  Running warmup batch...", flush=True)
-    warmup_batch = chunks[:BATCH_SIZE]
-    t0 = time.perf_counter()
-    _run_inference(session, tokenizer, warmup_batch)
-    result.warmup_time_s = time.perf_counter() - t0
-    print(f"  Warmup: {result.warmup_time_s:.3f}s")
+    # --- Warmup + Throughput ---
+    try:
+        print("  Running warmup batch...", flush=True)
+        warmup_batch = chunks[:BATCH_SIZE]
+        t0 = time.perf_counter()
+        _run_inference(session, tokenizer, warmup_batch)
+        result.warmup_time_s = time.perf_counter() - t0
+        print(f"  Warmup: {result.warmup_time_s:.3f}s")
 
-    # --- Throughput ---
-    n_texts = len(chunks)
-    n_batches = (n_texts + BATCH_SIZE - 1) // BATCH_SIZE
-    print(f"  Embedding {n_texts} texts in {n_batches} batches...", flush=True)
+        # --- Throughput ---
+        n_texts = len(chunks)
+        n_batches = (n_texts + BATCH_SIZE - 1) // BATCH_SIZE
+        print(f"  Embedding {n_texts} texts in {n_batches} batches...", flush=True)
 
-    t_total_start = time.perf_counter()
-    for i in range(n_batches):
-        batch = chunks[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
-        t_batch = time.perf_counter()
-        _run_inference(session, tokenizer, batch)
-        elapsed = time.perf_counter() - t_batch
-        result.batch_times.append(elapsed)
-        if (i + 1) % 2 == 0 or i == n_batches - 1:
-            print(
-                f"    batch {i + 1}/{n_batches}: {elapsed:.3f}s ({len(batch)} texts)",
-                flush=True,
-            )
+        t_total_start = time.perf_counter()
+        for i in range(n_batches):
+            batch = chunks[i * BATCH_SIZE : (i + 1) * BATCH_SIZE]
+            t_batch = time.perf_counter()
+            _run_inference(session, tokenizer, batch)
+            elapsed = time.perf_counter() - t_batch
+            result.batch_times.append(elapsed)
+            if (i + 1) % 2 == 0 or i == n_batches - 1:
+                print(
+                    f"    batch {i + 1}/{n_batches}: {elapsed:.3f}s"
+                    f" ({len(batch)} texts)",
+                    flush=True,
+                )
 
-    result.total_time_s = time.perf_counter() - t_total_start
-    result.texts_per_s = (
-        n_texts / result.total_time_s if result.total_time_s > 0 else 0.0
-    )
-    result.max_rss_mb = _get_rss_mb()
+        result.total_time_s = time.perf_counter() - t_total_start
+        result.texts_per_s = (
+            n_texts / result.total_time_s if result.total_time_s > 0 else 0.0
+        )
+        result.max_rss_mb = _get_rss_mb()
 
-    print(f"  Total: {result.total_time_s:.2f}s, {result.texts_per_s:.1f} texts/s")
-    print(f"  Max RSS: {result.max_rss_mb:.0f} MB")
-
-    # Clean up session to free memory before next config
-    del session
+        print(f"  Total: {result.total_time_s:.2f}s, {result.texts_per_s:.1f} texts/s")
+        print(f"  Max RSS: {result.max_rss_mb:.0f} MB")
+    except Exception as exc:
+        result.error = f"Inference failed: {exc}"
+        print(f"  ERROR: {result.error}")
+        return result
+    finally:
+        # Clean up session to free memory before next config
+        del session
 
     return result
 
