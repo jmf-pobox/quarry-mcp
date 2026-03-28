@@ -3,6 +3,12 @@
 Design for DES-016 implementation. Adds runtime provider probing, model
 precision selection, and graceful fallback to `quarry`'s embedding layer.
 
+> **Note:** This document is the original design proposal. The review at
+> `provider-detection-review.md` identified structural changes (drop session
+> from ProviderSelection, support QUARRY_PROVIDER=cuda). The build plan at
+> `build-plan-quarry-b9m.md` is the authoritative implementation spec and
+> supersedes this document where they differ.
+
 ## 1. Provider Probe Algorithm
 
 The probe runs once per process, at `OnnxEmbeddingBackend.__init__` time

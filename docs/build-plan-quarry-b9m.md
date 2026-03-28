@@ -5,7 +5,7 @@ findings incorporated.
 
 ## Acceptance Criteria
 
-1. `select_provider()` returns `(provider: str, model_file: str)` -- no session.
+1. `select_provider()` returns a `ProviderSelection` dataclass -- no session.
 2. `OnnxEmbeddingBackend.__init__` owns session creation with explicit
    `ORT_ENABLE_ALL` session options.
 3. `QUARRY_PROVIDER` env var supports three values: `cpu`, `cuda`, unset.
@@ -41,9 +41,9 @@ def select_provider() -> ProviderSelection:
     """Detect the best ONNX Runtime execution provider.
 
     Reads QUARRY_PROVIDER env var. Probes ort.get_available_providers().
-    Validates CUDA by attempting a minimal session. Falls back to CPU.
+    Falls back to CPU when CUDA is unavailable.
 
-    Returns (provider_name, model_file) -- never raises for hardware issues.
+    Returns ProviderSelection -- never raises for hardware issues.
     Raises ValueError for unknown QUARRY_PROVIDER values.
     """
 ```
