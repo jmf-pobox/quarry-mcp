@@ -157,11 +157,13 @@ def _get_or_create_table(
     if TABLE_NAME in db.list_tables().tables:
         table = db.open_table(TABLE_NAME)
         _migrate_schema(table)
+        _ensure_fts_index(table)
         return table
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
             table = db.open_table(TABLE_NAME)
             _migrate_schema(table)
+            _ensure_fts_index(table)
             return table
         table = db.create_table(TABLE_NAME, data=records, schema=_schema())
         _ensure_fts_index(table)
@@ -257,9 +259,6 @@ def search(
 # RRF constant — controls how much top-ranked results dominate.
 _RRF_K = 60
 
-# Default temporal decay rate (per hour). exp(-0.01 * 24) ≈ 0.79 after 1 day.
-_DEFAULT_DECAY_RATE = 0.01
-
 
 def _build_predicates(
     document_filter: str | None,
@@ -342,16 +341,24 @@ def _fuse_rrf(
 
     for rank, row in enumerate(vec_results):
         key = _row_key(row)
-        ts = row.get("ingestion_timestamp", "")
-        weight = _temporal_weight(ts, now_ts, decay_rate)
+        agent_handle = str(row.get("agent_handle", ""))
+        if decay_rate > 0 and agent_handle:
+            ts = row.get("ingestion_timestamp", "")
+            weight = _temporal_weight(ts, now_ts, decay_rate)
+        else:
+            weight = 1.0
         scores[key] += (1.0 / (_RRF_K + rank)) * weight
         if key not in all_rows:
             all_rows[key] = row
 
     for rank, row in enumerate(fts_results):
         key = _row_key(row)
-        ts = row.get("ingestion_timestamp", "")
-        weight = _temporal_weight(ts, now_ts, decay_rate)
+        agent_handle = str(row.get("agent_handle", ""))
+        if decay_rate > 0 and agent_handle:
+            ts = row.get("ingestion_timestamp", "")
+            weight = _temporal_weight(ts, now_ts, decay_rate)
+        else:
+            weight = 1.0
         scores[key] += (1.0 / (_RRF_K + rank)) * weight
         if key not in all_rows:
             all_rows[key] = row
@@ -419,6 +426,7 @@ def hybrid_search(
         return []
 
     table = db.open_table(TABLE_NAME)
+    _migrate_schema(table)
     predicate = _build_predicates(
         document_filter,
         collection_filter,

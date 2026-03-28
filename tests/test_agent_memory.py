@@ -534,6 +534,8 @@ class TestTemporalDecay:
                 page_type="text",
                 source_format=".pdf",
                 ingestion_timestamp=old_ts,
+                agent_handle="rmh",
+                memory_type="episodic",
             ),
             Chunk(
                 document_name="test.pdf",
@@ -547,6 +549,8 @@ class TestTemporalDecay:
                 page_type="text",
                 source_format=".pdf",
                 ingestion_timestamp=now,
+                agent_handle="rmh",
+                memory_type="episodic",
             ),
         ]
         vectors = _random_vectors(2)
@@ -563,6 +567,60 @@ class TestTemporalDecay:
         assert len(results) == 2
         # Recent chunk (index 1) should outrank old chunk (index 0)
         assert int(str(results[0]["chunk_index"])) == 1
+
+    def test_decay_exempts_empty_agent_handle(self, tmp_path: Path) -> None:
+        """Rows with empty agent_handle get weight=1.0 regardless of decay_rate."""
+        db = get_db(tmp_path / "db")
+        now = datetime.now(tz=UTC)
+        old_ts = now - timedelta(days=30)
+
+        # Two chunks with empty agent_handle — decay should NOT apply
+        chunks = [
+            Chunk(
+                document_name="doc.txt",
+                document_path=".tmp/doc.txt",
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=0,
+                text="unscoped old content",
+                page_raw_text="unscoped old content",
+                page_type="text",
+                source_format=".txt",
+                ingestion_timestamp=old_ts,
+                agent_handle="",
+                memory_type="",
+            ),
+            Chunk(
+                document_name="doc.txt",
+                document_path=".tmp/doc.txt",
+                collection="default",
+                page_number=1,
+                total_pages=1,
+                chunk_index=1,
+                text="unscoped new content",
+                page_raw_text="unscoped new content",
+                page_type="text",
+                source_format=".txt",
+                ingestion_timestamp=now,
+                agent_handle="",
+                memory_type="",
+            ),
+        ]
+        vectors = _random_vectors(2)
+        insert_chunks(db, chunks, vectors)
+
+        results = hybrid_search(
+            db,
+            "unscoped content",
+            vectors[0],
+            limit=2,
+            decay_rate=0.05,
+        )
+        assert len(results) == 2
+        # With no decay applied, vector similarity determines order:
+        # vectors[0] is the query, so chunk_index=0 should rank first
+        assert int(str(results[0]["chunk_index"])) == 0
 
 
 # ── Ethos identity tagging tests ──────────────────────────────────
