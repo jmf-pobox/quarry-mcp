@@ -110,6 +110,7 @@ The COO does not write code. All code changes — initial implementation, review
 |-----------|-------|--------|
 | Raymond H | `rmh` | Python implementation |
 | Brian K | `bwk` | Go implementation |
+| Andrej K | `kpz` | ML inference, hardware abstraction, ONNX |
 | Dan B | `djb` | Security review |
 | Doug M | `mdm` | CLI design |
 

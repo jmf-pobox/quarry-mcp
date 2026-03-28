@@ -245,3 +245,43 @@ Adopted punt-kit/standards/filesystem.md. User data moves from `~/.quarry/` to `
 ### Why This Design
 
 One namespace, one root. All Punt Labs tools under `~/.punt-labs/<tool>/`. Per-repo config owned by quarry, not by Claude Code's `.claude/` directory. No automatic migration per the standard — clean break with manual `mv` command documented.
+
+---
+
+## DES-016: Execution Provider Strategy for Embedding
+
+**Date:** 2026-03-27
+**Status:** SETTLED
+**Topic:** Which ONNX execution provider and model precision to use per platform
+
+### Design
+
+Two deployment profiles:
+
+| Profile | Model | Provider | Throughput | Use case |
+|---------|-------|----------|-----------|----------|
+| **Local (CPU)** | int8 (~120 MB) | CPUExecutionProvider | 9.4 texts/s (M2 Air), 134 texts/s (AMD) | Laptops, default install |
+| **Server (GPU)** | FP16 (~218 MB) | CUDAExecutionProvider | 3,042 texts/s (RTX 5080) | Central quarry, bulk ingestion |
+
+The model is selected based on available hardware. The embedding dimension (768) is identical across all precisions — vectors are interchangeable. No re-ingestion required when switching provider profiles.
+
+### Why This Design
+
+Benchmarked 5 configurations on two machines (M2 Air, AMD + RTX 5080):
+
+| Config | M2 Air | RTX 5080 | Notes |
+|--------|--------|----------|-------|
+| int8 + CPU | 9.4 texts/s | 134 texts/s | Production default |
+| int8 + CUDA | — | 158 texts/s | 168 memcpy nodes, barely faster than CPU |
+| FP32 + CUDA | — | 1,639 texts/s | Full precision, no warnings |
+| FP16 + CUDA | — | 3,042 texts/s | Half precision, fastest, 9ms/batch |
+| FP32 + CPU | — | 79 texts/s | Slower than int8, larger model |
+| FP32 + CoreML | 0.8 texts/s | — | 99 graph partitions, 8.9 GB RAM, 12x slower |
+| FP16 + CoreML | — | — | Not tested (CoreML dead end) |
+
+### Alternatives Considered
+
+1. **CoreML EP on Apple Silicon** — Rejected. The Neural Engine cannot efficiently run this transformer architecture. 463 of 636 nodes supported, requiring 99 partitions. Result: 0.8 texts/s (12x slower than CPU), 8.9 GB RAM.
+2. **int8 on CUDA** — Rejected for GPU deployment. The int8 quantized operators require 168 CPU↔GPU memory copies per inference, negating GPU acceleration. Only 18% faster than CPU despite having the GPU.
+3. **FP32 on CUDA** — Valid but suboptimal. FP16 is 1.9x faster with identical embedding quality for retrieval.
+4. **AWS SageMaker** — Previously rejected (DES-004 era). Network round-trip dominated; local CPU was faster.
