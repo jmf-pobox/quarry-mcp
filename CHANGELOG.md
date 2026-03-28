@@ -16,6 +16,8 @@ across `transform`, `index`, and `connector`).
 
 ## [1.8.0] - 2026-03-28
 
+## [1.8.0] - 2026-03-28
+
 ### Changed
 
 - **index**: PreCompact hook spawns ingestion as a background process instead of
