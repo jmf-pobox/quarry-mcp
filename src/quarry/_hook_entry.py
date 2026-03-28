@@ -72,22 +72,29 @@ def _ingest_background() -> None:
         collection: The target collection name.
         lancedb_path: Path to the LanceDB database.
         session_prefix: First 8 chars of session ID (for dedup).
+        agent_handle: Agent handle from ethos sidecar (optional, may be empty).
     """
     import logging  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
 
     logger = logging.getLogger(__name__)
 
-    expected_arg_count = 5
+    min_arg_count = 5
+    max_arg_count = 6
     args = sys.argv[2:]
-    if len(args) != expected_arg_count:
+    if not (min_arg_count <= len(args) <= max_arg_count):
         sys.exit(
             "Usage: quarry-hook ingest-background"
             " <text_file> <doc_name> <collection>"
-            " <lancedb_path> <session_prefix>"
+            " <lancedb_path> <session_prefix> [agent_handle]"
         )
 
-    text_file_path, document_name, collection, lancedb_path, session_prefix = args
+    text_file_path = args[0]
+    document_name = args[1]
+    collection = args[2]
+    lancedb_path = args[3]
+    session_prefix = args[4]
+    agent_handle = args[5] if len(args) > 5 else ""
     text_file = Path(text_file_path)
 
     # Detached subprocess: configure its own logging per the standard.
@@ -143,6 +150,7 @@ def _ingest_background() -> None:
                 settings,
                 collection=collection,
                 format_hint="markdown",
+                agent_handle=agent_handle,
             )
             logger.info(
                 "ingest-background: captured %s (%d chunks, %d chars)",

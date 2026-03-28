@@ -134,7 +134,7 @@ sh install.sh
 quarry ingest report.pdf                       # index a file
 quarry ingest https://example.com              # index a webpage
 echo "notes" | quarry remember --name notes.md # index inline text
-quarry find "revenue trends"                   # semantic search
+quarry find "revenue trends"                   # hybrid search (vector + FTS)
 quarry list documents                          # list indexed documents
 quarry register ~/Documents/notes              # watch a directory
 quarry sync                                    # re-index registered dirs
@@ -142,6 +142,12 @@ quarry use work                                # switch database
 quarry status                                  # database dashboard
 quarry doctor                                  # health check
 quarry serve                                   # start daemon on :8420
+
+# Agent memory tagging
+quarry ingest notes.md --agent-handle claude --memory-type fact
+quarry find "deployment steps" --agent-handle claude
+echo "key insight" | quarry remember --name insight.md --agent-handle claude \
+  --memory-type observation --summary "Key insight from review"
 ```
 
 ## Setup

@@ -217,7 +217,7 @@ class TestFind:
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
             ),
-            patch("quarry.mcp_server.search", return_value=mock_results),
+            patch("quarry.mcp_server.hybrid_search", return_value=mock_results),
         ):
             result = find("revenue growth")
 
@@ -238,7 +238,7 @@ class TestFind:
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
             ),
-            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+            patch("quarry.mcp_server.hybrid_search", return_value=[]) as mock_search,
         ):
             find("test", limit=100)
 
@@ -263,7 +263,7 @@ class TestFind:
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
             ),
-            patch("quarry.mcp_server.search", return_value=[]) as mock_search,
+            patch("quarry.mcp_server.hybrid_search", return_value=[]) as mock_search,
         ):
             find("test", **{tool_kwarg: tool_value})
 
@@ -354,7 +354,7 @@ class TestFind:
                 "quarry.mcp_server.get_embedding_backend",
                 return_value=_mock_embedding_backend(mock_vector),
             ),
-            patch("quarry.mcp_server.search", return_value=mock_results),
+            patch("quarry.mcp_server.hybrid_search", return_value=mock_results),
         ):
             result = find("test")
 

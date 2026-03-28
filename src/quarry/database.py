@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
+from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -54,8 +56,56 @@ def _schema(embedding_dimension: int = 768) -> pa.Schema:
             pa.field("page_type", pa.utf8()),
             pa.field("source_format", pa.utf8()),
             pa.field("ingestion_timestamp", pa.timestamp("us", tz="UTC")),
+            pa.field("agent_handle", pa.utf8()),
+            pa.field("memory_type", pa.utf8()),
+            pa.field("summary", pa.utf8()),
         ]
     )
+
+
+# Columns added by schema migration, with their SQL default expressions.
+_MIGRATION_COLUMNS: dict[str, str] = {
+    "agent_handle": "''",
+    "memory_type": "''",
+    "summary": "''",
+}
+
+
+def _migrate_schema(table: LanceTable) -> None:
+    """Add missing columns to an existing table.
+
+    Idempotent — checks the table schema before adding each column.
+    Called on every table open so pre-existing databases gain new columns
+    transparently.
+    """
+    existing = {field.name for field in table.schema}
+    missing = {
+        col: expr for col, expr in _MIGRATION_COLUMNS.items() if col not in existing
+    }
+    if missing:
+        table.add_columns(missing)
+        logger.info("Migrated schema: added columns %s", sorted(missing))
+
+
+def _ensure_fts_index(table: LanceTable) -> None:
+    """Create a Tantivy full-text search index on the text column.
+
+    Uses replace=True so it is safe to call repeatedly.
+    """
+    table.create_fts_index("text", replace=True)
+    logger.info("Ensured FTS index on text column")
+
+
+def ensure_schema(db: LanceDB) -> None:
+    """Run schema migration and FTS index creation on an existing table.
+
+    Safe to call at application startup. No-op if the table does not exist.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return
+    table = db.open_table(TABLE_NAME)
+    _migrate_schema(table)
+    _ensure_fts_index(table)
 
 
 def get_db(db_path: Path) -> LanceDB:
@@ -78,13 +128,22 @@ def _get_or_create_table(
     Uses double-checked locking: check outside lock for the common case
     (table exists); only acquire lock when table missing. Prevents races
     when multiple sync workers try to create the table simultaneously.
+
+    Runs schema migration and FTS index creation on every open.
     """
     if TABLE_NAME in db.list_tables().tables:
-        return db.open_table(TABLE_NAME)
+        table = db.open_table(TABLE_NAME)
+        _migrate_schema(table)
+        _ensure_fts_index(table)
+        return table
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
-            return db.open_table(TABLE_NAME)
-        db.create_table(TABLE_NAME, data=records, schema=_schema())
+            table = db.open_table(TABLE_NAME)
+            _migrate_schema(table)
+            _ensure_fts_index(table)
+            return table
+        table = db.create_table(TABLE_NAME, data=records, schema=_schema())
+        _ensure_fts_index(table)
         return None
 
 
@@ -172,6 +231,189 @@ def search(
     results = query.to_list()
     logger.debug("Search: %d results returned", len(results))
     return cast("list[SearchResult]", results)
+
+
+# RRF constant — controls how much top-ranked results dominate.
+_RRF_K = 60
+
+# Default temporal decay rate (per hour). exp(-0.01 * 24) ≈ 0.79 after 1 day.
+_DEFAULT_DECAY_RATE = 0.01
+
+
+def _build_predicates(
+    document_filter: str | None,
+    collection_filter: str | None,
+    page_type_filter: str | None,
+    source_format_filter: str | None,
+    agent_handle_filter: str | None,
+    memory_type_filter: str | None,
+) -> str | None:
+    """Build a SQL WHERE clause from optional filters."""
+    parts: list[str] = []
+    if document_filter:
+        parts.append(f"document_name = '{_escape_sql(document_filter)}'")
+    if collection_filter:
+        parts.append(f"collection = '{_escape_sql(collection_filter)}'")
+    if page_type_filter:
+        parts.append(f"page_type = '{_escape_sql(page_type_filter)}'")
+    if source_format_filter:
+        parts.append(f"source_format = '{_escape_sql(source_format_filter)}'")
+    if agent_handle_filter:
+        parts.append(f"agent_handle = '{_escape_sql(agent_handle_filter)}'")
+    if memory_type_filter:
+        parts.append(f"memory_type = '{_escape_sql(memory_type_filter)}'")
+    return " AND ".join(parts) if parts else None
+
+
+def _temporal_weight(
+    timestamp: object,
+    now_ts: float,
+    decay_rate: float,
+) -> float:
+    """Compute exponential temporal decay weight for a row.
+
+    Returns 1.0 when decay_rate is 0 (no decay).
+    """
+    if decay_rate <= 0:
+        return 1.0
+    from datetime import datetime  # noqa: PLC0415
+
+    if isinstance(timestamp, datetime):
+        row_ts = timestamp.timestamp()
+    else:
+        row_ts = datetime.fromisoformat(str(timestamp)).timestamp()
+    hours = max(0.0, (now_ts - row_ts) / 3600)
+    return math.exp(-decay_rate * hours)
+
+
+_RowKey = tuple[str, int, int]
+
+
+def _row_key(row: dict[str, object]) -> _RowKey:
+    """Deduplication key for a chunk row."""
+    return (
+        str(row["document_name"]),
+        int(str(row["chunk_index"])),
+        int(str(row["page_number"])),
+    )
+
+
+def _fuse_rrf(
+    vec_results: list[dict[str, object]],
+    fts_results: list[dict[str, object]],
+    limit: int,
+    decay_rate: float,
+) -> list[SearchResult]:
+    """Fuse vector and FTS results using Reciprocal Rank Fusion."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    now_ts = datetime.now(tz=UTC).timestamp()
+    all_rows: dict[_RowKey, dict[str, object]] = {}
+    scores: defaultdict[_RowKey, float] = defaultdict(float)
+
+    for rank, row in enumerate(vec_results):
+        key = _row_key(row)
+        ts = row.get("ingestion_timestamp", "")
+        weight = _temporal_weight(ts, now_ts, decay_rate)
+        scores[key] += (1.0 / (_RRF_K + rank)) * weight
+        if key not in all_rows:
+            all_rows[key] = row
+
+    for rank, row in enumerate(fts_results):
+        key = _row_key(row)
+        ts = row.get("ingestion_timestamp", "")
+        weight = _temporal_weight(ts, now_ts, decay_rate)
+        scores[key] += (1.0 / (_RRF_K + rank)) * weight
+        if key not in all_rows:
+            all_rows[key] = row
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+    results: list[SearchResult] = []
+    for key, score in ranked:
+        row = all_rows[key]
+        row["_distance"] = 1.0 - score
+        results.append(cast("SearchResult", row))
+
+    logger.debug(
+        "RRF fusion: %d vector + %d FTS → %d results",
+        len(vec_results),
+        len(fts_results),
+        len(results),
+    )
+    return results
+
+
+def hybrid_search(
+    db: LanceDB,
+    query_text: str,
+    query_vector: NDArray[np.float32],
+    limit: int = 10,
+    document_filter: str | None = None,
+    collection_filter: str | None = None,
+    page_type_filter: str | None = None,
+    source_format_filter: str | None = None,
+    agent_handle_filter: str | None = None,
+    memory_type_filter: str | None = None,
+    decay_rate: float = 0.0,
+) -> list[SearchResult]:
+    """Multi-channel search: vector similarity + BM25 FTS, fused with RRF.
+
+    Runs two channels in parallel:
+      1. Vector similarity (semantic)
+      2. Full-text search via Tantivy (keyword/BM25)
+
+    Results are combined using Reciprocal Rank Fusion (RRF) with optional
+    exponential temporal decay weighting.
+
+    Args:
+        db: LanceDB connection.
+        query_text: Raw query string (used for FTS channel).
+        query_vector: Query embedding vector (used for vector channel).
+        limit: Maximum results to return.
+        document_filter: Optional document name filter.
+        collection_filter: Optional collection filter.
+        page_type_filter: Optional content type filter.
+        source_format_filter: Optional source format filter.
+        agent_handle_filter: Optional agent handle filter.
+        memory_type_filter: Optional memory type filter.
+        decay_rate: Temporal decay rate per hour. 0 disables decay.
+
+    Returns:
+        List of SearchResult dicts, ranked by fused RRF score.
+    """
+    if TABLE_NAME not in db.list_tables().tables:
+        return []
+
+    table = db.open_table(TABLE_NAME)
+    predicate = _build_predicates(
+        document_filter,
+        collection_filter,
+        page_type_filter,
+        source_format_filter,
+        agent_handle_filter,
+        memory_type_filter,
+    )
+    fetch_limit = limit * 3  # over-fetch for better fusion
+
+    # Channel 1: Vector similarity
+    vec_query = table.search(query_vector.tolist()).limit(fetch_limit)
+    if predicate:
+        vec_query = vec_query.where(predicate)
+    vec_results = vec_query.to_list()
+
+    # Channel 2: Full-text search (BM25)
+    fts_results: list[dict[str, object]] = []
+    try:
+        fts_query = table.search(query_text, query_type="fts").limit(fetch_limit)
+        if predicate:
+            fts_query = fts_query.where(predicate)
+        fts_results = fts_query.to_list()
+    except (OSError, ValueError, RuntimeError):
+        # FTS index may not exist on legacy tables; fall back to vector-only
+        logger.debug("FTS search failed, using vector-only results")
+
+    return _fuse_rrf(vec_results, fts_results, limit, decay_rate)
 
 
 def get_page_text(

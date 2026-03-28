@@ -437,6 +437,39 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     return {}
 
 
+def _read_ethos_agent_handle(cwd: str) -> str:
+    """Read the agent handle from the ethos sidecar config.
+
+    Looks for ``.punt-labs/ethos/config.yaml`` relative to *cwd* and
+    walks up to the filesystem root.  Returns the ``agent`` field value
+    (which is the agent handle), or empty string if not found.
+    """
+    import yaml as _yaml  # noqa: PLC0415
+
+    current = Path(cwd).resolve()
+    while True:
+        config_path = current / ".punt-labs" / "ethos" / "config.yaml"
+        if config_path.is_file():
+            try:
+                data = _yaml.safe_load(config_path.read_text())
+            except (OSError, _yaml.YAMLError):
+                logger.debug(
+                    "pre-compact: could not parse ethos config %s",
+                    config_path,
+                )
+                return ""
+            if isinstance(data, dict):
+                agent = data.get("agent", "")
+                if isinstance(agent, str) and agent:
+                    return agent
+            return ""
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return ""
+
+
 _MAX_TRANSCRIPT_CHARS = 500_000
 
 
@@ -592,6 +625,7 @@ def _spawn_background_ingest(
     collection: str,
     lancedb_path: Path,
     session_prefix: str,
+    agent_handle: str = "",
 ) -> bool:
     """Write text to a temp file and spawn detached ingestion process.
 
@@ -621,6 +655,7 @@ def _spawn_background_ingest(
                 collection,
                 str(lancedb_path),
                 session_prefix,
+                agent_handle,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -680,6 +715,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
 
     collection = _collection_for_cwd(cwd) or _SESSION_NOTES_FALLBACK
     settings = _resolve_settings()
+    agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     document_name = f"session-{session_id[:8]}-{timestamp}"
@@ -694,6 +730,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         collection,
         settings.lancedb_path,
         session_id[:8],
+        agent_handle=agent_handle,
     ):
         return {
             "systemMessage": (

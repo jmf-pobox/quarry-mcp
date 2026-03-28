@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import numpy as np
+    import pyarrow as pa
     from numpy.typing import NDArray
 
     from quarry.models import PageContent
@@ -24,7 +25,8 @@ class LanceTable(Protocol):
     def add(self, data: list[dict[str, object]]) -> None: ...
     def search(
         self,
-        query: list[float] | None = ...,
+        query: list[float] | str | None = ...,
+        query_type: str | None = ...,
     ) -> LanceQuery: ...
     def count_rows(self, predicate: str | None = ...) -> int: ...
     def delete(self, predicate: str) -> None: ...
@@ -35,7 +37,19 @@ class LanceTable(Protocol):
         index_type: str = ...,
         replace: bool = ...,
     ) -> None: ...
+    def create_fts_index(
+        self,
+        column: str,
+        *,
+        replace: bool = ...,
+    ) -> None: ...
+    def add_columns(
+        self,
+        transforms: dict[str, str],
+    ) -> None: ...
     def optimize(self) -> object: ...
+    @property
+    def schema(self) -> pa.Schema: ...
 
 
 class LanceQuery(Protocol):

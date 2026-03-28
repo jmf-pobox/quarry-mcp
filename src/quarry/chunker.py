@@ -16,6 +16,9 @@ def chunk_pages(
     overlap_chars: int = 200,
     collection: str = "default",
     source_format: str = "",
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> list[Chunk]:
     """Split page contents into overlapping chunks for embedding.
 
@@ -29,6 +32,9 @@ def chunk_pages(
         collection: Collection name for the chunks.
         source_format: File extension (e.g. ``".pdf"``) or ``"inline"``
             for programmatically supplied text.
+        agent_handle: Agent that owns this memory (empty for non-agent content).
+        memory_type: Memory classification (fact, observation, opinion, procedure).
+        summary: One-line summary of the chunk content.
 
     Returns:
         List of Chunk objects ready for embedding.
@@ -57,6 +63,9 @@ def chunk_pages(
                     page_type=stored_page_type(page.page_type),
                     source_format=source_format,
                     ingestion_timestamp=now,
+                    agent_handle=agent_handle,
+                    memory_type=memory_type,
+                    summary=summary,
                 )
             )
 
