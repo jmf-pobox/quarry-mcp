@@ -69,3 +69,6 @@ class Chunk:
     page_type: str
     source_format: str
     ingestion_timestamp: datetime
+    agent_handle: str = ""
+    memory_type: str = ""
+    summary: str = ""

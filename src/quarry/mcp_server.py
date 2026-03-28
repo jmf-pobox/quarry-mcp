@@ -20,9 +20,9 @@ from quarry.database import (
     discover_databases,
     get_db,
     get_page_text,
+    hybrid_search,
     list_collections as db_list_collections,
     list_documents,
-    search,
 )
 from quarry.formatting import (
     format_collections,
@@ -120,8 +120,13 @@ def find(
     collection: str = "",
     page_type: str = "",
     source_format: str = "",
+    agent_handle: str = "",
+    memory_type: str = "",
 ) -> str:
-    """Search indexed documents using semantic similarity.
+    """Search indexed documents using hybrid semantic + keyword search.
+
+    Combines vector similarity and BM25 full-text search via Reciprocal
+    Rank Fusion (RRF) for better recall on both meaning and exact terms.
 
     Args:
         query: Natural language search query.
@@ -130,6 +135,8 @@ def find(
         collection: Optional collection name to search within.
         page_type: Optional content type filter (text, code, spreadsheet, etc.).
         source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
+        agent_handle: Optional agent handle to filter by (e.g. "rmh").
+        memory_type: Optional memory type filter (fact, observation, etc.).
     """
     limit = min(limit, 50)
     settings = _settings()
@@ -137,14 +144,17 @@ def find(
 
     query_vector = get_embedding_backend(settings).embed_query(query)
 
-    results = search(
+    results = hybrid_search(
         db,
+        query,
         query_vector,
         limit=limit,
         document_filter=document_filter or None,
         collection_filter=collection or None,
         page_type_filter=page_type or None,
         source_format_filter=source_format or None,
+        agent_handle_filter=agent_handle or None,
+        memory_type_filter=memory_type or None,
     )
 
     formatted = [
@@ -214,6 +224,9 @@ def _do_remember(
     overwrite: bool,
     collection: str,
     format_hint: str,
+    agent_handle: str,
+    memory_type: str,
+    summary: str,
     settings: Settings,
     db: LanceDB,
 ) -> None:
@@ -226,6 +239,9 @@ def _do_remember(
         overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -237,6 +253,9 @@ def remember(
     overwrite: bool = False,
     collection: str = "default",
     format_hint: str = "auto",
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> str:
     """Remember inline text content: chunk, embed, and index for search.
 
@@ -251,6 +270,9 @@ def remember(
         overwrite: If true, replace existing data for this document.
         collection: Collection name (default: 'default').
         format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
+        agent_handle: Agent that owns this memory (e.g. "rmh").
+        memory_type: Memory classification: fact, observation, opinion, procedure.
+        summary: One-line summary of the content.
     """
     settings = _settings()
     db = _db()
@@ -261,6 +283,9 @@ def remember(
         overwrite,
         collection,
         format_hint,
+        agent_handle,
+        memory_type,
+        summary,
         settings,
         db,
     )

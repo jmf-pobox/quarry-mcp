@@ -31,9 +31,9 @@ from quarry.database import (
     discover_databases,
     get_db,
     get_page_text,
+    hybrid_search,
     list_collections as db_list_collections,
     list_documents,
-    search,
 )
 from quarry.formatting import format_document_detail, format_status
 from quarry.logging_config import configure_logging
@@ -174,6 +174,21 @@ def ingest_cmd(
     collection: Annotated[
         str, typer.Option("--collection", "-c", help="Collection name")
     ] = "",
+    agent_handle: Annotated[
+        str,
+        typer.Option("--agent-handle", help="Agent handle to tag content"),
+    ] = "",
+    memory_type: Annotated[
+        str,
+        typer.Option(
+            "--memory-type",
+            help="Memory type: fact, observation, opinion, procedure",
+        ),
+    ] = "",
+    summary: Annotated[
+        str,
+        typer.Option("--summary", help="One-line summary of the content"),
+    ] = "",
 ) -> None:
     """Ingest a file or URL into the knowledge base.
 
@@ -196,6 +211,9 @@ def ingest_cmd(
                 overwrite=overwrite,
                 collection=collection,
                 progress_callback=cb,
+                agent_handle=agent_handle,
+                memory_type=memory_type,
+                summary=summary,
             )
 
         _emit(result, json.dumps(result, indent=2))
@@ -221,6 +239,9 @@ def ingest_cmd(
                 overwrite=overwrite,
                 collection=col,
                 progress_callback=cb,
+                agent_handle=agent_handle,
+                memory_type=memory_type,
+                summary=summary,
             )
 
         _emit(result, json.dumps(result, indent=2))
@@ -247,6 +268,21 @@ def remember(
             help="Replace existing document with same name",
         ),
     ] = True,
+    agent_handle: Annotated[
+        str,
+        typer.Option("--agent-handle", help="Agent handle to tag content"),
+    ] = "",
+    memory_type: Annotated[
+        str,
+        typer.Option(
+            "--memory-type",
+            help="Memory type: fact, observation, opinion, procedure",
+        ),
+    ] = "",
+    summary: Annotated[
+        str,
+        typer.Option("--summary", help="One-line summary of the content"),
+    ] = "",
 ) -> None:
     """Ingest inline content from stdin.
 
@@ -278,6 +314,9 @@ def remember(
         overwrite=overwrite,
         collection=collection,
         format_hint=format_hint,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
     _emit(result, json.dumps(result, indent=2))
@@ -304,20 +343,31 @@ def find_cmd(
             "--source-format", help="Filter by source format (.pdf, .py, etc.)"
         ),
     ] = "",
+    agent_handle: Annotated[
+        str,
+        typer.Option("--agent-handle", help="Filter by agent handle"),
+    ] = "",
+    memory_type: Annotated[
+        str,
+        typer.Option("--memory-type", help="Filter by memory type"),
+    ] = "",
 ) -> None:
     """Search indexed documents."""
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
     query_vector = get_embedding_backend(settings).embed_query(query)
-    results = search(
+    results = hybrid_search(
         db,
+        query,
         query_vector,
         limit=limit,
         document_filter=document or None,
         collection_filter=collection or None,
         page_type_filter=page_type or None,
         source_format_filter=source_format or None,
+        agent_handle_filter=agent_handle or None,
+        memory_type_filter=memory_type or None,
     )
 
     json_results = []
@@ -340,6 +390,9 @@ def find_cmd(
                 "similarity": similarity,
                 "text": text,
                 "collection": r.get("collection", ""),
+                "agent_handle": r.get("agent_handle", ""),
+                "memory_type": r.get("memory_type", ""),
+                "summary": r.get("summary", ""),
             }
         )
 

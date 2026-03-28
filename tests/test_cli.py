@@ -380,7 +380,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=mock_results),
+            patch("quarry.__main__.hybrid_search", return_value=mock_results),
         ):
             result = runner.invoke(app, ["find", "revenue growth"])
 
@@ -401,7 +401,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]),
+            patch("quarry.__main__.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["find", "nonexistent topic"])
 
@@ -425,7 +425,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]) as mock_search,
+            patch("quarry.__main__.hybrid_search", return_value=[]) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", cli_flag, cli_value])
 
@@ -467,7 +467,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]) as mock_search,
+            patch("quarry.__main__.hybrid_search", return_value=[]) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -488,7 +488,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]) as mock_search,
+            patch("quarry.__main__.hybrid_search", return_value=[]) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query", "--limit", "5"])
 
@@ -514,7 +514,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]) as mock_search,
+            patch("quarry.__main__.hybrid_search", return_value=[]) as mock_search,
         ):
             result = runner.invoke(app, ["find", "query"])
 
@@ -541,7 +541,7 @@ class TestFindCmd:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=mock_results),
+            patch("quarry.__main__.hybrid_search", return_value=mock_results),
         ):
             result = runner.invoke(app, ["find", "hello"])
 
@@ -973,7 +973,7 @@ class TestDbOption:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]),
+            patch("quarry.__main__.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["--db", "work", "find", "query"])
         assert result.exit_code == 0
@@ -1495,7 +1495,7 @@ class TestJsonOutput:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=mock_results),
+            patch("quarry.__main__.hybrid_search", return_value=mock_results),
         ):
             result = runner.invoke(app, ["--json", "find", "revenue"])
 
@@ -1519,7 +1519,7 @@ class TestJsonOutput:
                 "quarry.__main__.get_embedding_backend",
                 return_value=mock_backend,
             ),
-            patch("quarry.__main__.search", return_value=[]),
+            patch("quarry.__main__.hybrid_search", return_value=[]),
         ):
             result = runner.invoke(app, ["--json", "find", "query"])
 

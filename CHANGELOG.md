@@ -21,9 +21,24 @@ across `transform`, `index`, and `connector`).
 - **tool**: PreCompact systemMessage now includes collection name and document
   handle for actionable retrieval via `/find`, replacing the uninformative chunk
   count.
+- **query**: `find` CLI and MCP tool now use hybrid search (vector + BM25 FTS
+  with Reciprocal Rank Fusion) instead of vector-only search.
 
 ### Added
 
+- **infra**: Schema migration adds `agent_handle`, `memory_type`, and `summary`
+  columns to LanceDB chunks table. Existing databases are migrated automatically.
+- **infra**: Tantivy full-text search (BM25) index on the `text` column, created
+  or replaced on every table open.
+- **query**: Hybrid search with RRF fusion across vector and FTS channels.
+  Optional temporal decay via `decay_rate` parameter (default 0.0 = disabled).
+- **tool**: `--agent-handle`, `--memory-type`, and `--summary` options on
+  `quarry ingest`, `quarry remember`, and `quarry find` CLI commands.
+- **tool**: `agent_handle` and `memory_type` filter parameters on MCP `find` tool.
+- **tool**: `agent_handle`, `memory_type`, and `summary` parameters on MCP
+  `remember` tool.
+- **index**: PreCompact hook reads ethos sidecar config to tag ingested content
+  with the current agent's handle.
 - **infra**: Per-phase timing instrumentation across sync, embedding, and
   pipeline. Logs wall-clock time for: plan computation, per-file ingestion,
   per-batch embedding (including tokenization), LanceDB writes, deletes,

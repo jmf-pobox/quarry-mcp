@@ -68,6 +68,9 @@ def ingest_document(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a document: dispatch to format-specific handler.
 
@@ -100,6 +103,13 @@ def ingest_document(
 
     suffix = file_path.suffix.lower()
 
+    # Common kwargs for agent memory tagging, forwarded to all handlers.
+    memory_kw = {
+        "agent_handle": agent_handle,
+        "memory_type": memory_type,
+        "summary": summary,
+    }
+
     if suffix == ".pdf":
         return ingest_pdf(
             file_path,
@@ -109,6 +119,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_CODE_EXTENSIONS:
@@ -120,6 +131,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_TEXT_EXTENSIONS:
@@ -131,6 +143,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
@@ -142,6 +155,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_SPREADSHEET_EXTENSIONS:
@@ -153,6 +167,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_HTML_EXTENSIONS:
@@ -164,6 +179,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     if suffix in SUPPORTED_PRESENTATION_EXTENSIONS:
@@ -175,6 +191,7 @@ def ingest_document(
             collection=collection,
             document_name=document_name,
             progress_callback=progress_callback,
+            **memory_kw,
         )
 
     msg = f"Unsupported file format: {suffix}"
@@ -190,6 +207,9 @@ def ingest_pdf(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a PDF document: analyze, extract/OCR, chunk, embed, store.
 
@@ -256,6 +276,9 @@ def ingest_pdf(
         total_pages=total_pages,
         text_pages=len(text_pages),
         image_pages=len(image_pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -268,6 +291,9 @@ def ingest_text_file(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a text document: read, split into sections, chunk, embed, store.
 
@@ -305,6 +331,9 @@ def ingest_text_file(
         collection=collection,
         source_format=file_path.suffix.lower(),
         sections=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -317,6 +346,9 @@ def ingest_code_file(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest source code: parse into definitions, chunk, embed, store.
 
@@ -354,6 +386,9 @@ def ingest_code_file(
         collection=collection,
         source_format=file_path.suffix.lower(),
         definitions=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -366,6 +401,9 @@ def ingest_spreadsheet(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a spreadsheet: read sheets, serialize to LaTeX, chunk, embed, store.
 
@@ -407,6 +445,9 @@ def ingest_spreadsheet(
         collection=collection,
         source_format=file_path.suffix.lower(),
         sheets=sheet_count,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -419,6 +460,9 @@ def ingest_html_file(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest an HTML document: parse, clean, convert to Markdown, chunk, embed, store.
 
@@ -456,6 +500,9 @@ def ingest_html_file(
         collection=collection,
         source_format=file_path.suffix.lower(),
         sections=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -468,6 +515,9 @@ def ingest_presentation(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a presentation: extract slides, chunk, embed, store.
 
@@ -505,6 +555,9 @@ def ingest_presentation(
         collection=collection,
         source_format=file_path.suffix.lower(),
         slides=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -517,6 +570,9 @@ def ingest_image(
     collection: str = "default",
     document_name: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a standalone image: OCR, chunk, embed, store.
 
@@ -563,6 +619,9 @@ def ingest_image(
             progress,
             document_name=document_name,
             collection=collection,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
 
     image_bytes = _prepare_image_bytes(
@@ -586,6 +645,9 @@ def ingest_image(
         source_format=file_path.suffix.lower(),
         file_format=analysis.format,
         image_pages=1,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -704,6 +766,9 @@ def _ingest_multipage_image(
     *,
     document_name: str | None = None,
     collection: str = "default",
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a multi-page image (TIFF) via the OCR backend's async path."""
     document_name = document_name or file_path.name
@@ -724,6 +789,9 @@ def _ingest_multipage_image(
         source_format=file_path.suffix.lower(),
         file_format="TIFF",
         image_pages=page_count,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -737,6 +805,9 @@ def ingest_content(
     collection: str = "default",
     format_hint: str = "auto",
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest inline content: split into sections, chunk, embed, store.
 
@@ -749,6 +820,9 @@ def ingest_content(
         collection: Collection name for organizing documents.
         format_hint: One of 'auto', 'plain', 'markdown', 'latex'.
         progress_callback: Optional callable for progress messages.
+        agent_handle: Agent that owns this memory (empty for non-agent content).
+        memory_type: Memory classification (fact, observation, opinion, procedure).
+        summary: One-line summary of the content.
 
     Returns:
         Dict with ingestion results.
@@ -772,6 +846,9 @@ def ingest_content(
         collection=collection,
         source_format="inline",
         sections=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -826,6 +903,9 @@ def ingest_url(
     document_name: str | None = None,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Fetch a URL, extract text from HTML, chunk, embed, store.
 
@@ -867,6 +947,9 @@ def ingest_url(
         collection=collection,
         source_format=".html",
         sections=len(pages),
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -880,6 +963,9 @@ def _ingest_url_with_delay(
     document_name: str | None,
     timeout: int,
     delay: float,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Ingest a single URL with a pre-fetch delay to avoid rate limiting.
 
@@ -900,6 +986,9 @@ def _ingest_url_with_delay(
         collection=collection,
         document_name=document_name,
         timeout=timeout,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -918,6 +1007,9 @@ def _bulk_ingest_entries(
     delay: float = 0.5,
     timeout: int = 30,
     progress: Callable[..., None],
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> SitemapResult:
     """Filter, dedup, and parallel-ingest a list of sitemap entries.
 
@@ -984,6 +1076,9 @@ def _bulk_ingest_entries(
                     document_name=doc_name,
                     timeout=timeout,
                     delay=delay,
+                    agent_handle=agent_handle,
+                    memory_type=memory_type,
+                    summary=summary,
                 ): page_url
                 for page_url, doc_name in to_ingest
             }
@@ -1037,6 +1132,9 @@ def ingest_sitemap(
     delay: float = 0.5,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> SitemapResult:
     """Crawl a sitemap and ingest all discovered URLs.
 
@@ -1089,6 +1187,9 @@ def ingest_sitemap(
         delay=delay,
         timeout=timeout,
         progress=progress,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -1103,6 +1204,9 @@ def ingest_auto(
     delay: float = 0.5,
     timeout: int = 30,
     progress_callback: Callable[[str], None] | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult | SitemapResult:
     """Smart URL ingestion: discover sitemap, crawl if found, else single page.
 
@@ -1159,6 +1263,9 @@ def ingest_auto(
             delay=delay,
             timeout=timeout,
             progress_callback=progress_callback,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
 
     progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
@@ -1178,6 +1285,9 @@ def ingest_auto(
             collection=collection,
             timeout=timeout,
             progress_callback=progress_callback,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
         )
 
     progress("Discovered %d pages via sitemap", len(entries))
@@ -1200,6 +1310,9 @@ def ingest_auto(
         delay=delay,
         timeout=timeout,
         progress=progress,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
 
 
@@ -1233,6 +1346,9 @@ def _chunk_embed_store(
     sheets: int | None = None,
     slides: int | None = None,
     file_format: str | None = None,
+    agent_handle: str = "",
+    memory_type: str = "",
+    summary: str = "",
 ) -> IngestResult:
     """Shared pipeline: chunk pages, embed, store in LanceDB."""
     progress("Chunking")
@@ -1243,6 +1359,9 @@ def _chunk_embed_store(
         overlap_chars=settings.chunk_overlap_chars,
         collection=collection,
         source_format=source_format,
+        agent_handle=agent_handle,
+        memory_type=memory_type,
+        summary=summary,
     )
     t_chunk = time.perf_counter() - t0
     logger.info(

@@ -43,6 +43,9 @@ class SearchResult(TypedDict):
     page_type: str
     source_format: str
     ingestion_timestamp: str
+    agent_handle: str
+    memory_type: str
+    summary: str
     _distance: float
 
 
