@@ -263,15 +263,15 @@ Two deployment profiles:
 | **Local (CPU)** | int8 (~120 MB) | CPUExecutionProvider | 9.4 texts/s (M2 Air), 134 texts/s (AMD) | Laptops, default install |
 | **Server (GPU)** | FP16 (~218 MB) | CUDAExecutionProvider | 3,042 texts/s (RTX 5080) | Central quarry, bulk ingestion |
 
-The model is selected based on available hardware. The embedding dimension (768) is identical across all precisions — vectors are interchangeable. No re-ingestion required when switching provider profiles.
+The model is selected based on available hardware. The embedding dimension (768) is identical across these precision variants of the same model, so embeddings remain comparable while the underlying architecture, checkpoint, and tokenizer are unchanged. If any model artifact changes (even with the same dimension), all existing vectors must be re-embedded.
 
 ### Why This Design
 
-Benchmarked 5 configurations on two machines (M2 Air, AMD + RTX 5080):
+Benchmarked 6 configurations on two machines (M2 Air, AMD + RTX 5080):
 
-| Config | M2 Air | RTX 5080 | Notes |
-|--------|--------|----------|-------|
-| int8 + CPU | 9.4 texts/s | 134 texts/s | Production default |
+| Config | M2 Air | AMD host (w/ RTX 5080) | Notes |
+|--------|--------|------------------------|-------|
+| int8 + CPU | 9.4 texts/s | 134 texts/s | Production default (CPU only, GPU unused) |
 | int8 + CUDA | — | 158 texts/s | 168 memcpy nodes, barely faster than CPU |
 | FP32 + CUDA | — | 1,639 texts/s | Full precision, no warnings |
 | FP16 + CUDA | — | 3,042 texts/s | Half precision, fastest, 9ms/batch |
