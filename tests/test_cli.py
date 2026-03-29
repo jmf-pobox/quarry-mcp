@@ -1812,3 +1812,81 @@ class TestJsonOutput:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "version" in data
+
+
+class TestCliStandards:
+    """Verify CLI conforms to Punt Labs CLI standards."""
+
+    def test_version_flag(self):
+        import importlib.metadata
+
+        result = runner.invoke(app, ["--version"])
+
+        assert result.exit_code == 0
+        expected = importlib.metadata.version("punt-quarry")
+        assert expected in result.output
+
+    def test_help_plain_text(self):
+        result = runner.invoke(app, ["--help"])
+
+        assert result.exit_code == 0
+        box_chars = {"╭", "╰", "│"}
+        found = box_chars & set(result.output)
+        assert not found, f"Rich box-drawing characters in help output: {found}"
+
+    def test_help_command_order(self):
+        result = runner.invoke(app, ["--help"])
+
+        assert result.exit_code == 0
+        # Extract command names from the Commands section
+        lines = result.output.splitlines()
+        in_commands = False
+        commands: list[str] = []
+        for line in lines:
+            if line.strip().startswith("Commands:"):
+                in_commands = True
+                continue
+            if in_commands:
+                stripped = line.strip()
+                if not stripped:
+                    break
+                cmd_name = stripped.split()[0]
+                commands.append(cmd_name)
+
+        product_cmds = ["find", "ingest", "show", "remember"]
+        admin_cmds = ["install", "doctor", "serve", "mcp", "version", "uninstall"]
+
+        present_product = [c for c in commands if c in product_cmds]
+        present_admin = [c for c in commands if c in admin_cmds]
+
+        assert present_product, "No product commands found in help output"
+        assert present_admin, "No admin commands found in help output"
+
+        last_product_idx = max(commands.index(c) for c in present_product)
+        first_admin_idx = min(commands.index(c) for c in present_admin)
+        assert last_product_idx < first_admin_idx, (
+            f"Product commands must appear before admin commands. Order: {commands}"
+        )
+
+    def test_hooks_hidden(self):
+        result = runner.invoke(app, ["--help"])
+
+        assert result.exit_code == 0
+        # Extract only the Commands section
+        lines = result.output.splitlines()
+        in_commands = False
+        commands_text: list[str] = []
+        for line in lines:
+            if line.strip().startswith("Commands:"):
+                in_commands = True
+                continue
+            if in_commands:
+                if not line.strip():
+                    break
+                commands_text.append(line.lower())
+
+        assert commands_text, "No commands section found in help output"
+        for line in commands_text:
+            assert "hooks" not in line, (
+                f"'hooks' should not appear in commands section: {line}"
+            )
