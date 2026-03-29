@@ -472,6 +472,175 @@ def _inject_claude_md() -> str:
     return f"Appended quarry section to {claude_md}"
 
 
+_SESSION_CONTEXT_TEMPLATE = """\
+## Memory
+
+You have persistent memory stored in quarry, a local semantic
+search engine. Your memories survive across sessions and machines.
+
+### Working Memory
+
+Collection: "{memory_collection}"
+
+To recall prior knowledge:
+  /find <query> — or use the quarry find tool with
+  collection="{memory_collection}", agent_handle="{handle}"
+
+To persist something you learned:
+  /remember <content> — or use the quarry remember tool with
+  collection="{memory_collection}", agent_handle="{handle}",
+  memory_type=fact|observation|procedure|opinion
+
+Memory types:
+- fact: objective, verifiable information ("the API rate limit is 100 req/s")
+- observation: neutral summary of an entity or system
+- procedure: how-to knowledge ("when deploying, run migrations first")
+- opinion: subjective assessment with confidence
+"""
+
+
+def _session_context_literal_block(handle: str, memory_collection: str) -> str:
+    """Return a YAML literal block scalar fragment for session_context.
+
+    The fragment starts with a newline so it appends cleanly to an existing
+    file that may or may not end with a newline.  Each body line is indented
+    two spaces as required for a YAML literal block scalar.
+    """
+    body = _SESSION_CONTEXT_TEMPLATE.format(
+        handle=handle,
+        memory_collection=memory_collection,
+    )
+    indented = "\n".join(f"  {line}" for line in body.splitlines())
+    return f"\nsession_context: |\n{indented}\n"
+
+
+def _write_ethos_ext_session_context(
+    quarry_yaml: Path,
+    handle: str,
+) -> str:
+    """Write session_context into one quarry.yaml if missing.
+
+    Returns:
+        "updated"      — session_context was appended
+        "already_set"  — session_context key already present, file unchanged
+        "no_collection"— memory_collection absent, nothing to do
+    """
+    import yaml  # noqa: PLC0415
+
+    raw = quarry_yaml.read_text(encoding="utf-8")
+
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        return "no_collection"
+    if "session_context" in data:
+        return "already_set"
+
+    memory_collection = data.get("memory_collection")
+    if not memory_collection:
+        return "no_collection"
+
+    fragment = _session_context_literal_block(handle, str(memory_collection))
+    with quarry_yaml.open("a", encoding="utf-8") as fh:
+        fh.write(fragment)
+    return "updated"
+
+
+def _ethos_ext_message(
+    updated: list[str],
+    already_set: list[str],
+    no_collection: list[str],
+    failed: list[str],
+) -> str:
+    """Build the result message for _configure_ethos_ext."""
+
+    def _plural(lst: list[str]) -> str:
+        return "identity" if len(lst) == 1 else "identities"
+
+    parts: list[str] = []
+    if updated:
+        parts.append(f"updated {len(updated)} {_plural(updated)}: {', '.join(updated)}")
+    if already_set:
+        if not updated:
+            parts.append(f"session_context already set: {', '.join(already_set)}")
+        else:
+            parts.append(f"already set: {', '.join(already_set)}")
+    if no_collection:
+        parts.append(f"no memory_collection (check config): {', '.join(no_collection)}")
+    if failed:
+        parts.append(f"errors: {'; '.join(failed)}")
+    return "; ".join(parts)
+
+
+def _scan_identities_dir(
+    identities_dir: Path,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Iterate identity ext dirs and classify each quarry.yaml.
+
+    Returns (updated, already_set, no_collection, failed).
+    """
+    updated: list[str] = []
+    already_set: list[str] = []
+    no_collection: list[str] = []
+    failed: list[str] = []
+
+    for ext_dir in sorted(identities_dir.iterdir()):
+        if not ext_dir.is_dir() or not ext_dir.name.endswith(".ext"):
+            continue
+        handle = ext_dir.name[: -len(".ext")]
+        quarry_yaml = ext_dir / "quarry.yaml"
+        if not quarry_yaml.exists():
+            continue
+        try:
+            result = _write_ethos_ext_session_context(quarry_yaml, handle)
+            if result == "updated":
+                updated.append(handle)
+            elif result == "already_set":
+                already_set.append(handle)
+            elif result == "no_collection":
+                no_collection.append(handle)
+        except Exception as exc:  # noqa: BLE001
+            failed.append(f"{handle}: {exc}")
+
+    return updated, already_set, no_collection, failed
+
+
+def _configure_ethos_ext(
+    identities_dir: Path | None = None,
+) -> CheckResult:
+    """Write session_context into ethos ext quarry.yaml for each configured identity.
+
+    Idempotent: leaves existing session_context keys unchanged. Skips identity
+    directories that have no quarry.yaml (quarry not configured for that identity).
+    """
+    if identities_dir is None:
+        identities_dir = Path.home() / ".punt-labs" / "ethos" / "identities"
+
+    if not identities_dir.exists():
+        return CheckResult(
+            name="Ethos ext session_context",
+            passed=True,
+            message="ethos not installed, skipping",
+            required=False,
+        )
+
+    updated, already_set, no_collection, failed = _scan_identities_dir(identities_dir)
+
+    if not updated and not already_set and not no_collection and not failed:
+        return CheckResult(
+            name="Ethos ext session_context",
+            passed=True,
+            message="no identities with quarry configured",
+            required=False,
+        )
+
+    return CheckResult(
+        name="Ethos ext session_context",
+        passed=not failed,
+        message=_ethos_ext_message(updated, already_set, no_collection, failed),
+        required=False,
+    )
+
+
 def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
@@ -485,7 +654,7 @@ def run_install() -> int:
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/6] Creating directories...")  # noqa: T201
+    print("[1/7] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -496,7 +665,7 @@ def run_install() -> int:
         failed = True
 
     # Step 2: embedding model
-    print("[2/6] Downloading embedding model...")  # noqa: T201
+    print("[2/7] Downloading embedding model...")  # noqa: T201
     try:
         from quarry.embeddings import download_model_files  # noqa: PLC0415
 
@@ -508,7 +677,7 @@ def run_install() -> int:
 
     # Step 3: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[3/6] Installing mcp-proxy...")  # noqa: T201
+    print("[3/7] Installing mcp-proxy...")  # noqa: T201
     try:
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
@@ -519,12 +688,12 @@ def run_install() -> int:
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
 
     # Step 4: MCP clients (uses mcp-proxy if step 3 succeeded, otherwise quarry mcp)
-    print("[4/6] Configuring MCP clients...")  # noqa: T201
+    print("[4/7] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
     # Step 5: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[5/6] Registering quarry daemon...")  # noqa: T201
+    print("[5/7] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
 
@@ -535,12 +704,21 @@ def run_install() -> int:
         print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
 
     # Step 6: CLAUDE.md context injection (best-effort)
-    print("[6/6] Injecting quarry context into CLAUDE.md...")  # noqa: T201
+    print("[6/7] Injecting quarry context into CLAUDE.md...")  # noqa: T201
     try:
         msg = _inject_claude_md()
         print(f"  \u2713 {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+
+    # Step 7: ethos ext session_context (best-effort)
+    print("[7/7] Configuring ethos identity extension...")  # noqa: T201
+    try:
+        check = _configure_ethos_ext()
+        _print_check(check)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print("    Ethos extension configuration is optional.")  # noqa: T201
 
     # Verification
     print()  # noqa: T201
