@@ -21,6 +21,7 @@ from quarry.doctor import (
     _check_storage,
     _configure_claude_code,
     _configure_claude_desktop,
+    _configure_ethos_ext,
     _human_size,
     _quiet_logging,
     check_environment,
@@ -264,8 +265,6 @@ class TestCheckEnvironment:
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
         data_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
         import quarry.doctor as doctor_mod
 
         _ok = doctor_mod.CheckResult
@@ -304,6 +303,162 @@ class TestCheckEnvironment:
         monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         # AWS is now optional, so only data_directory check fails
         assert check_environment() == 1
+
+
+class TestConfigureEthosExt:
+    def _make_ext(self, identities_dir: Path, handle: str) -> Path:
+        ext_dir = identities_dir / f"{handle}.ext"
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        return ext_dir
+
+    def test_writes_session_context_when_missing(self, tmp_path: Path):
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+        ext_dir = self._make_ext(identities_dir, "claude")
+        quarry_yaml = ext_dir / "quarry.yaml"
+        quarry_yaml.write_text(
+            yaml.dump({"memory_collection": "claude-memories"}), encoding="utf-8"
+        )
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        assert result.passed is True
+        data = yaml.safe_load(quarry_yaml.read_text(encoding="utf-8"))
+        assert "session_context" in data
+        assert "claude-memories" in data["session_context"]
+        assert "claude" in data["session_context"]
+        assert "updated" in result.message
+        assert "claude" in result.message
+
+    def test_idempotent_when_session_context_exists(self, tmp_path: Path):
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+        ext_dir = self._make_ext(identities_dir, "jfreeman")
+        quarry_yaml = ext_dir / "quarry.yaml"
+        original = {
+            "memory_collection": "jfreeman-memories",
+            "session_context": "existing content, do not overwrite",
+        }
+        quarry_yaml.write_text(yaml.dump(original), encoding="utf-8")
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        data = yaml.safe_load(quarry_yaml.read_text(encoding="utf-8"))
+        assert data["session_context"] == "existing content, do not overwrite"
+        assert "already" in result.message
+
+    def test_skips_identity_without_quarry_yaml(self, tmp_path: Path):
+        identities_dir = tmp_path / "identities"
+        self._make_ext(identities_dir, "nomemory")
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        assert result.passed is True
+        assert "no identities" in result.message
+
+    def test_ethos_not_installed(self, tmp_path: Path):
+        result = _configure_ethos_ext(identities_dir=tmp_path / "nonexistent")
+
+        assert result.passed is True
+        assert result.required is False
+        assert "ethos not installed" in result.message
+
+    def test_two_identities_one_needs_update(self, tmp_path: Path):
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+
+        # claude: needs update
+        ext_claude = self._make_ext(identities_dir, "claude")
+        (ext_claude / "quarry.yaml").write_text(
+            yaml.dump({"memory_collection": "claude-col"}), encoding="utf-8"
+        )
+
+        # jfreeman: already has session_context
+        ext_jf = self._make_ext(identities_dir, "jfreeman")
+        (ext_jf / "quarry.yaml").write_text(
+            yaml.dump(
+                {
+                    "memory_collection": "jf-col",
+                    "session_context": "already here",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        assert result.passed is True
+        assert "updated 1 identities: claude" in result.message
+        assert "already set: jfreeman" in result.message
+
+        claude_text = (ext_claude / "quarry.yaml").read_text(encoding="utf-8")
+        claude_data = yaml.safe_load(claude_text)
+        assert "session_context" in claude_data
+
+        jf_text = (ext_jf / "quarry.yaml").read_text(encoding="utf-8")
+        jf_data = yaml.safe_load(jf_text)
+        assert jf_data["session_context"] == "already here"
+
+    def test_no_collection_surfaced_in_message(self, tmp_path: Path):
+        """quarry.yaml with no memory_collection surfaces in result, not silent."""
+        identities_dir = tmp_path / "identities"
+        ext_dir = self._make_ext(identities_dir, "ghost")
+        (ext_dir / "quarry.yaml").write_text("other_key: value\n", encoding="utf-8")
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        assert result.passed is True
+        assert "no memory_collection" in result.message
+        assert "ghost" in result.message
+
+    def test_per_identity_failure_isolates_others(self, tmp_path: Path):
+        """A bad quarry.yaml for one identity does not skip processing the next."""
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+
+        # bad: invalid YAML
+        bad_dir = self._make_ext(identities_dir, "aardvark")
+        (bad_dir / "quarry.yaml").write_bytes(b"key: [\x00invalid")
+
+        # good: valid, needs update
+        good_dir = self._make_ext(identities_dir, "zebra")
+        (good_dir / "quarry.yaml").write_text(
+            yaml.dump({"memory_collection": "z-col"}), encoding="utf-8"
+        )
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        # zebra should be updated despite aardvark failing
+        assert "zebra" in result.message
+        assert "errors" in result.message
+        assert "aardvark" in result.message
+        # error in aardvark → passed=False
+        assert result.passed is False
+
+        zebra_text = (good_dir / "quarry.yaml").read_text(encoding="utf-8")
+        zebra_data = yaml.safe_load(zebra_text)
+        assert "session_context" in zebra_data
+
+    def test_raw_append_preserves_existing_comments(self, tmp_path: Path):
+        """Appending session_context must not destroy existing YAML comments."""
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+        ext_dir = self._make_ext(identities_dir, "tester")
+        original_text = "# important comment\nmemory_collection: tester-col\n"
+        (ext_dir / "quarry.yaml").write_text(original_text, encoding="utf-8")
+
+        _configure_ethos_ext(identities_dir=identities_dir)
+
+        updated_text = (ext_dir / "quarry.yaml").read_text(encoding="utf-8")
+        assert "# important comment" in updated_text
+        data = yaml.safe_load(updated_text)
+        assert "session_context" in data
+        assert "tester-col" in data["session_context"]
 
 
 def _mock_install_deps(monkeypatch: MP) -> None:
