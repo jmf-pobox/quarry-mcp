@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the CLI. Everything runs locally — no API keys, no cloud accounts. The embedding model (~500 MB) downloads once on first use.
+Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5, 768-dim), stores vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the CLI. Everything runs locally — no API keys, no cloud accounts. The embedding model (~120 MB int8) downloads once on first use. CUDA GPUs are auto-detected for faster inference.
 
 **Platforms:** macOS, Linux
 
@@ -61,7 +61,7 @@ sh install.sh
 
 - **20+ formats** --- PDFs (with OCR for scanned pages), source code (AST-aware splitting), spreadsheets, presentations, HTML, Markdown, LaTeX, DOCX, images
 - **Semantic search** --- retrieval is by meaning, not keyword. A query about "margins" finds passages about profitability even if they never use that word
-- **Daemon architecture** --- one `quarry serve` process loads the embedding model once (~200 MB RAM) and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
+- **Daemon architecture** --- one `quarry serve` process loads the embedding model once and serves all Claude Code sessions via [mcp-proxy](https://github.com/punt-labs/mcp-proxy) over WebSocket
 - **Passive knowledge capture** --- SessionStart hook auto-indexes the working directory, PostToolUse hook auto-ingests fetched URLs, PreCompact hook captures transcripts before context compaction
 - **Named databases** --- isolated LanceDB directories with independent sync registries. Switch with `use` for work/personal separation
 - **Research agent** --- `researcher` subagent combines quarry local search with web research, auto-ingests valuable findings
@@ -156,6 +156,7 @@ Quarry works with zero configuration. These environment variables are available 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `QUARRY_PROVIDER` | *(auto)* | ONNX execution provider: `cpu`, `cuda`, or unset (auto-detect) |
 | `QUARRY_API_KEY` | *(none)* | Bearer token for `quarry serve` |
 | `QUARRY_ROOT` | `~/.punt-labs/quarry/data` | Base directory for all databases |
 | `CHUNK_MAX_CHARS` | `1800` | Max characters per chunk (~450 tokens) |
