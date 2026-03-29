@@ -340,3 +340,35 @@ Agent memories need scoping (rmh's memories shouldn't pollute bwk's searches) an
 1. **Separate tables per agent** — Rejected. Complicates cross-agent search and increases table management overhead.
 2. **JSON metadata column** — Rejected. No SQL filtering, no type safety, harder to index.
 3. **Full entity extraction at ingestion** — Deferred to v2. Requires LLM pass per chunk (~1s each). The current schema supports it when added later.
+
+---
+
+## DES-019: Ethos Extension Session Context Setup
+
+**Date:** 2026-03-29
+**Status:** SETTLED
+**Topic:** How `quarry install` writes memory instructions into ethos identity extension files
+
+### Design
+
+`quarry install` step 7/7 scans `~/.punt-labs/ethos/identities/*.ext/quarry.yaml` and appends a `session_context` YAML literal block scalar to any file that has `memory_collection` but no `session_context`. The template is parameterized by agent handle and collection name.
+
+Key design choices:
+
+1. **Raw file append, not YAML round-trip.** The function reads the raw text to detect existing keys, then appends the `session_context: |` block directly. `yaml.safe_load` is used only to extract the `memory_collection` value — the file is never re-serialized through `yaml.dump`.
+
+2. **Per-identity exception handling.** The scan loop wraps each identity in `try/except (OSError, yaml.YAMLError)`. A malformed file for one identity does not abort processing of the others. Failed identities are reported in the result message.
+
+3. **Three-way classification.** `_write_ethos_ext_session_context` returns `"updated"`, `"already_set"`, or `"no_collection"` — not a boolean. The `no_collection` case is surfaced in the install output so users know their config is incomplete.
+
+### Why This Design
+
+Ethos v2.4.1 removed `BuildMemorySection` (hardcoded quarry knowledge in Go code, a DES-008 violation) and replaced it with generic `BuildExtensionContext` (DES-022). Ethos now emits whatever is in the `session_context` key of any extension YAML verbatim at session start and compaction. Quarry owns the content of its own instructions — ethos just delivers them.
+
+Without this install step, agents with existing `quarry.yaml` ext files (containing `memory_collection` but no `session_context`) silently lose their memory instructions after upgrading ethos. The install step closes this gap idempotently.
+
+### Alternatives Considered
+
+1. **YAML round-trip via `yaml.safe_load` + `yaml.dump`** — Rejected. Destroys comments, blank lines, and key ordering in the user's file. Silent data corruption on the happy path.
+2. **Ethos writes quarry's instructions** — Rejected. Violates the one-way dependency: quarry depends on ethos for identity, but ethos has zero knowledge of quarry's internals (DES-008).
+3. **Require users to manually add `session_context`** — Rejected. Silent failure with no error message. Users would not know their memory stopped working until they noticed missing recall.
