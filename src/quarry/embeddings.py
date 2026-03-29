@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from quarry.config import (
-    ONNX_MODEL_FILE,
     ONNX_MODEL_REPO,
     ONNX_MODEL_REVISION,
     ONNX_QUERY_PREFIX,
     ONNX_TOKENIZER_FILE,
 )
+from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection, select_provider
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -24,7 +25,9 @@ logger = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE: int = 32
 
 
-def download_model_files() -> tuple[str, str]:
+def download_model_files(
+    model_file: str = "onnx/model_int8.onnx",
+) -> tuple[str, str]:
     """Download ONNX model and tokenizer from HuggingFace Hub.
 
     Makes network requests. Used by ``quarry install`` only.
@@ -36,7 +39,7 @@ def download_model_files() -> tuple[str, str]:
 
     model_path = hf_hub_download(
         repo_id=ONNX_MODEL_REPO,
-        filename=ONNX_MODEL_FILE,
+        filename=model_file,
         revision=ONNX_MODEL_REVISION,
     )
     tokenizer_path = hf_hub_download(
@@ -47,24 +50,24 @@ def download_model_files() -> tuple[str, str]:
     return model_path, tokenizer_path
 
 
-def _load_model_files() -> tuple[str, str]:
+def _load_model_files(model_file: str) -> tuple[str, str]:
     """Load ONNX model and tokenizer, downloading if not cached.
 
     Tries local cache first (no network). Falls back to downloading
     from HuggingFace Hub if the files are missing. This makes
-    ``quarry install`` optional — the model is fetched on first use.
+    ``quarry install`` optional -- the model is fetched on first use.
 
     Returns:
         Tuple of (model_path, tokenizer_path) as absolute file paths.
     """
     try:
-        return _load_local_model_files()
+        return _load_local_model_files(model_file)
     except OSError:
-        logger.info("Embedding model not cached — downloading (~500 MB)")
-        return download_model_files()
+        logger.info("Embedding model not cached -- downloading (~120-220 MB)")
+        return download_model_files(model_file)
 
 
-def _load_local_model_files() -> tuple[str, str]:
+def _load_local_model_files(model_file: str) -> tuple[str, str]:
     """Load ONNX model and tokenizer from local cache only.
 
     No network requests. Raises ``OSError`` if files are not cached.
@@ -73,7 +76,7 @@ def _load_local_model_files() -> tuple[str, str]:
 
     model_path = hf_hub_download(
         repo_id=ONNX_MODEL_REPO,
-        filename=ONNX_MODEL_FILE,
+        filename=model_file,
         revision=ONNX_MODEL_REVISION,
         local_files_only=True,
     )
@@ -96,7 +99,29 @@ class OnnxEmbeddingBackend:
     def __init__(self) -> None:
         self._dimension = 768
 
-        model_path, tokenizer_path = _load_model_files()
+        selection = select_provider()
+
+        force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
+
+        if selection.provider == "CUDAExecutionProvider":
+            try:
+                model_path, tokenizer_path = _load_model_files(selection.model_file)
+            except Exception as load_exc:
+                if not force_cuda:
+                    logger.warning(
+                        "FP16 model load failed, falling back to CPU + int8: %s",
+                        load_exc,
+                    )
+                    cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
+                    model_path, tokenizer_path = _load_model_files(cpu_model_file)
+                    selection = ProviderSelection(
+                        provider="CPUExecutionProvider",
+                        model_file=cpu_model_file,
+                    )
+                else:
+                    raise
+        else:
+            model_path, tokenizer_path = _load_model_files(selection.model_file)
 
         from tokenizers import Tokenizer  # noqa: PLC0415
 
@@ -107,8 +132,63 @@ class OnnxEmbeddingBackend:
 
         import onnxruntime as ort  # noqa: PLC0415
 
-        self._session = ort.InferenceSession(model_path)
-        logger.info("ONNX embedding model loaded")
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
+
+        try:
+            self._session = ort.InferenceSession(
+                model_path,
+                sess_options=sess_options,
+                providers=[selection.provider],
+            )
+            logger.info(
+                "ONNX model loaded: provider=%s, model=%s",
+                selection.provider,
+                selection.model_file,
+            )
+        except Exception as cuda_exc:
+            exc_text = str(cuda_exc).lower()
+            cuda_markers = (
+                "cuda",
+                "cublas",
+                "cudnn",
+                "gpu",
+                "cudaexecutionprovider",
+                "failed to create cuda",
+            )
+            is_cuda_related = any(m in exc_text for m in cuda_markers)
+            is_fallback_eligible = (
+                selection.provider == "CUDAExecutionProvider"
+                and not force_cuda
+                and is_cuda_related
+            )
+            if is_fallback_eligible:
+                logger.warning(
+                    "CUDA session failed, falling back to CPU + int8",
+                    exc_info=True,
+                )
+                cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
+                model_path, _ = _load_model_files(cpu_model_file)
+                try:
+                    self._session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=["CPUExecutionProvider"],
+                    )
+                except Exception as cpu_exc:
+                    msg = (
+                        f"CPU fallback also failed after CUDA session error. "
+                        f"CUDA error: {cuda_exc}"
+                    )
+                    raise RuntimeError(msg) from cpu_exc
+                logger.info(
+                    "ONNX model loaded: provider=CPUExecutionProvider, model=%s",
+                    cpu_model_file,
+                )
+            else:
+                raise
 
     @property
     def dimension(self) -> int:
