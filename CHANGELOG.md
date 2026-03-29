@@ -16,7 +16,14 @@ across `transform`, `index`, and `connector`).
 
 ## [1.8.1] - 2026-03-29
 
-## [1.8.0] - 2026-03-28
+### Added
+
+- **infra**: `quarry install` step 7/7 writes `session_context` into ethos
+  identity extension files (`~/.punt-labs/ethos/identities/<handle>.ext/quarry.yaml`).
+  Migrates existing agents that have `memory_collection` but no `session_context`.
+  Uses raw file append to preserve YAML comments and formatting. Per-identity
+  exception handling ensures one malformed file doesn't abort the rest. Missing
+  `memory_collection` is surfaced in the output.
 
 ## [1.8.0] - 2026-03-28
 
