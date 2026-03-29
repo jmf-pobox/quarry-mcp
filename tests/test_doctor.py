@@ -391,7 +391,7 @@ class TestConfigureEthosExt:
         result = _configure_ethos_ext(identities_dir=identities_dir)
 
         assert result.passed is True
-        assert "updated 1 identities: claude" in result.message
+        assert "updated 1 identity: claude" in result.message
         assert "already set: jfreeman" in result.message
 
         claude_text = (ext_claude / "quarry.yaml").read_text(encoding="utf-8")

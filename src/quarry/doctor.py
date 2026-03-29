@@ -552,13 +552,18 @@ def _ethos_ext_message(
     failed: list[str],
 ) -> str:
     """Build the result message for _configure_ethos_ext."""
+
+    def _plural(lst: list[str]) -> str:
+        return "identity" if len(lst) == 1 else "identities"
+
     parts: list[str] = []
     if updated:
-        parts.append(f"updated {len(updated)} identities: {', '.join(updated)}")
+        parts.append(f"updated {len(updated)} {_plural(updated)}: {', '.join(updated)}")
     if already_set:
         if not updated:
             handles = ", ".join(already_set)
-            parts.append(f"all identities already have session_context ({handles})")
+            noun = _plural(already_set)
+            parts.append(f"all {noun} already have session_context ({handles})")
         else:
             parts.append(f"already set: {', '.join(already_set)}")
     if no_collection:
