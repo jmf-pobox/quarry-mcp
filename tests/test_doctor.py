@@ -460,6 +460,39 @@ class TestConfigureEthosExt:
         assert "session_context" in data
         assert "tester-col" in data["session_context"]
 
+    def test_non_mapping_yaml_surfaced_as_no_collection(self, tmp_path: Path):
+        """Non-mapping quarry.yaml is treated as no_collection, not failed.
+
+        Isolation is confirmed: the adjacent valid identity still gets updated.
+        """
+        import yaml
+
+        identities_dir = tmp_path / "identities"
+
+        # list-yaml: valid YAML but not a mapping — should become no_collection
+        list_dir = self._make_ext(identities_dir, "listident")
+        (list_dir / "quarry.yaml").write_text("- item1\n- item2\n", encoding="utf-8")
+
+        # good: needs session_context — must still be updated despite list_ident
+        good_dir = self._make_ext(identities_dir, "zvalid")
+        (good_dir / "quarry.yaml").write_text(
+            yaml.dump({"memory_collection": "zvalid-col"}), encoding="utf-8"
+        )
+
+        result = _configure_ethos_ext(identities_dir=identities_dir)
+
+        # listident should be in no_collection, not in errors
+        assert "no memory_collection" in result.message
+        assert "listident" in result.message
+        assert "errors" not in result.message
+
+        # zvalid must have been updated — isolation confirmed
+        assert "zvalid" in result.message
+        zvalid_data = yaml.safe_load(
+            (good_dir / "quarry.yaml").read_text(encoding="utf-8")
+        )
+        assert "session_context" in zvalid_data
+
 
 def _mock_install_deps(monkeypatch: MP) -> None:
     """Stub out MCP config, mcp-proxy install, and check_environment."""

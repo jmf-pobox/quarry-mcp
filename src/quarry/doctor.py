@@ -529,10 +529,12 @@ def _write_ethos_ext_session_context(
 
     raw = quarry_yaml.read_text(encoding="utf-8")
 
-    if "session_context:" in raw:
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        return "no_collection"
+    if "session_context" in data:
         return "already_set"
 
-    data: dict[str, object] = yaml.safe_load(raw) or {}
     memory_collection = data.get("memory_collection")
     if not memory_collection:
         return "no_collection"
@@ -573,8 +575,6 @@ def _scan_identities_dir(
 
     Returns (updated, already_set, no_collection, failed).
     """
-    import yaml  # noqa: PLC0415
-
     updated: list[str] = []
     already_set: list[str] = []
     no_collection: list[str] = []
@@ -595,7 +595,7 @@ def _scan_identities_dir(
                 already_set.append(handle)
             elif result == "no_collection":
                 no_collection.append(handle)
-        except (OSError, yaml.YAMLError) as exc:
+        except Exception as exc:  # noqa: BLE001
             failed.append(f"{handle}: {exc}")
 
     return updated, already_set, no_collection, failed
