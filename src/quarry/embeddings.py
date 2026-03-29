@@ -15,7 +15,7 @@ from quarry.config import (
     ONNX_QUERY_PREFIX,
     ONNX_TOKENIZER_FILE,
 )
-from quarry.provider import select_provider
+from quarry.provider import PROVIDER_MODEL_MAP, ProviderSelection, select_provider
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -101,7 +101,27 @@ class OnnxEmbeddingBackend:
 
         selection = select_provider()
 
-        model_path, tokenizer_path = _load_model_files(selection.model_file)
+        force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
+
+        if selection.provider == "CUDAExecutionProvider":
+            try:
+                model_path, tokenizer_path = _load_model_files(selection.model_file)
+            except Exception as load_exc:
+                if not force_cuda:
+                    logger.warning(
+                        "FP16 model load failed, falling back to CPU + int8: %s",
+                        load_exc,
+                    )
+                    cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
+                    model_path, tokenizer_path = _load_model_files(cpu_model_file)
+                    selection = ProviderSelection(
+                        provider="CPUExecutionProvider",
+                        model_file=cpu_model_file,
+                    )
+                else:
+                    raise
+        else:
+            model_path, tokenizer_path = _load_model_files(selection.model_file)
 
         from tokenizers import Tokenizer  # noqa: PLC0415
 
@@ -116,8 +136,6 @@ class OnnxEmbeddingBackend:
         sess_options.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         )
-
-        force_cuda = os.environ.get("QUARRY_PROVIDER", "").strip().lower() == "cuda"
 
         try:
             self._session = ort.InferenceSession(
@@ -151,7 +169,7 @@ class OnnxEmbeddingBackend:
                     "CUDA session failed, falling back to CPU + int8",
                     exc_info=True,
                 )
-                cpu_model_file = "onnx/model_int8.onnx"
+                cpu_model_file = PROVIDER_MODEL_MAP["CPUExecutionProvider"]
                 model_path, _ = _load_model_files(cpu_model_file)
                 try:
                     self._session = ort.InferenceSession(
