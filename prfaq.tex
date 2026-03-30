@@ -596,8 +596,8 @@ run \texttt{quarry install}, and start searching.
   auto-registration, post web fetch auto-ingestion, pre-compact transcript
   preservation), daemon architecture (launchd/systemd) with mcp-proxy for
   shared-process MCP, ONNX provider auto-detection with CUDA/GPU acceleration
-  (auto-installs \texttt{onnxruntime-gpu} on NVIDIA machines, uses FP16
-  model), researcher subagent for combined local + web search, CLAUDE.md
+  (curl|sh installer auto-installs \texttt{onnxruntime-gpu} on NVIDIA
+  machines; uses FP16 model), researcher subagent for combined local + web search, CLAUDE.md
   injection for agent discovery, ethos extension for per-identity session
   context. 936 automated tests, strict type checking (mypy + pyright).
 
@@ -795,7 +795,7 @@ Defines scope. Features are categorized to prevent scope creep.
   \featureitem{Daemon architecture}{Single background process (\texttt{quarry serve}) loads the embedding model once and serves all sessions via WebSocket MCP endpoint. Lightweight mcp-proxy binary bridges MCP stdio to the daemon, eliminating per-session Python startup.}\label{feat:daemon}
   \featureitem{Researcher agent}{Combines local Quarry search with web research. Searches locally first, fills gaps from the web, and auto-ingests findings so research compounds across sessions.}\label{feat:researcher}
   \featureitem{Hybrid search}{Vector similarity + BM25 full-text fused via RRF. Semantic understanding plus keyword precision.}\label{feat:hybrid-search}
-  \featureitem{Agent memory}{Per-agent memory with identity tagging via ethos integration. Memory types (fact, observation, procedure, opinion) with temporal decay for relevance. Agents remember across sessions and machines.}\label{feat:agent-memory}
+  \featureitem{Agent memory}{Per-agent memory with identity tagging via ethos integration. Memory types (fact, observation, procedure, opinion) with temporal decay for relevance. Agents remember across sessions on the same machine; cross-machine continuity requires a remote daemon.}\label{feat:agent-memory}
   \featureitem{CUDA/GPU acceleration}{Auto-detects NVIDIA hardware and uses FP16 model via CUDAExecutionProvider. Installer swaps \texttt{onnxruntime} for \texttt{onnxruntime-gpu} with rollback on failure.}\label{feat:cuda}
   \featureitem{HTTP API with authentication}{Bearer token on all endpoints except \texttt{/health}. Server refuses non-loopback binding without an API key. Enables secure LAN access to a GPU daemon.}\label{feat:http-auth}
   \featureitem{Ethos integration}{Injects per-identity agent personality, memory instructions, and team context into sessions automatically.}\label{feat:ethos}
