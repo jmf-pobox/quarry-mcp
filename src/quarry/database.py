@@ -138,6 +138,24 @@ def get_db(db_path: Path) -> LanceDB:
     return cast("LanceDB", lancedb.connect(str(db_path)))  # type: ignore[attr-defined]
 
 
+def _try_open_table(db: LanceDB) -> LanceTable | None:
+    """Open, migrate, and index the chunks table.
+
+    Returns the table if it can be opened, or ``None`` when ``open_table``
+    raises a "not found" ``ValueError`` (stale ``list_tables`` cache).
+    All other ``ValueError`` exceptions are re-raised.
+    """
+    try:
+        table = db.open_table(TABLE_NAME)
+    except ValueError as exc:
+        if "not found" not in str(exc).lower():
+            raise
+        return None
+    _migrate_schema(table)
+    _ensure_fts_index(table)
+    return table
+
+
 def _get_or_create_table(
     db: LanceDB,
     records: list[dict[str, object]],
@@ -155,41 +173,27 @@ def _get_or_create_table(
     Runs schema migration and FTS index creation on every open.
     """
     if TABLE_NAME in db.list_tables().tables:
-        try:
-            table = db.open_table(TABLE_NAME)
-            _migrate_schema(table)
-            _ensure_fts_index(table)
+        table = _try_open_table(db)
+        if table is not None:
             return table
-        except ValueError as exc:
-            if "not found" not in str(exc).lower():
-                raise
-            logger.debug("open_table failed after list_tables, creating")
+        logger.debug("open_table failed after list_tables, creating")
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
-            try:
-                table = db.open_table(TABLE_NAME)
-                _migrate_schema(table)
-                _ensure_fts_index(table)
+            table = _try_open_table(db)
+            if table is not None:
                 return table
-            except ValueError as exc:
-                if "not found" not in str(exc).lower():
-                    raise
-                logger.debug("Table listed but open_table failed under lock, creating")
+            logger.debug("Table listed but open_table failed under lock, creating")
         try:
             table = db.create_table(TABLE_NAME, data=records, schema=_schema())
         except ValueError as exc:
             if "already exists" not in str(exc).lower():
                 raise
-            logger.debug("create_table raced with another thread, opening existing")
-            try:
-                table = db.open_table(TABLE_NAME)
-            except ValueError:
-                import time  # noqa: PLC0415
-
-                time.sleep(0.1)
-                table = db.open_table(TABLE_NAME)
-            _migrate_schema(table)
-            _ensure_fts_index(table)
+            logger.debug("create_table raced, opening existing")
+            table = _try_open_table(db)
+            if table is None:
+                raise RuntimeError(
+                    f"Table {TABLE_NAME} reported as existing but cannot be opened"
+                ) from exc
             return table
         _ensure_fts_index(table)
         return None
