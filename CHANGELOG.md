@@ -14,6 +14,12 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **transform**: `install.sh` now detects NVIDIA GPUs via `nvidia-smi` and
+  adds `onnxruntime-gpu` with `--with` flag during `uv tool install`, enabling
+  CUDAExecutionProvider on machines with NVIDIA hardware.
+
 ## [1.10.0] - 2026-03-29
 
 ### Added

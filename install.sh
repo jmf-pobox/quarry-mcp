@@ -83,12 +83,22 @@ if [ "$HAVE_PYTHON" = "0" ]; then
   PYTHON_FLAG="--python 3.13"
 fi
 
+# --- Step 3b: Detect NVIDIA GPU ---
+
+GPU_FLAG=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi >/dev/null 2>&1; then
+    ok "NVIDIA GPU detected — will install CUDA support"
+    GPU_FLAG="--with onnxruntime-gpu>=1.18.0"
+  fi
+fi
+
 # --- Step 4: Install quarry CLI ---
 
 info "Installing $PACKAGE..."
 
 # shellcheck disable=SC2086
-uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
+uv tool install --force $PYTHON_FLAG $GPU_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
 ok "$PACKAGE==$VERSION installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
