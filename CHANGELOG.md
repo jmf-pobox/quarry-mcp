@@ -14,6 +14,13 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **infra**: `install.sh` detects NVIDIA GPUs via `nvidia-smi` and swaps
+  `onnxruntime` for `onnxruntime-gpu` in the tool venv, enabling
+  CUDAExecutionProvider on machines with NVIDIA hardware. Rolls back to
+  CPU onnxruntime if GPU install fails.
+
 ## [1.10.0] - 2026-03-29
 
 ### Added

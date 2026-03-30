@@ -83,6 +83,16 @@ if [ "$HAVE_PYTHON" = "0" ]; then
   PYTHON_FLAG="--python 3.13"
 fi
 
+# --- Step 3b: Detect NVIDIA GPU ---
+
+HAS_NVIDIA=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi >/dev/null 2>&1; then
+    ok "NVIDIA GPU detected"
+    HAS_NVIDIA=1
+  fi
+fi
+
 # --- Step 4: Install quarry CLI ---
 
 info "Installing $PACKAGE..."
@@ -95,6 +105,26 @@ if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
   if ! command -v "$BINARY" >/dev/null 2>&1; then
     fail "$PACKAGE installed but '$BINARY' not found on PATH"
+  fi
+fi
+
+# Swap onnxruntime for onnxruntime-gpu in the tool venv.
+# The two packages conflict (same Python module, different PyPI names).
+# uv pip --python targets the venv that owns that interpreter.
+if [ "$HAS_NVIDIA" = "1" ]; then
+  info "Installing CUDA support (onnxruntime-gpu)..."
+  TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
+  if [ -f "$TOOL_PYTHON" ]; then
+    uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
+    if uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null; then
+      ok "onnxruntime-gpu installed"
+    else
+      warn "Failed to install onnxruntime-gpu — restoring CPU onnxruntime"
+      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime — re-run install.sh"
+      ok "onnxruntime (CPU) restored"
+    fi
+  else
+    warn "Could not locate tool Python — CUDA support skipped"
   fi
 fi
 
