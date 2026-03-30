@@ -120,7 +120,7 @@ if [ "$HAS_NVIDIA" = "1" ]; then
       ok "onnxruntime-gpu installed"
     else
       warn "Failed to install onnxruntime-gpu — restoring CPU onnxruntime"
-      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime — run: uv tool install --force $PACKAGE==$VERSION"
+      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime — re-run install.sh"
       ok "onnxruntime (CPU) restored"
     fi
   else
