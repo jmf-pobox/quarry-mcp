@@ -160,8 +160,10 @@ def _get_or_create_table(
             _migrate_schema(table)
             _ensure_fts_index(table)
             return table
-        except ValueError:
-            pass  # Table disappeared between list and open — fall through to create
+        except ValueError as exc:
+            if "not found" not in str(exc).lower():
+                raise
+            logger.debug("Table listed but open_table failed (stale list_tables), creating")
     with _table_lock:
         if TABLE_NAME in db.list_tables().tables:
             try:
@@ -169,13 +171,23 @@ def _get_or_create_table(
                 _migrate_schema(table)
                 _ensure_fts_index(table)
                 return table
-            except ValueError:
-                pass  # Race: fall through to create
+            except ValueError as exc:
+                if "not found" not in str(exc).lower():
+                    raise
+                logger.debug("Table listed but open_table failed under lock, creating")
         try:
             table = db.create_table(TABLE_NAME, data=records, schema=_schema())
-        except ValueError:
-            # Another thread created the table between our check and create
-            table = db.open_table(TABLE_NAME)
+        except ValueError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+            logger.debug("create_table raced with another thread, opening existing")
+            try:
+                table = db.open_table(TABLE_NAME)
+            except ValueError:
+                import time  # noqa: PLC0415
+
+                time.sleep(0.1)
+                table = db.open_table(TABLE_NAME)
             _migrate_schema(table)
             _ensure_fts_index(table)
             return table
