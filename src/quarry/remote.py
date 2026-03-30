@@ -32,7 +32,7 @@ def read_proxy_config() -> dict[str, Any]:
 
 
 def write_proxy_config(url: str, token: str) -> None:
-    """Write quarry section to mcp-proxy config file, chmod 0600."""
+    """Write quarry section to mcp-proxy config file atomically, chmod 0600."""
     content = (
         "[quarry]\n"
         f'url = "{url}"\n'
@@ -41,10 +41,16 @@ def write_proxy_config(url: str, token: str) -> None:
         f'Authorization = "Bearer {token}"\n'
     )
     MCP_PROXY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(str(MCP_PROXY_CONFIG_PATH), flags, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
+    fd = os.open(str(tmp), flags, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+    except:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(MCP_PROXY_CONFIG_PATH)
     try:
         MCP_PROXY_CONFIG_PATH.chmod(0o600)  # belt-and-suspenders for overwrite case
     except OSError as exc:
@@ -89,13 +95,15 @@ def _ws_to_http(url: str) -> str:
     return url
 
 
-def validate_connection(host: str, port: int, token: str) -> tuple[bool, str]:
-    """HTTP GET /status with Bearer token. Return (ok, error_message)."""
-    url = f"http://{host}:{port}/status"
+def validate_connection(
+    host: str, port: int, token: str, scheme: str = "http"
+) -> tuple[bool, str]:
+    """HTTP(S) GET /status with Bearer token. Return (ok, error_message)."""
+    url = f"{scheme}://{host}:{port}/status"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
     try:
-        urllib.request.urlopen(req, timeout=10)  # noqa: S310
-        return True, ""
+        with urllib.request.urlopen(req, timeout=10) as _:  # noqa: S310
+            return True, ""
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             return False, "Authentication failed — check --api-key."
@@ -106,12 +114,13 @@ def validate_connection(host: str, port: int, token: str) -> tuple[bool, str]:
 
 
 def validate_connection_from_ws_url(ws_url: str, token: str) -> tuple[bool, str]:
-    """Parse ws:// URL and validate via HTTP. Used by remote list --ping."""
+    """Parse ws:// or wss:// URL and validate via HTTP/HTTPS."""
     http_url = _ws_to_http(ws_url)
     parsed = urllib.parse.urlparse(http_url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 8420
-    return validate_connection(host, port, token)
+    scheme = parsed.scheme or "http"
+    return validate_connection(host, port, token, scheme=scheme)
 
 
 def mask_token(token: str) -> str:

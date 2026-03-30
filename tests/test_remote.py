@@ -5,6 +5,7 @@ from __future__ import annotations
 import stat
 import tomllib
 import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from quarry.remote import (
     mask_token,
     read_proxy_config,
     validate_connection,
+    validate_connection_from_ws_url,
     write_proxy_config,
 )
 
@@ -168,6 +170,27 @@ class TestValidateConnection:
             ok, reason = validate_connection("localhost", 8420, "sk-test")
         assert ok is False
         assert "Could not connect to localhost:8420" in reason
+
+
+class TestValidateConnectionFromWsUrl:
+    def test_wss_url_uses_https_scheme(self) -> None:
+        captured: list[str] = []
+
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = lambda s: MagicMock()
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        def fake_urlopen(req: urllib.request.Request, timeout: int) -> MagicMock:
+            captured.append(req.full_url)
+            return mock_ctx
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            validate_connection_from_ws_url("wss://host:8420/mcp", "token")
+
+        assert len(captured) == 1
+        assert captured[0].startswith("https://"), (
+            f"Expected https:// URL but got: {captured[0]}"
+        )
 
 
 class TestMaskToken:

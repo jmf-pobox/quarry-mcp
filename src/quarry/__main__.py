@@ -61,6 +61,8 @@ from quarry.sync_registry import (
 configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
 
+_LOCALHOST_NAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
 _COMMAND_ORDER: list[str] = [
     # Product commands
     "find",
@@ -739,6 +741,12 @@ def login_cmd(
     if not ok:
         err_console.print(f"Error: {reason}", style="red")
         raise typer.Exit(code=1)
+    if host not in _LOCALHOST_NAMES:
+        err_console.print(
+            f"Warning: connection to {host} uses unencrypted transport (ws://). "
+            "Credentials are sent in cleartext. Use on trusted networks only.",
+            style="yellow",
+        )
     try:
         write_proxy_config(f"ws://{host}:{port}/mcp", api_key)
     except PermissionWarning as exc:
@@ -799,6 +807,9 @@ def remote_list_cmd(
         return
     url = quarry_cfg.get("url", "")
     auth_header = quarry_cfg.get("headers", {}).get("Authorization", "")
+    if not url or not auth_header.startswith("Bearer "):
+        _emit({"remote": None}, "No remote configured (config is incomplete).")
+        return
     token = auth_header.removeprefix("Bearer ").strip()
     masked = mask_token(token)
     text = f"Remote: {url}  token: {masked}"

@@ -2046,3 +2046,13 @@ class TestRemoteListCmd:
         _reset_globals()
         assert result.exit_code == 1
         assert "Malformed" in result.output
+
+    def test_incomplete_config_shows_no_remote(self) -> None:
+        with patch(
+            "quarry.__main__.read_proxy_config",
+            return_value={"quarry": {"url": ""}},
+        ):
+            result = runner.invoke(app, ["remote", "list"])
+        _reset_globals()
+        assert result.exit_code == 0
+        assert "No remote configured" in result.output
