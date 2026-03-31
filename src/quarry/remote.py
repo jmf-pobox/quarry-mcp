@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import re
 import ssl
@@ -171,11 +172,17 @@ def mask_token(token: str) -> str:
 
 
 def fetch_ca_cert(host: str, port: int) -> bytes:
-    """Fetch the CA certificate from the quarry server over plain HTTP.
+    """Fetch the CA certificate from the quarry server (TOFU bootstrap).
+
+    Connects over HTTPS with SSL verification disabled — no TLS verification is
+    possible yet because we don't have the CA cert.  The user verifies the
+    fingerprint interactively before trusting.
 
     This is the TOFU bootstrap step — no TLS verification is possible yet
     because we don't have the CA cert.  The user verifies the fingerprint
-    interactively before trusting.
+    interactively before trusting.  Connecting over HTTPS without verification
+    is no less safe than plain HTTP: an attacker who can MITM a TLS endpoint
+    can equally MITM plain HTTP.
 
     Args:
         host: Server hostname or IP.
@@ -188,30 +195,38 @@ def fetch_ca_cert(host: str, port: int) -> bytes:
         ValueError: If the fetch fails for any reason, with a human-readable
             message describing what went wrong.
     """
-    url = f"http://{host}:{port}/ca.crt"
-    req = urllib.request.Request(url)  # noqa: S310
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=10)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
-            data: bytes = resp.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
+        conn.request("GET", "/ca.crt")
+        resp = conn.getresponse()
+        if resp.status == 404:
             raise ValueError(
                 f"Server at {host}:{port} has no CA certificate. "
                 "Run 'quarry install' on the server first."
-            ) from exc
+            )
+        if resp.status != 200:
+            raise ValueError(
+                f"Failed to fetch CA cert from https://{host}:{port}/ca.crt: "
+                f"HTTP {resp.status}."
+            )
+        data: bytes = resp.read()
+    except ValueError:
+        raise
+    except OSError as exc:
         raise ValueError(
-            f"Failed to fetch CA cert from {host}:{port}: HTTP {exc.code}."
-        ) from exc
-    except (urllib.error.URLError, OSError) as exc:
-        reason: object = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-        raise ValueError(
-            f"Could not reach {host}:{port} to fetch CA cert — {reason}. "
+            f"Could not reach {host}:{port} to fetch CA cert — {exc}. "
             "Check that the quarry server is running and reachable."
         ) from exc
+    finally:
+        conn.close()
 
     if not data.strip().startswith(b"-----BEGIN CERTIFICATE-----"):
         raise ValueError(
-            f"Server at {host}:{port} returned unexpected data for /ca.crt "
+            f"Server at https://{host}:{port} returned unexpected data for /ca.crt "
             "(expected PEM certificate)."
         )
     return data

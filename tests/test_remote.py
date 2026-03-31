@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import http.client
+import ssl
 import stat
 import tomllib
 import urllib.error
@@ -265,80 +267,108 @@ class TestWriteProxyConfigWithCaCert:
 
 
 class TestFetchCaCert:
-    def _make_response(self, body: bytes) -> MagicMock:
+    def _make_conn(self, status: int, body: bytes) -> MagicMock:
+        """Return a mock HTTPSConnection whose getresponse() yields status and body."""
         mock_resp = MagicMock()
+        mock_resp.status = status
         mock_resp.read.return_value = body
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        return mock_resp
+        mock_conn = MagicMock(spec=http.client.HTTPSConnection)
+        mock_conn.getresponse.return_value = mock_resp
+        return mock_conn
 
     def test_success(self) -> None:
         pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
-        with patch("urllib.request.urlopen", return_value=self._make_response(pem)):
+        mock_conn = self._make_conn(200, pem)
+        with patch("http.client.HTTPSConnection", return_value=mock_conn):
             result = fetch_ca_cert("host.example.com", 8420)
         assert result == pem
 
     def test_404_raises_value_error(self) -> None:
-        exc = urllib.error.HTTPError(
-            url="http://host:8420/ca.crt",
-            code=404,
-            msg="Not Found",
-            hdrs=MagicMock(),
-            fp=None,
-        )
+        mock_conn = self._make_conn(404, b"Not Found")
         with (
-            patch("urllib.request.urlopen", side_effect=exc),
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
             pytest.raises(ValueError, match="no CA certificate"),
         ):
             fetch_ca_cert("host.example.com", 8420)
 
     def test_other_http_error_raises_value_error(self) -> None:
-        exc = urllib.error.HTTPError(
-            url="http://host:8420/ca.crt",
-            code=500,
-            msg="Internal Server Error",
-            hdrs=MagicMock(),
-            fp=None,
-        )
+        mock_conn = self._make_conn(500, b"Internal Server Error")
         with (
-            patch("urllib.request.urlopen", side_effect=exc),
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
             pytest.raises(ValueError, match="HTTP 500"),
         ):
             fetch_ca_cert("host.example.com", 8420)
 
     def test_connection_error_raises_value_error(self) -> None:
-        exc = urllib.error.URLError("connection refused")
+        mock_conn = MagicMock(spec=http.client.HTTPSConnection)
+        mock_conn.request.side_effect = OSError("connection refused")
         with (
-            patch("urllib.request.urlopen", side_effect=exc),
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
             pytest.raises(ValueError, match="Could not reach"),
         ):
             fetch_ca_cert("host.example.com", 8420)
 
     def test_non_pem_response_raises_value_error(self) -> None:
+        mock_conn = self._make_conn(200, b"not a certificate")
         with (
-            patch(
-                "urllib.request.urlopen",
-                return_value=self._make_response(b"not a certificate"),
-            ),
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
             pytest.raises(ValueError, match="unexpected data"),
         ):
             fetch_ca_cert("host.example.com", 8420)
 
-    def test_uses_plain_http(self) -> None:
-        """Fetch must use plain http:// for the TOFU bootstrap."""
+    def test_uses_https_not_http(self) -> None:
+        """Fetch must use HTTPSConnection (TOFU bootstrap, HTTPS with verify=False)."""
         pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
-        captured_urls: list[str] = []
+        mock_conn = self._make_conn(200, pem)
 
-        def capture(req: urllib.request.Request, timeout: int) -> MagicMock:
-            captured_urls.append(req.full_url)
-            return self._make_response(pem)
-
-        with patch("urllib.request.urlopen", side_effect=capture):
+        with patch("http.client.HTTPSConnection", return_value=mock_conn) as mock_cls:
             fetch_ca_cert("host.example.com", 8420)
 
-        assert len(captured_urls) == 1
-        assert captured_urls[0].startswith("http://")
-        assert "https" not in captured_urls[0]
+        # HTTPSConnection must be constructed — plain HTTPConnection must not be used.
+        mock_cls.assert_called_once()
+        call_args = mock_cls.call_args
+        assert call_args.args[0] == "host.example.com"
+        assert call_args.args[1] == 8420
+
+    def test_ssl_context_disables_verification(self) -> None:
+        """TOFU bootstrap must connect with check_hostname=False and CERT_NONE."""
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        mock_conn = self._make_conn(200, pem)
+        captured_contexts: list[ssl.SSLContext] = []
+
+        def capture_cls(
+            host: str, port: int, context: ssl.SSLContext, timeout: int
+        ) -> MagicMock:
+            captured_contexts.append(context)
+            return mock_conn
+
+        with patch("http.client.HTTPSConnection", side_effect=capture_cls):
+            fetch_ca_cert("host.example.com", 8420)
+
+        assert len(captured_contexts) == 1
+        ctx = captured_contexts[0]
+        assert isinstance(ctx, ssl.SSLContext)
+        assert ctx.check_hostname is False
+        assert ctx.verify_mode == ssl.CERT_NONE
+
+    def test_conn_closed_on_success(self) -> None:
+        """Connection must be closed after a successful fetch."""
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        mock_conn = self._make_conn(200, pem)
+        with patch("http.client.HTTPSConnection", return_value=mock_conn):
+            fetch_ca_cert("host.example.com", 8420)
+        mock_conn.close.assert_called_once()
+
+    def test_conn_closed_on_error(self) -> None:
+        """Connection must be closed even when the request raises OSError."""
+        mock_conn = MagicMock(spec=http.client.HTTPSConnection)
+        mock_conn.request.side_effect = OSError("timeout")
+        with (
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
+            pytest.raises(ValueError, match="Could not reach"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+        mock_conn.close.assert_called_once()
 
 
 class TestStoreCaCert:
