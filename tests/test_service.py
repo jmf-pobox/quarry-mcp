@@ -11,6 +11,7 @@ import pytest
 from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
+    _get_tls_hostname,
     _quarry_exec_args,
     detect_platform,
     install,
@@ -21,6 +22,25 @@ from quarry.service import (
 # ~/.punt-labs/quarry/tls/ during tests.
 _PATCH_TLS = patch("quarry.service.write_tls_files")
 _PATCH_CERT_FP = patch("quarry.service.cert_fingerprint", return_value="")
+
+
+class TestGetTlsHostname:
+    def test_env_var_takes_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QUARRY_TLS_HOSTNAME", "my.server.example.com")
+        assert _get_tls_hostname() == "my.server.example.com"
+
+    def test_fqdn_used_when_has_dot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("QUARRY_TLS_HOSTNAME", raising=False)
+        monkeypatch.setattr("socket.getfqdn", lambda: "server.example.com")
+        assert _get_tls_hostname() == "server.example.com"
+
+    def test_gethostname_fallback_when_no_dot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUARRY_TLS_HOSTNAME", raising=False)
+        monkeypatch.setattr("socket.getfqdn", lambda: "server")
+        monkeypatch.setattr("socket.gethostname", lambda: "server")
+        assert _get_tls_hostname() == "server"
 
 
 class TestDetectPlatform:

@@ -224,6 +224,23 @@ def _systemd_status() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _get_tls_hostname() -> str:
+    """Return the best available hostname for TLS certificate SANs.
+
+    Preference order:
+    1. ``QUARRY_TLS_HOSTNAME`` env var — explicit override for production FQDNs.
+    2. ``socket.getfqdn()`` when it contains a dot (looks like a real FQDN).
+    3. ``socket.gethostname()`` fallback.
+    """
+    env_hostname = os.environ.get("QUARRY_TLS_HOSTNAME", "").strip()
+    if env_hostname:
+        return env_hostname
+    fqdn = socket.getfqdn()
+    if fqdn and "." in fqdn:
+        return fqdn
+    return socket.gethostname()
+
+
 def detect_platform() -> str:
     """Return ``'macos'`` or ``'linux'``.  Raises on unsupported platforms."""
     system = platform.system()
@@ -239,7 +256,7 @@ def install() -> str:
     """Install quarry as a system service.  Returns a status message."""
     # Generate TLS certificates before registering the service so that the
     # service file can include --tls in its exec args.
-    hostname = socket.gethostname()
+    hostname = _get_tls_hostname()
     write_tls_files(hostname)
     ca_crt = TLS_DIR / "ca.crt"
     fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
