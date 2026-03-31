@@ -41,14 +41,15 @@ def read_proxy_config() -> dict[str, Any]:
 
 def write_proxy_config(
     url: str,
-    token: str,
+    token: str | None,
     ca_cert_path: str | None = None,
 ) -> None:
     """Write quarry section to mcp-proxy config file atomically, chmod 0600.
 
     Args:
         url: The wss:// or ws:// WebSocket URL for the quarry MCP endpoint.
-        token: The Bearer token for authentication.
+        token: The Bearer token for authentication, or None for unauthenticated
+            servers.  When None the ``[quarry.headers]`` section is omitted.
         ca_cert_path: Optional path to a CA certificate PEM for SSL verification.
             Written as ``ca_cert`` in the TOML when provided.
     """
@@ -58,11 +59,12 @@ def write_proxy_config(
     ]
     if ca_cert_path is not None:
         lines.append(f'ca_cert = "{_toml_escape(ca_cert_path)}"\n')
-    lines += [
-        "\n",
-        "[quarry.headers]\n",
-        f'Authorization = "Bearer {_toml_escape(token)}"\n',
-    ]
+    if token is not None:
+        lines += [
+            "\n",
+            "[quarry.headers]\n",
+            f'Authorization = "Bearer {_toml_escape(token)}"\n',
+        ]
     content = "".join(lines)
     MCP_PROXY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
@@ -122,22 +124,25 @@ def _ws_to_http(url: str) -> str:
 def validate_connection(
     host: str,
     port: int,
-    token: str,
+    token: str | None,
     scheme: str = "http",
     ca_cert_path: str | None = None,
 ) -> tuple[bool, str]:
-    """HTTP(S) GET /status with Bearer token. Return (ok, error_message).
+    """HTTP(S) GET /status with optional Bearer token. Return (ok, error_message).
 
     Args:
         host: Server hostname or IP.
         port: Server port.
-        token: Bearer token for authentication.
+        token: Bearer token for authentication, or None for unauthenticated servers.
         scheme: URL scheme ("http" or "https").
         ca_cert_path: Optional path to a CA certificate PEM.  When provided,
             TLS verification uses this CA instead of the system trust store.
     """
     url = f"{scheme}://{host}:{port}/status"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
+    auth_headers: dict[str, str] = (
+        {"Authorization": f"Bearer {token}"} if token is not None else {}
+    )
+    req = urllib.request.Request(url, headers=auth_headers)  # noqa: S310
     ssl_ctx: ssl.SSLContext | None = None
     if scheme == "https" and ca_cert_path is not None:
         ssl_ctx = ssl.create_default_context()
@@ -154,7 +159,7 @@ def validate_connection(
         return False, f"Could not connect to {host}:{port} — {reason}."
 
 
-def validate_connection_from_ws_url(ws_url: str, token: str) -> tuple[bool, str]:
+def validate_connection_from_ws_url(ws_url: str, token: str | None) -> tuple[bool, str]:
     """Parse ws:// or wss:// URL and validate via HTTP/HTTPS."""
     http_url = _ws_to_http(ws_url)
     parsed = urllib.parse.urlparse(http_url)

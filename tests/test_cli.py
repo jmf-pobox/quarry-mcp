@@ -264,11 +264,12 @@ class TestStatusCmd:
             "embedding_model": "snowflake-arctic-embed-m-v1.5",
             "provider": "cuda",
         }
-        proxy_config = {
+        inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "ca_cert": "/path/to/ca.crt",
             "headers": {"Authorization": "Bearer tok"},
         }
+        proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
@@ -278,7 +279,7 @@ class TestStatusCmd:
             result = runner.invoke(app, ["status"])
 
         assert result.exit_code == 0
-        mock_get.assert_called_once_with("/status", proxy_config)
+        mock_get.assert_called_once_with("/status", inner_config)
         assert "42" in result.output
         assert "1,200" in result.output
 
@@ -619,11 +620,12 @@ class TestFindCmd:
                 },
             ]
         }
-        proxy_config = {
+        inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "ca_cert": "/path/to/ca.crt",
             "headers": {"Authorization": "Bearer tok"},
         }
+        proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
@@ -642,10 +644,11 @@ class TestFindCmd:
         assert "remote search result text" in result.output
 
     def test_remote_routing_includes_filters(self):
-        proxy_config = {
+        inner_config = {
             "url": "wss://quarry.example.com:8420/mcp",
             "headers": {"Authorization": "Bearer tok"},
         }
+        proxy_config = {"quarry": inner_config}
         with (
             patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
             patch(
@@ -2209,14 +2212,33 @@ class TestLoginCmd:
             "wss://okinos.example.com:9000/mcp", "sk-test", "/fake/quarry-ca.crt"
         )
 
-    def test_empty_api_key_exits_with_error(self) -> None:
-        """Empty --api-key exits before any network calls."""
-        with patch("quarry.__main__.fetch_ca_cert") as mock_fetch:
-            result = runner.invoke(app, ["login", "host.example.com", "--api-key", ""])
+    def test_no_api_key_proceeds_without_auth(self) -> None:
+        """Omitting --api-key succeeds for unauthenticated servers (token=None)."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch(
+                "quarry.__main__.validate_connection", return_value=(True, "")
+            ) as mock_validate,
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+        ):
+            result = runner.invoke(app, ["login", "okinos.example.com", "--yes"])
         _reset_globals()
-        assert result.exit_code == 1
-        assert "required" in result.output
-        mock_fetch.assert_not_called()
+        assert result.exit_code == 0, result.output
+        # validate_connection called with token=None
+        mock_validate.assert_called_once_with(
+            "okinos.example.com",
+            8420,
+            None,
+            scheme="https",
+            ca_cert_path="/fake/quarry-ca.crt",
+        )
+        # write_proxy_config called with token=None (no Authorization header)
+        mock_write.assert_called_once_with(
+            "wss://okinos.example.com:8420/mcp", None, "/fake/quarry-ca.crt"
+        )
 
     def test_always_uses_wss(self) -> None:
         """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""

@@ -65,6 +65,21 @@ class TestWriteProxyConfig:
         data = read_proxy_config()
         assert data["quarry"]["headers"]["Authorization"] == f"Bearer {token}"
 
+    def test_token_none_omits_auth_header(self, proxy_config_path: Path) -> None:
+        """When token=None the [quarry.headers] section must not appear."""
+        write_proxy_config("wss://host:8420/mcp", None)
+        content = proxy_config_path.read_text()
+        assert "[quarry]" in content
+        assert "Authorization" not in content
+        assert "[quarry.headers]" not in content
+
+    def test_token_none_parses_as_valid_toml(self, proxy_config_path: Path) -> None:
+        """Config written without a token must parse cleanly."""
+        write_proxy_config("wss://host:8420/mcp", None)
+        data = read_proxy_config()
+        assert data["quarry"]["url"] == "wss://host:8420/mcp"
+        assert "headers" not in data["quarry"]
+
 
 class TestReadProxyConfig:
     def test_returns_empty_when_missing(self, proxy_config_path: Path) -> None:
@@ -204,6 +219,28 @@ class TestValidateConnection:
             ok, reason = validate_connection("localhost", 8420, "sk-test")
         assert ok is False
         assert "Could not connect to localhost:8420" in reason
+
+    def test_token_none_sends_no_auth_header(self) -> None:
+        """When token=None no Authorization header is sent."""
+        captured_requests: list[urllib.request.Request] = []
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = lambda s: MagicMock()
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+
+        def capture_urlopen(
+            req: urllib.request.Request,
+            timeout: int,
+            context: object = None,
+        ) -> MagicMock:
+            captured_requests.append(req)
+            return mock_ctx
+
+        with patch("urllib.request.urlopen", side_effect=capture_urlopen):
+            ok, _ = validate_connection("localhost", 8420, None)
+
+        assert ok is True
+        assert len(captured_requests) == 1
+        assert "Authorization" not in captured_requests[0].headers
 
 
 class TestValidateConnectionFromWsUrl:

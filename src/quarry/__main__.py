@@ -340,8 +340,8 @@ def find_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
-    proxy_config = read_proxy_config()
-    if proxy_config:
+    proxy_config = read_proxy_config().get("quarry", {})
+    if proxy_config and "url" in proxy_config:
         params: dict[str, str | int] = {"q": query, "limit": limit}
         if collection:
             params["collection"] = collection
@@ -628,8 +628,8 @@ def remember(
 @_cli_errors
 def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
-    proxy_config = read_proxy_config()
-    if proxy_config:
+    proxy_config = read_proxy_config().get("quarry", {})
+    if proxy_config and "url" in proxy_config:
         remote_data = _remote_https_get("/status", proxy_config)
         _emit(remote_data, format_status(remote_data))
         return
@@ -837,14 +837,13 @@ def login_cmd(
     host: Annotated[str, typer.Argument(help="Remote quarry host (hostname or IP)")],
     port: Annotated[int, typer.Option("--port", "-p", help="Port")] = DEFAULT_PORT,
     api_key: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--api-key",
-            help="Bearer token for remote server",
-            prompt=True,
+            help="Bearer token for remote server (omit for unauthenticated servers)",
             hide_input=True,
         ),
-    ] = "",
+    ] = None,
     yes: Annotated[
         bool,
         typer.Option(
@@ -856,15 +855,12 @@ def login_cmd(
 ) -> None:
     """Connect to a remote quarry server using TOFU certificate pinning.
 
-    Fetches the server's CA certificate over plain HTTP, displays its
-    fingerprint, prompts for trust confirmation, then validates the
-    connection over HTTPS/WSS and writes the mcp-proxy config.
+    Fetches the server's CA certificate over HTTPS with SSL verification
+    disabled (TOFU bootstrap), displays its fingerprint, prompts for trust
+    confirmation, then validates the connection over HTTPS/WSS and writes
+    the mcp-proxy config.
     """
-    if not api_key:
-        err_console.print("Error: --api-key is required.", style="red")
-        raise typer.Exit(code=1)
-
-    # Step 1: Fetch CA cert over plain HTTP (bootstrap — no TLS yet).
+    # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
     try:
         ca_cert_pem = fetch_ca_cert(host, port)
     except ValueError as exc:
