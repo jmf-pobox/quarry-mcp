@@ -349,9 +349,15 @@ def _write_file(path: Path, data: bytes, mode: int) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(str(tmp), flags, mode)
     try:
-        with os.fdopen(fd, "wb") as f:
+        f = os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        with f:
             f.write(data)
-        tmp.rename(path)
-    except:
+        tmp.replace(path)
+    except BaseException:
         tmp.unlink(missing_ok=True)
         raise

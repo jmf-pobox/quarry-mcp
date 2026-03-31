@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import stat
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from quarry.tls import (
     TLS_DIR,
+    _write_file,
     cert_fingerprint,
     generate_ca,
     generate_server_cert,
@@ -344,3 +346,93 @@ class TestWriteTlsFiles:
             pytest.raises(ValueError, match="Partial CA state"),
         ):
             write_tls_files("myhost.local")
+
+
+class TestWriteFile:
+    """Tests for _write_file — atomic write with fd-leak safety."""
+
+    def test_writes_content_correctly(self, tmp_path: Path) -> None:
+        target = tmp_path / "out.bin"
+        data = b"hello world"
+        _write_file(target, data, 0o600)
+        assert target.read_bytes() == data
+
+    def test_no_tmp_file_left_on_success(self, tmp_path: Path) -> None:
+        target = tmp_path / "out.bin"
+        _write_file(target, b"data", 0o600)
+        assert not (tmp_path / "out.tmp").exists()
+
+    def test_fd_closed_when_fdopen_raises(self, tmp_path: Path) -> None:
+        """If os.fdopen raises, the raw fd must be closed — not leaked."""
+        target = tmp_path / "out.bin"
+        closed_fds: list[int] = []
+        raw_fd: list[int] = []
+
+        real_os_open = os.open
+        real_os_close = os.close
+
+        def fake_os_open(path: str, flags: int, mode: int = 0o777) -> int:
+            fd = real_os_open(path, flags, mode)
+            raw_fd.append(fd)
+            return fd
+
+        def fake_os_fdopen(fd: int, *args: object, **kwargs: object) -> object:
+            raise OSError("simulated resource exhaustion")
+
+        def fake_os_close(fd: int) -> None:
+            closed_fds.append(fd)
+            real_os_close(fd)
+
+        with (
+            patch("quarry.tls.os.open", side_effect=fake_os_open),
+            patch("quarry.tls.os.fdopen", side_effect=fake_os_fdopen),
+            patch("quarry.tls.os.close", side_effect=fake_os_close),
+            pytest.raises(OSError, match="simulated resource exhaustion"),
+        ):
+            _write_file(target, b"data", 0o600)
+
+        assert raw_fd, "os.open was not called"
+        assert raw_fd[0] in closed_fds, (
+            f"fd {raw_fd[0]} was not closed after os.fdopen failure"
+        )
+
+    def test_tmp_file_removed_when_fdopen_raises(self, tmp_path: Path) -> None:
+        """The .tmp sibling must be cleaned up when os.fdopen fails."""
+        target = tmp_path / "out.bin"
+
+        with (
+            patch("quarry.tls.os.fdopen", side_effect=OSError("simulated")),
+            pytest.raises(OSError),
+        ):
+            _write_file(target, b"data", 0o600)
+
+        assert not (tmp_path / "out.tmp").exists()
+
+    def test_tmp_file_removed_when_write_raises(self, tmp_path: Path) -> None:
+        """The .tmp sibling must be cleaned up when f.write() fails."""
+        target = tmp_path / "out.bin"
+
+        class _FailingWriter:
+            """File-like that raises on write to simulate a write error."""
+
+            def write(self, data: bytes) -> int:
+                raise OSError("write failed")
+
+            def __enter__(self) -> _FailingWriter:
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                pass
+
+        def fdopen_failing(_fd: int, _mode: str = "r") -> _FailingWriter:
+            # Close the real fd so the OS doesn't leak it in the test process.
+            os.close(_fd)
+            return _FailingWriter()
+
+        with (
+            patch("quarry.tls.os.fdopen", side_effect=fdopen_failing),
+            pytest.raises(OSError, match="write failed"),
+        ):
+            _write_file(target, b"data", 0o600)
+
+        assert not (tmp_path / "out.tmp").exists()

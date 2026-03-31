@@ -188,6 +188,18 @@ ok "$PLUGIN_NAME plugin installed"
 
 cleanup_https_rewrite
 
+# --- Step 8.5: Configure local TLS access ---
+
+info "Configuring local TLS connection..."
+printf '\n'
+if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login localhost --yes 2>/dev/null; then
+  ok "Local TLS connection configured — plugin will use wss://localhost:8420/mcp"
+else
+  warn "quarry login localhost failed — plugin will use local stdio fallback (quarry mcp)"
+  warn "To configure TLS later: quarry login localhost --yes"
+fi
+printf '\n'
+
 # --- Step 8: Verify ---
 
 info "Verifying installation..."

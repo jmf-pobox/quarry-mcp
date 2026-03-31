@@ -13,7 +13,7 @@ import tempfile
 import urllib.parse
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import typer.core
@@ -316,6 +316,15 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
 # ---------------------------------------------------------------------------
 
 
+def _safe_proxy_config() -> dict[str, Any]:
+    """Return parsed proxy config, falling back to {} on malformed TOML."""
+    try:
+        return read_proxy_config()
+    except ValueError as exc:
+        err_console.print(f"Warning: {exc}", style="yellow")
+        return {}
+
+
 @app.command(name="find")
 @_cli_errors
 def find_cmd(
@@ -347,7 +356,7 @@ def find_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
-    proxy_config = read_proxy_config().get("quarry", {})
+    proxy_config = _safe_proxy_config().get("quarry", {})
     if proxy_config and "url" in proxy_config:
         params: dict[str, str | int] = {"q": query, "limit": limit}
         if collection:
@@ -372,16 +381,22 @@ def find_cmd(
         lines: list[str] = []
         for r in remote_results:
             similarity = round(float(str(r.get("similarity", 0))), 4)
-            lines.append(
-                f"\n[{r.get('document_name', '')} | {r.get('collection', '')}]"
-                f" (similarity: {similarity})"
-            )
+            meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
+            doc = r.get("document_name", "")
+            pg = r.get("page_number", "")
+            lines.append(f"\n[{doc} p.{pg} | {meta}] (similarity: {similarity})")
             text = str(r.get("text", ""))
             lines.append(text[:300])
             json_results.append(
                 {
                     "document_name": r.get("document_name", ""),
                     "collection": r.get("collection", ""),
+                    "page_number": r.get("page_number", 0),
+                    "chunk_index": r.get("chunk_index", 0),
+                    "page_type": r.get("page_type", ""),
+                    "source_format": r.get("source_format", ""),
+                    "agent_handle": r.get("agent_handle", ""),
+                    "memory_type": r.get("memory_type", ""),
                     "similarity": similarity,
                     "text": text,
                 }
@@ -639,7 +654,7 @@ def remember(
 @_cli_errors
 def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
-    proxy_config = read_proxy_config().get("quarry", {})
+    proxy_config = _safe_proxy_config().get("quarry", {})
     if proxy_config and "url" in proxy_config:
         remote_data = _remote_https_get("/status", proxy_config)
         _emit(remote_data, format_status(remote_data))
@@ -893,10 +908,8 @@ def login_cmd(
     # so a failed validation does not leave an orphaned cert on disk.
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".crt")
     try:
-        try:
-            os.write(tmp_fd, ca_cert_pem)
-        finally:
-            os.close(tmp_fd)
+        with os.fdopen(tmp_fd, "wb") as tmp_file:
+            tmp_file.write(ca_cert_pem)
         ok, reason = validate_connection(
             host, port, api_key, scheme="https", ca_cert_path=tmp_path
         )
@@ -970,7 +983,7 @@ def remote_list_cmd(
     ping: Annotated[bool, typer.Option("--ping", help="Check server health")] = False,
 ) -> None:
     """Show configured remote server."""
-    config = read_proxy_config()
+    config = _safe_proxy_config()
     quarry_cfg = config.get("quarry", {})
     if not quarry_cfg:
         _emit({"remote": None}, "No remote configured.")
