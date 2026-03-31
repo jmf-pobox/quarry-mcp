@@ -276,7 +276,7 @@ def store_ca_cert(cert_pem: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(cert_pem)
+        tmp.replace(CA_CERT_PATH)
     except:
         tmp.unlink(missing_ok=True)
         raise
-    tmp.replace(CA_CERT_PATH)
