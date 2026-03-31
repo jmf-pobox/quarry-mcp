@@ -14,6 +14,29 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **tool**: `quarry login <host> [--port N] [--api-key KEY] [--yes]` — TOFU login
+  flow: fetches server CA cert over HTTPS (verify-off bootstrap), displays SHA256
+  fingerprint, prompts for confirmation, stores pinned CA cert, validates connection,
+  writes `~/.punt-labs/mcp-proxy/quarry.toml` with `wss://` URL and `ca_cert` path.
+- **tool**: `quarry logout` — removes quarry section from mcp-proxy config.
+- **tool**: `quarry remote list [--ping]` — shows configured remote server;
+  `--ping` validates connectivity with the pinned CA cert.
+- **tool**: `quarry find` and `quarry status` route to the remote HTTPS API when
+  a remote server is configured in `quarry.toml`.
+- **infra**: TLS certificate generation — self-signed EC P-256 CA and server cert
+  with full x509 extension set. Certs written atomically to `~/.punt-labs/quarry/tls/`
+  with 0600/0644 permissions.
+- **infra**: `quarry serve --tls` — enables HTTPS/WSS; TLS certs auto-generated
+  via `quarry install` before serving.
+- **infra**: `/ca.crt` HTTP endpoint (auth-exempt) — serves CA cert PEM for TOFU
+  bootstrap.
+- **infra**: `install-server.sh` — server-only installer (no claude CLI required).
+- **infra**: `install-client.sh` — client-only installer (no model or daemon).
+- **infra**: `install-both.sh` — single-machine installer with loopback TLS.
+- **plugin**: mcp-proxy invocation updated to `mcp-proxy --config quarry`.
+
 ## [1.10.1] - 2026-03-29
 
 ### Fixed
