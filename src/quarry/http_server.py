@@ -41,6 +41,7 @@ from quarry.database import (
     list_documents,
 )
 from quarry.provider import provider_display
+from quarry.sync_registry import list_registrations, open_registry
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -242,6 +243,15 @@ def _status_route(request: Request) -> JSONResponse:
     chunks = count_chunks(ctx.db)
     cols = db_list_collections(ctx.db)
 
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = list_registrations(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
+
     db_size_bytes = (
         sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
         if settings.lancedb_path.exists()
@@ -253,6 +263,7 @@ def _status_route(request: Request) -> JSONResponse:
             "document_count": len(docs),
             "collection_count": len(cols),
             "chunk_count": chunks,
+            "registered_directories": len(regs),
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,

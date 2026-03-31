@@ -18,7 +18,6 @@ import shlex
 import socket
 import subprocess
 import sys
-import tempfile
 import textwrap
 from pathlib import Path
 from xml.sax.saxutils import escape as _xml_escape
@@ -43,28 +42,20 @@ def _write_env_file(api_key: str) -> None:
         api_key: The API key value to store.
     """
     _ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    content = f"QUARRY_API_KEY={api_key}\n"
-    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=_ENV_FILE.parent, suffix=".tmp")
-    tmp_path = Path(tmp_path_str)
-    # Restrict permissions to 0600 before writing — mkstemp creates 0600 by default
-    # on most platforms, but set explicitly for clarity and portability.
-    tmp_path.chmod(0o600)
+    tmp_path = _ENV_FILE.with_name(_ENV_FILE.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(str(tmp_path), flags, 0o600)
     try:
-        try:
-            tmp_file = os.fdopen(tmp_fd, "w")
-        except BaseException:
-            os.close(tmp_fd)
-            tmp_path.unlink(missing_ok=True)
-            raise
-        try:
-            with tmp_file:
-                tmp_file.write(content)
-            tmp_path.replace(_ENV_FILE)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-    except Exception:
-        # Ensure the tmp file is gone even if the outer try branches somehow miss it.
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
+        tmp_path.unlink(missing_ok=True)
+        raise
+    try:
+        with f:
+            f.write(f"QUARRY_API_KEY={api_key}\n")
+        tmp_path.replace(_ENV_FILE)
+    except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
 

@@ -25,6 +25,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s = MagicMock()
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
+    s.registry_path = tmp_path / "registry.db"  # does not exist → regs = []
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     return s
@@ -309,6 +310,49 @@ class TestStatus:
         assert data["collection_count"] == 0
         assert "database_path" in data
         assert "embedding_model" in data
+
+    def test_registered_directories_present_and_integer(self, tmp_path: Path) -> None:
+        """registered_directories must appear in the /status response as an int."""
+        settings = _mock_settings(tmp_path)
+        # Create the registry file so registry_path.exists() returns True.
+        settings.registry_path.touch()
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        fake_regs = [MagicMock(), MagicMock()]
+        with (
+            patch("quarry.http_server.list_documents", return_value=[]),
+            patch("quarry.http_server.count_chunks", return_value=0),
+            patch("quarry.http_server.db_list_collections", return_value=[]),
+            patch("quarry.http_server.open_registry", return_value=MagicMock()),
+            patch("quarry.http_server.list_registrations", return_value=fake_regs),
+        ):
+            data = reg_client.get("/status").json()
+
+        assert "registered_directories" in data
+        assert isinstance(data["registered_directories"], int)
+        assert data["registered_directories"] == 2
+
+    def test_registered_directories_zero_when_no_registry(self, tmp_path: Path) -> None:
+        """When registry_path does not exist, registered_directories must be 0."""
+        settings = _mock_settings(tmp_path)
+        # registry_path points to a non-existent file
+        settings.registry_path = tmp_path / "no-registry.db"
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        with (
+            patch("quarry.http_server.list_documents", return_value=[]),
+            patch("quarry.http_server.count_chunks", return_value=0),
+            patch("quarry.http_server.db_list_collections", return_value=[]),
+        ):
+            data = no_reg_client.get("/status").json()
+
+        assert data["registered_directories"] == 0
 
 
 class TestNotFound:
