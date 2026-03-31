@@ -167,8 +167,9 @@ def generate_server_cert(
             san_names.append(x509.IPAddress(ipaddress.ip_address(hostname)))
         except ValueError:
             san_names.append(x509.DNSName(hostname))
-    # Always include 127.0.0.1 as an IP SAN for loopback numeric access.
+    # Always include 127.0.0.1 and ::1 as IP SANs for loopback numeric access.
     san_names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
+    san_names.append(x509.IPAddress(ipaddress.ip_address("::1")))
 
     subject = x509.Name(
         [
@@ -271,9 +272,12 @@ def write_tls_files(hostname: str) -> None:
 
     TLS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Reuse existing CA if present; only generate a new one if missing.
+    # Reuse existing CA if present; only generate a new one if neither file exists.
     # Regenerating the CA would break all clients that pinned the old CA cert.
-    if ca_crt_path.exists() and ca_key_path.exists():
+    ca_crt_exists = ca_crt_path.exists()
+    ca_key_exists = ca_key_path.exists()
+
+    if ca_crt_exists and ca_key_exists:
         logger.info("Reusing existing CA at %s", TLS_DIR)
         ca_cert_pem = ca_crt_path.read_bytes()
         ca_key_pem = ca_key_path.read_bytes()
@@ -295,6 +299,17 @@ def write_tls_files(hostname: str) -> None:
                 "Delete ca.crt and ca.key and re-run 'quarry install'."
             )
             raise ValueError(msg)
+    elif ca_crt_exists or ca_key_exists:
+        # Partial CA state — refuse to proceed rather than silently overwrite.
+        # Silently regenerating the CA would break clients that pinned the old cert.
+        missing = ca_key_path if ca_crt_exists else ca_crt_path
+        present = ca_crt_path if ca_crt_exists else ca_key_path
+        msg = (
+            f"Partial CA state at {TLS_DIR}: {present.name} exists but "
+            f"{missing.name} is missing. Delete both files and re-run "
+            "'quarry install' to regenerate."
+        )
+        raise ValueError(msg)
     else:
         logger.info("Generating new CA for hostname=%r", hostname)
         ca_cert_pem, ca_key_pem = generate_ca(hostname)

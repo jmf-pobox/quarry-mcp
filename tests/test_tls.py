@@ -104,6 +104,14 @@ class TestGenerateServerCert:
         ip_addrs = san.value.get_values_for_type(x509.IPAddress)
         assert ipaddress.IPv4Address("127.0.0.1") in ip_addrs
 
+    def test_san_includes_ipv6_loopback(self) -> None:
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        ip_addrs = san.value.get_values_for_type(x509.IPAddress)
+        assert ipaddress.IPv6Address("::1") in ip_addrs
+
     def test_ip_hostname_uses_ip_san_not_dns_san(self) -> None:
         """RFC 5280: IP address SANs must be iPAddress type, not dNSName."""
         ca_cert, ca_key = self._make_ca()
@@ -291,5 +299,31 @@ class TestWriteTlsFiles:
         with (
             patch("quarry.tls.TLS_DIR", tls_dir),
             pytest.raises(ValueError, match="do not match"),
+        ):
+            write_tls_files("myhost.local")
+
+    def test_partial_ca_state_only_crt_raises(self, tmp_path: Path) -> None:
+        """ca.crt present but ca.key missing → ValueError, not silent regeneration."""
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir(parents=True)
+        ca_cert_pem, _ = generate_ca("myhost.local")
+        (tls_dir / "ca.crt").write_bytes(ca_cert_pem)
+        # ca.key intentionally absent
+        with (
+            patch("quarry.tls.TLS_DIR", tls_dir),
+            pytest.raises(ValueError, match="Partial CA state"),
+        ):
+            write_tls_files("myhost.local")
+
+    def test_partial_ca_state_only_key_raises(self, tmp_path: Path) -> None:
+        """ca.key present but ca.crt missing → ValueError, not silent regeneration."""
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir(parents=True)
+        _, ca_key_pem = generate_ca("myhost.local")
+        (tls_dir / "ca.key").write_bytes(ca_key_pem)
+        # ca.crt intentionally absent
+        with (
+            patch("quarry.tls.TLS_DIR", tls_dir),
+            pytest.raises(ValueError, match="Partial CA state"),
         ):
             write_tls_files("myhost.local")
