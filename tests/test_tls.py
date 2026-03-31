@@ -103,6 +103,28 @@ class TestGenerateServerCert:
         ip_addrs = san.value.get_values_for_type(x509.IPAddress)
         assert ipaddress.IPv4Address("127.0.0.1") in ip_addrs
 
+    def test_ip_hostname_uses_ip_san_not_dns_san(self) -> None:
+        """RFC 5280: IP address SANs must be iPAddress type, not dNSName."""
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "10.0.0.5")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        ip_addrs = san.value.get_values_for_type(x509.IPAddress)
+        dns_names = san.value.get_values_for_type(x509.DNSName)
+        assert ipaddress.IPv4Address("10.0.0.5") in ip_addrs
+        assert "10.0.0.5" not in dns_names
+
+    def test_ipv6_hostname_uses_ip_san_not_dns_san(self) -> None:
+        """RFC 5280: IPv6 address SANs must be iPAddress type, not dNSName."""
+        ca_cert, ca_key = self._make_ca()
+        cert_pem, _ = generate_server_cert(ca_cert, ca_key, "2001:db8::1")
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        ip_addrs = san.value.get_values_for_type(x509.IPAddress)
+        dns_names = san.value.get_values_for_type(x509.DNSName)
+        assert ipaddress.IPv6Address("2001:db8::1") in ip_addrs
+        assert "2001:db8::1" not in dns_names
+
     def test_not_ca(self) -> None:
         ca_cert, ca_key = self._make_ca()
         cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")

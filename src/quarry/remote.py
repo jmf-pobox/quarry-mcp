@@ -120,7 +120,7 @@ def delete_proxy_config() -> bool:
     return True
 
 
-def _ws_to_http(url: str) -> str:
+def ws_to_http(url: str) -> str:
     """Convert ws:// or wss:// URL to http:// or https:// for validation."""
     if url.startswith("wss://"):
         return "https://" + url[6:]
@@ -181,7 +181,7 @@ def validate_connection_from_ws_url(
             TLS verification uses this CA instead of the system trust store.
             Required for servers using self-signed certificates.
     """
-    http_url = _ws_to_http(ws_url)
+    http_url = ws_to_http(ws_url)
     parsed = urllib.parse.urlparse(http_url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 8420

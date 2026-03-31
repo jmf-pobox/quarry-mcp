@@ -57,6 +57,7 @@ from quarry.remote import (
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
+    ws_to_http,
 )
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -266,13 +267,7 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
         OSError: If the connection cannot be established.
     """
     raw_url = str(config["url"])
-    http_base = (
-        "https://" + raw_url[6:]
-        if raw_url.startswith("wss://")
-        else "http://" + raw_url[5:]
-        if raw_url.startswith("ws://")
-        else raw_url
-    )
+    http_base = ws_to_http(raw_url)
     parsed = urllib.parse.urlparse(http_base)
     host = parsed.hostname or "localhost"
     port = parsed.port or 8420

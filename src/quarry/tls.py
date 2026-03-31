@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import ipaddress
 import logging
 import os
 from pathlib import Path
@@ -162,9 +163,12 @@ def generate_server_cert(
     # Build SAN list — always include localhost, add hostname if distinct.
     san_names: list[x509.GeneralName] = [x509.DNSName("localhost")]
     if hostname not in ("localhost", "127.0.0.1", "::1"):
-        san_names.append(x509.DNSName(hostname))
-    # Also include 127.0.0.1 as an IP SAN for numeric access.
-    san_names.append(x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1")))
+        try:
+            san_names.append(x509.IPAddress(ipaddress.ip_address(hostname)))
+        except ValueError:
+            san_names.append(x509.DNSName(hostname))
+    # Always include 127.0.0.1 as an IP SAN for loopback numeric access.
+    san_names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
 
     subject = x509.Name(
         [
