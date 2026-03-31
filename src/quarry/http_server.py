@@ -28,7 +28,7 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
-_AUTH_EXEMPT_PATHS = frozenset({"/health"})
+_AUTH_EXEMPT_PATHS = frozenset({"/health", "/ca.crt"})
 
 # Strip control characters from user-supplied log values (CWE-117).
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -128,6 +128,26 @@ def _health_route(request: Request) -> JSONResponse:
             "status": "ok",
             "uptime_seconds": round(time.monotonic() - ctx.start_time, 1),
         }
+    )
+
+
+def _ca_cert_route(request: Request) -> Response:  # noqa: ARG001
+    """Serve the CA certificate PEM for TOFU bootstrap.
+
+    Auth-exempt so the client can fetch it before login.
+    Returns 404 with JSON error if no cert file exists.
+    """
+    from quarry.tls import TLS_DIR  # noqa: PLC0415
+
+    ca_path = TLS_DIR / "ca.crt"
+    if not ca_path.exists():
+        return JSONResponse(
+            {"error": "No CA certificate found. Run 'quarry install' first."},
+            status_code=404,
+        )
+    return PlainTextResponse(
+        ca_path.read_text(),
+        media_type="application/x-pem-file",
     )
 
 
@@ -300,6 +320,7 @@ def build_app(
 
     routes = [
         Route("/health", _health_route, methods=["GET"]),
+        Route("/ca.crt", _ca_cert_route, methods=["GET"]),
         Route("/search", _search_route, methods=["GET"]),
         Route("/documents", _documents_route, methods=["GET"]),
         Route("/collections", _collections_route, methods=["GET"]),
@@ -388,6 +409,8 @@ def serve(
     host: str = "127.0.0.1",
     api_key: str | None = None,
     cors_origins: frozenset[str] | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
 ) -> None:
     """Start the HTTP + WebSocket server.  Blocks until shutdown signal.
 
@@ -399,6 +422,9 @@ def serve(
         api_key: Optional Bearer token.  When set, all endpoints except
             /health require ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins.  Defaults to ``http://localhost``.
+        ssl_certfile: Path to TLS server certificate PEM.  When provided
+            (with ssl_keyfile), the server uses HTTPS/WSS.
+        ssl_keyfile: Path to TLS server private key PEM.
     """
     _validate_host_key(host, api_key)
 
@@ -420,6 +446,7 @@ def serve(
 
     app = build_app(ctx, lifespan=lifespan)
 
+    tls_enabled = ssl_certfile is not None and ssl_keyfile is not None
     config = uvicorn.Config(
         app,
         host=host,
@@ -427,12 +454,15 @@ def serve(
         log_config=None,
         log_level="warning",
         access_log=False,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
 
     # Write the port file after bind so callers always see the actual port
     # (important when port == 0 requests an OS-assigned ephemeral port).
     original_startup = server.startup
+    scheme = "https" if tls_enabled else "http"
 
     async def _startup_with_port_file(
         sockets: list[socket] | None = None,
@@ -441,7 +471,9 @@ def serve(
         if server.servers and server.servers[0].sockets:
             actual_port = server.servers[0].sockets[0].getsockname()[1]
             _write_port_file(port_path, actual_port)
-            logger.info("Quarry server listening on http://%s:%d", host, actual_port)
+            logger.info(
+                "Quarry server listening on %s://%s:%d", scheme, host, actual_port
+            )
         else:
             logger.error("Server started but no bound sockets; port file not written")
 

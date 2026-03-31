@@ -1,0 +1,202 @@
+"""TLS certificate generation for quarry remote connections.
+
+Generates a self-signed CA and server certificate using EC P-256 keys.
+Certificates are stored in ~/.punt-labs/quarry/tls/ and used by the
+quarry serve --tls command and the quarry login TOFU flow.
+"""
+
+from __future__ import annotations
+
+import datetime
+import hashlib
+import logging
+from pathlib import Path
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+from cryptography.x509.oid import NameOID
+
+logger = logging.getLogger(__name__)
+
+TLS_DIR: Path = Path.home() / ".punt-labs" / "quarry" / "tls"
+
+_CERT_VALID_YEARS = 10
+_EC_CURVE = ec.SECP256R1()
+
+
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+def generate_ca(hostname: str) -> tuple[bytes, bytes]:
+    """Generate a self-signed CA keypair.
+
+    Args:
+        hostname: The hostname that will be used in the CA subject CN.
+
+    Returns:
+        (ca_cert_pem, ca_key_pem) as bytes.
+    """
+    key = ec.generate_private_key(_EC_CURVE)
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, f"Quarry CA ({hostname})"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Punt Labs"),
+        ]
+    )
+    now = _now_utc()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=_CERT_VALID_YEARS * 365))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    ca_cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    ca_key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    return ca_cert_pem, ca_key_pem
+
+
+def generate_server_cert(
+    ca_cert_pem: bytes,
+    ca_key_pem: bytes,
+    hostname: str,
+) -> tuple[bytes, bytes]:
+    """Sign a server certificate with the given CA.
+
+    The server cert always includes "localhost" as a SAN in addition to
+    the provided hostname.
+
+    Args:
+        ca_cert_pem: The CA certificate in PEM format.
+        ca_key_pem: The CA private key in PEM format.
+        hostname: The primary hostname to include in the SAN.
+
+    Returns:
+        (server_cert_pem, server_key_pem) as bytes.
+    """
+    ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
+    ca_key = serialization.load_pem_private_key(ca_key_pem, password=None)
+    if not isinstance(ca_key, EllipticCurvePrivateKey):
+        msg = "CA key must be an EC private key"
+        raise TypeError(msg)
+
+    server_key = ec.generate_private_key(_EC_CURVE)
+
+    # Build SAN list — always include localhost, add hostname if distinct.
+    san_names: list[x509.GeneralName] = [x509.DNSName("localhost")]
+    if hostname not in ("localhost", "127.0.0.1", "::1"):
+        san_names.append(x509.DNSName(hostname))
+    # Also include 127.0.0.1 as an IP SAN for numeric access.
+    san_names.append(x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1")))
+
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Punt Labs"),
+        ]
+    )
+    now = _now_utc()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(ca_cert.subject)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=_CERT_VALID_YEARS * 365))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    server_cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    server_key_pem = server_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    return server_cert_pem, server_key_pem
+
+
+def cert_fingerprint(cert_pem: bytes) -> str:
+    """Return SHA256 fingerprint of a PEM certificate.
+
+    Args:
+        cert_pem: Certificate in PEM format.
+
+    Returns:
+        Fingerprint formatted as "SHA256:xxxx" where xxxx is the
+        hex-encoded SHA256 digest of the DER-encoded certificate.
+    """
+    cert = x509.load_pem_x509_certificate(cert_pem)
+    der = cert.public_bytes(serialization.Encoding.DER)
+    digest = hashlib.sha256(der).hexdigest()
+    return f"SHA256:{digest}"
+
+
+def write_tls_files(hostname: str) -> None:
+    """Generate CA + server cert, write to TLS_DIR.
+
+    Idempotent: skips generation if all four files already exist.
+
+    File permissions:
+        ca.crt  — 0644 (must be fetchable/served)
+        ca.key  — 0600
+        server.crt — 0600
+        server.key — 0600
+
+    Args:
+        hostname: The server hostname (used in cert CN and SAN).
+    """
+    ca_crt_path = TLS_DIR / "ca.crt"
+    ca_key_path = TLS_DIR / "ca.key"
+    server_crt_path = TLS_DIR / "server.crt"
+    server_key_path = TLS_DIR / "server.key"
+
+    all_exist = all(
+        p.exists() for p in (ca_crt_path, ca_key_path, server_crt_path, server_key_path)
+    )
+    if all_exist:
+        logger.debug("TLS files already exist at %s — skipping generation", TLS_DIR)
+        return
+
+    logger.info("Generating TLS certificates for hostname=%r", hostname)
+    TLS_DIR.mkdir(parents=True, exist_ok=True)
+
+    ca_cert_pem, ca_key_pem = generate_ca(hostname)
+    server_cert_pem, server_key_pem = generate_server_cert(
+        ca_cert_pem, ca_key_pem, hostname
+    )
+
+    # Write files with tight permissions.
+    _write_file(ca_crt_path, ca_cert_pem, mode=0o644)
+    _write_file(ca_key_path, ca_key_pem, mode=0o600)
+    _write_file(server_crt_path, server_cert_pem, mode=0o600)
+    _write_file(server_key_path, server_key_pem, mode=0o600)
+
+    logger.info("TLS files written to %s", TLS_DIR)
+
+
+def _write_file(path: Path, data: bytes, mode: int) -> None:
+    """Write binary data to path and set file permissions."""
+    path.write_bytes(data)
+    path.chmod(mode)

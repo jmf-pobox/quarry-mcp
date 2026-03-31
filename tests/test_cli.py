@@ -1892,74 +1892,176 @@ class TestCliStandards:
             )
 
 
+class TestServeTlsFlag:
+    """Tests for the --tls flag on the serve command."""
+
+    def test_tls_flag_passes_ssl_args_to_http_serve(self, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        cert_path = tls_dir / "server.crt"
+        key_path = tls_dir / "server.key"
+        cert_path.write_text("FAKE CERT")
+        key_path.write_text("FAKE KEY")
+
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.TLS_DIR", tls_dir),
+            patch("quarry.http_server.serve") as mock_serve,
+        ):
+            runner.invoke(app, ["serve", "--tls"])
+
+        _reset_globals()
+        call_kwargs = mock_serve.call_args[1]
+        assert call_kwargs["ssl_certfile"] == str(cert_path)
+        assert call_kwargs["ssl_keyfile"] == str(key_path)
+
+    def test_tls_flag_missing_certs_exits(self, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        # Do not create the cert files.
+
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.TLS_DIR", tls_dir),
+        ):
+            result = runner.invoke(app, ["serve", "--tls"])
+
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "quarry install" in result.output
+
+    def test_no_tls_flag_passes_none_ssl_args(self) -> None:
+        with (
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.http_server.serve") as mock_serve,
+        ):
+            runner.invoke(app, ["serve"])
+
+        _reset_globals()
+        call_kwargs = mock_serve.call_args[1]
+        assert call_kwargs["ssl_certfile"] is None
+        assert call_kwargs["ssl_keyfile"] is None
+
+
+_FAKE_CA_PEM = b"-----BEGIN CERTIFICATE-----\nfakecertdata\n-----END CERTIFICATE-----\n"
+_FAKE_FINGERPRINT = "SHA256:" + "a" * 64
+
+
 class TestLoginCmd:
-    def test_success(self) -> None:
-        with (
-            patch(
-                "quarry.__main__.validate_connection", return_value=(True, "")
-            ) as mock_validate,
-            patch("quarry.__main__.write_proxy_config") as mock_write,
-        ):
-            result = runner.invoke(
-                app, ["login", "okinos.example.com", "--api-key", "sk-test"]
-            )
-        _reset_globals()
-        assert result.exit_code == 0
-        assert "Restart Claude Code" in result.output
-        mock_validate.assert_called_once_with(
-            "okinos.example.com", 8420, "sk-test", scheme="https"
-        )
-        mock_write.assert_called_once_with(
-            "wss://okinos.example.com:8420/mcp", "sk-test"
+    """Tests for the TOFU login flow."""
+
+    def _common_patches(self) -> tuple[object, ...]:
+        """Return a tuple of patch context managers for the happy path."""
+        return (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config"),
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
         )
 
-    def test_default_ws_for_localhost(self) -> None:
+    def test_success_with_yes_flag(self) -> None:
+        """--yes skips the interactive prompt."""
         with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert") as mock_store,
             patch(
                 "quarry.__main__.validate_connection", return_value=(True, "")
             ) as mock_validate,
             patch("quarry.__main__.write_proxy_config") as mock_write,
-        ):
-            result = runner.invoke(app, ["login", "localhost", "--api-key", "sk-test"])
-        _reset_globals()
-        assert result.exit_code == 0
-        mock_validate.assert_called_once_with(
-            "localhost", 8420, "sk-test", scheme="http"
-        )
-        mock_write.assert_called_once_with("ws://localhost:8420/mcp", "sk-test")
-
-    def test_insecure_flag_allows_ws_for_non_localhost(self) -> None:
-        with (
-            patch(
-                "quarry.__main__.validate_connection", return_value=(True, "")
-            ) as mock_validate,
-            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
         ):
             result = runner.invoke(
                 app,
-                ["login", "okinos.example.com", "--api-key", "sk-test", "--insecure"],
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert "Restart Claude Code" in result.output
+        assert _FAKE_FINGERPRINT in result.output
+        mock_store.assert_called_once_with(_FAKE_CA_PEM)
+        mock_validate.assert_called_once_with(
+            "okinos.example.com",
+            8420,
+            "sk-test",
+            scheme="https",
+            ca_cert_path="/fake/quarry-ca.crt",
+        )
+        mock_write.assert_called_once_with(
+            "wss://okinos.example.com:8420/mcp", "sk-test", "/fake/quarry-ca.crt"
+        )
+
+    def test_prompt_confirmed(self) -> None:
+        """User types 'y' to confirm the fingerprint."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test"],
+                input="y\n",
+            )
+        _reset_globals()
+        assert result.exit_code == 0, result.output
+        assert "Trust this server?" in result.output
+        mock_write.assert_called_once()
+
+    def test_prompt_rejected_aborts(self) -> None:
+        """User types 'n' — aborts cleanly without writing config."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert") as mock_store,
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test"],
+                input="n\n",
             )
         _reset_globals()
         assert result.exit_code == 0
-        assert "Warning" in result.output
-        assert "cleartext" in result.output
-        mock_validate.assert_called_once_with(
-            "okinos.example.com", 8420, "sk-test", scheme="http"
-        )
-        mock_write.assert_called_once_with(
-            "ws://okinos.example.com:8420/mcp", "sk-test"
-        )
+        assert "Aborted" in result.output
+        mock_store.assert_not_called()
+        mock_write.assert_not_called()
 
-    def test_connection_failure(self) -> None:
+    def test_fetch_ca_cert_failure_exits(self) -> None:
+        """fetch_ca_cert raises ValueError — exits with code 1."""
+        with patch(
+            "quarry.__main__.fetch_ca_cert",
+            side_effect=ValueError("Server unreachable"),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "okinos.example.com", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 1
+        assert "Server unreachable" in result.output
+
+    def test_connection_failure_after_tofu(self) -> None:
+        """validate_connection fails — exits with code 1, config not written."""
         with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
             patch(
                 "quarry.__main__.validate_connection",
                 return_value=(False, "Authentication failed — check --api-key."),
             ),
             patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
         ):
             result = runner.invoke(
-                app, ["login", "okinos.example.com", "--api-key", "bad-key"]
+                app,
+                ["login", "okinos.example.com", "--api-key", "bad-key", "--yes"],
             )
         _reset_globals()
         assert result.exit_code == 1
@@ -1967,9 +2069,14 @@ class TestLoginCmd:
         mock_write.assert_not_called()
 
     def test_custom_port(self) -> None:
+        """Custom --port is used in the wss:// URL."""
         with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
             patch("quarry.__main__.validate_connection", return_value=(True, "")),
             patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
         ):
             result = runner.invoke(
                 app,
@@ -1980,21 +2087,42 @@ class TestLoginCmd:
                     "9000",
                     "--api-key",
                     "sk-test",
+                    "--yes",
                 ],
             )
         _reset_globals()
         assert result.exit_code == 0
         mock_write.assert_called_once_with(
-            "wss://okinos.example.com:9000/mcp", "sk-test"
+            "wss://okinos.example.com:9000/mcp", "sk-test", "/fake/quarry-ca.crt"
         )
 
     def test_empty_api_key_exits_with_error(self) -> None:
-        with patch("quarry.__main__.validate_connection") as mock_validate:
+        """Empty --api-key exits before any network calls."""
+        with patch("quarry.__main__.fetch_ca_cert") as mock_fetch:
             result = runner.invoke(app, ["login", "host.example.com", "--api-key", ""])
         _reset_globals()
         assert result.exit_code == 1
         assert "required" in result.output
-        mock_validate.assert_not_called()
+        mock_fetch.assert_not_called()
+
+    def test_always_uses_wss(self) -> None:
+        """Even for localhost, the new flow writes wss:// (TOFU is uniform)."""
+        with (
+            patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
+            patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
+            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.validate_connection", return_value=(True, "")),
+            patch("quarry.__main__.write_proxy_config") as mock_write,
+            patch("quarry.__main__.CA_CERT_PATH", "/fake/quarry-ca.crt"),
+        ):
+            result = runner.invoke(
+                app,
+                ["login", "localhost", "--api-key", "sk-test", "--yes"],
+            )
+        _reset_globals()
+        assert result.exit_code == 0
+        url_arg = mock_write.call_args[0][0]
+        assert url_arg.startswith("wss://"), f"Expected wss:// but got: {url_arg}"
 
 
 class TestLogoutCmd:

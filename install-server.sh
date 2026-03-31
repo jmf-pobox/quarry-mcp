@@ -1,0 +1,154 @@
+#!/bin/sh
+# Install quarry as a server daemon with TLS.
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install-server.sh | sh
+#
+# This script installs quarry, generates TLS certificates, and starts the
+# daemon.  It does NOT require the claude CLI and does NOT install the plugin.
+# Use install-client.sh on the machines that need to connect to this server.
+set -eu
+
+# --- Colors (disabled when not a terminal) ---
+if [ -t 1 ]; then
+  BOLD='\033[1m' GREEN='\033[32m' YELLOW='\033[33m' NC='\033[0m'
+else
+  BOLD='' GREEN='' YELLOW='' NC=''
+fi
+
+info() { printf '%b▶%b %s\n' "$BOLD" "$NC" "$1"; }
+ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
+warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
+fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
+
+VERSION="1.10.1"
+PACKAGE="punt-quarry"
+BINARY="quarry"
+
+# --- Step 1: Prerequisites ---
+
+info "Checking prerequisites..."
+
+if command -v git >/dev/null 2>&1; then
+  ok "git found"
+else
+  fail "'git' not found. Install git first: https://git-scm.com/downloads"
+fi
+
+# --- Step 2: uv ---
+
+info "Checking uv..."
+
+if command -v uv >/dev/null 2>&1; then
+  ok "uv already installed"
+else
+  info "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  if [ -f "$HOME/.local/bin/env" ]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.local/bin/env"
+  elif [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    . "$HOME/.cargo/env"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v uv >/dev/null 2>&1; then
+    fail "uv install succeeded but 'uv' not found on PATH. Restart your shell and re-run."
+  fi
+  ok "uv installed"
+fi
+
+# --- Step 3: Python 3.13+ ---
+
+info "Checking Python..."
+
+PYTHON_FLAG=""
+HAVE_PYTHON=0
+if command -v python3 >/dev/null 2>&1; then
+  PY_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)')
+  PY_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+  if [ "$PY_MAJOR" -gt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -ge 13 ]; }; then
+    ok "Python ${PY_MAJOR}.${PY_MINOR}"
+    HAVE_PYTHON=1
+  fi
+fi
+
+if [ "$HAVE_PYTHON" = "0" ]; then
+  info "Installing Python 3.13 via uv..."
+  uv python install 3.13 || fail "Failed to install Python 3.13"
+  ok "Python 3.13 (uv-managed)"
+  PYTHON_FLAG="--python 3.13"
+fi
+
+# --- Step 3b: Detect NVIDIA GPU ---
+
+HAS_NVIDIA=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi >/dev/null 2>&1; then
+    ok "NVIDIA GPU detected"
+    HAS_NVIDIA=1
+  fi
+fi
+
+# --- Step 4: Install quarry CLI ---
+
+info "Installing $PACKAGE..."
+
+# shellcheck disable=SC2086
+uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
+ok "$PACKAGE==$VERSION installed"
+
+if ! command -v "$BINARY" >/dev/null 2>&1; then
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v "$BINARY" >/dev/null 2>&1; then
+    fail "$PACKAGE installed but '$BINARY' not found on PATH"
+  fi
+fi
+
+# Swap onnxruntime for onnxruntime-gpu in the tool venv.
+if [ "$HAS_NVIDIA" = "1" ]; then
+  info "Installing CUDA support (onnxruntime-gpu)..."
+  TOOL_PYTHON="$(head -1 "$(command -v "$BINARY")" | sed 's/^#!//')"
+  if [ -f "$TOOL_PYTHON" ]; then
+    uv pip uninstall --python "$TOOL_PYTHON" onnxruntime < /dev/null 2>/dev/null || true
+    if uv pip install --python "$TOOL_PYTHON" "onnxruntime-gpu>=1.18.0" < /dev/null; then
+      ok "onnxruntime-gpu installed"
+    else
+      warn "Failed to install onnxruntime-gpu — restoring CPU onnxruntime"
+      uv pip install --python "$TOOL_PYTHON" "onnxruntime>=1.18.0" < /dev/null || fail "Could not restore onnxruntime"
+      ok "onnxruntime (CPU) restored"
+    fi
+  else
+    warn "Could not locate tool Python — CUDA support skipped"
+  fi
+fi
+
+ok "$BINARY $(command -v "$BINARY")"
+
+# --- Step 4: Download embedding model and generate TLS certificates ---
+
+info "Downloading embedding model and generating TLS certificates..."
+printf '\n'
+"$BINARY" install
+printf '\n'
+
+# --- Step 5: Start the daemon ---
+
+info "Starting quarry daemon..."
+printf '\n'
+"$BINARY" install daemon 2>/dev/null || warn "Could not start daemon — run 'quarry install daemon' manually"
+printf '\n'
+
+# --- Step 6: Verify ---
+
+info "Verifying installation..."
+printf '\n'
+"$BINARY" doctor || true
+printf '\n'
+
+# --- Done ---
+
+printf '%b%b%s server is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
+printf 'The server daemon is running on port 8420 with TLS.\n\n'
+printf 'To connect a client machine:\n'
+printf '  1. Install quarry on the client: curl -fsSL <install-client.sh URL> | sh\n'
+printf '  2. Connect: quarry login <this-host> --api-key <your-api-key>\n\n'
+printf 'The CA fingerprint is shown above — clients will see it during login.\n'

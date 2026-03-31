@@ -15,12 +15,14 @@ import logging
 import os
 import platform
 import shlex
+import socket
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 from quarry.config import DEFAULT_PORT
+from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +36,22 @@ def _quarry_exec_args() -> list[str]:
     ``sys.executable -m quarry``.  When run from a dev venv, ``sys.executable``
     points to the venv Python — the daemon should use the prod binary instead
     so it survives venv rebuilds and directory moves.
+
+    Appends ``--tls`` when TLS certificates are present in TLS_DIR.
     """
     # Resolve the uv tool binary through its symlink to get the stable path.
     local_bin = Path.home() / ".local" / "bin" / "quarry"
     if local_bin.exists():
         resolved = local_bin.resolve()
-        return [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
-    # Fallback: use the current Python (works for non-uv installs).
-    return [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+        base = [str(resolved), "serve", "--port", str(DEFAULT_PORT)]
+    else:
+        # Fallback: use the current Python (works for non-uv installs).
+        base = [sys.executable, "-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+
+    if (TLS_DIR / "server.crt").exists():
+        base.append("--tls")
+
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +229,13 @@ def detect_platform() -> str:
 
 def install() -> str:
     """Install quarry as a system service.  Returns a status message."""
+    # Generate TLS certificates before registering the service so that the
+    # service file can include --tls in its exec args.
+    hostname = socket.gethostname()
+    write_tls_files(hostname)
+    ca_crt = TLS_DIR / "ca.crt"
+    fingerprint = cert_fingerprint(ca_crt.read_bytes()) if ca_crt.exists() else ""
+
     plat = detect_platform()
     args = _quarry_exec_args()
 
@@ -236,6 +253,12 @@ def install() -> str:
         f"  Service: {_LAUNCHD_PLIST if plat == 'macos' else _SYSTEMD_UNIT}",
         f"  Command: {exec_display}",
     ]
+    if fingerprint:
+        lines.append(f"  CA fingerprint: {fingerprint}")
+        lines.append(
+            "  Clients: run 'quarry login <this-host> --api-key <token>' "
+            "to connect and trust this fingerprint."
+        )
     if plat == "linux" and not _has_linger():
         lines.append(
             "  Warning: loginctl linger is not enabled. "

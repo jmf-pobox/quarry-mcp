@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 import tomllib
 import urllib.error
 import urllib.parse
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 MCP_PROXY_CONFIG_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry.toml"
+CA_CERT_PATH: Path = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
 
 
 class PermissionWarning(Warning):
@@ -36,15 +38,31 @@ def read_proxy_config() -> dict[str, Any]:
         ) from exc
 
 
-def write_proxy_config(url: str, token: str) -> None:
-    """Write quarry section to mcp-proxy config file atomically, chmod 0600."""
-    content = (
-        "[quarry]\n"
-        f'url = "{_toml_escape(url)}"\n'
-        "\n"
-        "[quarry.headers]\n"
-        f'Authorization = "Bearer {_toml_escape(token)}"\n'
-    )
+def write_proxy_config(
+    url: str,
+    token: str,
+    ca_cert_path: str | None = None,
+) -> None:
+    """Write quarry section to mcp-proxy config file atomically, chmod 0600.
+
+    Args:
+        url: The wss:// or ws:// WebSocket URL for the quarry MCP endpoint.
+        token: The Bearer token for authentication.
+        ca_cert_path: Optional path to a CA certificate PEM for SSL verification.
+            Written as ``ca_cert`` in the TOML when provided.
+    """
+    lines = [
+        "[quarry]\n",
+        f'url = "{_toml_escape(url)}"\n',
+    ]
+    if ca_cert_path is not None:
+        lines.append(f'ca_cert = "{_toml_escape(ca_cert_path)}"\n')
+    lines += [
+        "\n",
+        "[quarry.headers]\n",
+        f'Authorization = "Bearer {_toml_escape(token)}"\n',
+    ]
+    content = "".join(lines)
     MCP_PROXY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -101,13 +119,30 @@ def _ws_to_http(url: str) -> str:
 
 
 def validate_connection(
-    host: str, port: int, token: str, scheme: str = "http"
+    host: str,
+    port: int,
+    token: str,
+    scheme: str = "http",
+    ca_cert_path: str | None = None,
 ) -> tuple[bool, str]:
-    """HTTP(S) GET /status with Bearer token. Return (ok, error_message)."""
+    """HTTP(S) GET /status with Bearer token. Return (ok, error_message).
+
+    Args:
+        host: Server hostname or IP.
+        port: Server port.
+        token: Bearer token for authentication.
+        scheme: URL scheme ("http" or "https").
+        ca_cert_path: Optional path to a CA certificate PEM.  When provided,
+            TLS verification uses this CA instead of the system trust store.
+    """
     url = f"{scheme}://{host}:{port}/status"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
+    ssl_ctx: ssl.SSLContext | None = None
+    if scheme == "https" and ca_cert_path is not None:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.load_verify_locations(ca_cert_path)
     try:
-        with urllib.request.urlopen(req, timeout=10) as _:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as _:  # noqa: S310
             return True, ""
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
@@ -133,3 +168,61 @@ def mask_token(token: str) -> str:
     if len(token) < 4:
         return "****"
     return token[:4] + "****"
+
+
+def fetch_ca_cert(host: str, port: int) -> bytes:
+    """Fetch the CA certificate from the quarry server over plain HTTP.
+
+    This is the TOFU bootstrap step — no TLS verification is possible yet
+    because we don't have the CA cert.  The user verifies the fingerprint
+    interactively before trusting.
+
+    Args:
+        host: Server hostname or IP.
+        port: Server port.
+
+    Returns:
+        CA certificate PEM bytes.
+
+    Raises:
+        ValueError: If the fetch fails for any reason, with a human-readable
+            message describing what went wrong.
+    """
+    url = f"http://{host}:{port}/ca.crt"
+    req = urllib.request.Request(url)  # noqa: S310
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            data: bytes = resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ValueError(
+                f"Server at {host}:{port} has no CA certificate. "
+                "Run 'quarry install' on the server first."
+            ) from exc
+        raise ValueError(
+            f"Failed to fetch CA cert from {host}:{port}: HTTP {exc.code}."
+        ) from exc
+    except (urllib.error.URLError, OSError) as exc:
+        reason: object = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        raise ValueError(
+            f"Could not reach {host}:{port} to fetch CA cert — {reason}. "
+            "Check that the quarry server is running and reachable."
+        ) from exc
+
+    if not data.strip().startswith(b"-----BEGIN CERTIFICATE-----"):
+        raise ValueError(
+            f"Server at {host}:{port} returned unexpected data for /ca.crt "
+            "(expected PEM certificate)."
+        )
+    return data
+
+
+def store_ca_cert(cert_pem: bytes) -> None:
+    """Write the CA certificate to CA_CERT_PATH, chmod 0600.
+
+    Args:
+        cert_pem: CA certificate in PEM format.
+    """
+    CA_CERT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CA_CERT_PATH.write_bytes(cert_pem)
+    CA_CERT_PATH.chmod(0o600)

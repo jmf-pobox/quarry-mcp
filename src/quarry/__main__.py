@@ -41,11 +41,14 @@ from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.provider import provider_display
 from quarry.remote import (
+    CA_CERT_PATH,
     MCP_PROXY_CONFIG_PATH,
     PermissionWarning,
     delete_proxy_config,
+    fetch_ca_cert,
     mask_token,
     read_proxy_config,
+    store_ca_cert,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
@@ -57,11 +60,10 @@ from quarry.sync_registry import (
     open_registry,
     register_directory,
 )
+from quarry.tls import TLS_DIR, cert_fingerprint
 
 configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
-
-_LOCALHOST_NAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _COMMAND_ORDER: list[str] = [
     # Product commands
@@ -732,36 +734,57 @@ def login_cmd(
             hide_input=True,
         ),
     ] = "",
-    insecure: Annotated[
+    yes: Annotated[
         bool,
         typer.Option(
-            "--insecure",
-            help="Allow plaintext ws:// transport (not recommended outside localhost)",
+            "--yes",
+            "-y",
+            help="Skip TOFU confirmation prompt (non-interactive, trust automatically).",  # noqa: E501
         ),
     ] = False,
 ) -> None:
-    """Connect to a remote quarry server."""
+    """Connect to a remote quarry server using TOFU certificate pinning.
+
+    Fetches the server's CA certificate over plain HTTP, displays its
+    fingerprint, prompts for trust confirmation, then validates the
+    connection over HTTPS/WSS and writes the mcp-proxy config.
+    """
     if not api_key:
         err_console.print("Error: --api-key is required.", style="red")
         raise typer.Exit(code=1)
-    if host in _LOCALHOST_NAMES:
-        scheme = "ws"
-    elif insecure:
-        scheme = "ws"
-        err_console.print(
-            f"Warning: --insecure flag set. "
-            f"Credentials will be sent in cleartext to {host}.",
-            style="yellow",
-        )
-    else:
-        scheme = "wss"
-    http_scheme = "https" if scheme == "wss" else "http"
-    ok, reason = validate_connection(host, port, api_key, scheme=http_scheme)
+
+    # Step 1: Fetch CA cert over plain HTTP (bootstrap — no TLS yet).
+    try:
+        ca_cert_pem = fetch_ca_cert(host, port)
+    except ValueError as exc:
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from exc
+
+    # Step 2: Display fingerprint.
+    fp = cert_fingerprint(ca_cert_pem)
+    print(f"Server CA fingerprint: {fp}")
+
+    # Step 3: Prompt for trust (skip if --yes).
+    if not yes:
+        confirmed = typer.confirm("Trust this server?", default=False)
+        if not confirmed:
+            print("Aborted. Not logged in.")
+            raise typer.Exit(code=0)
+
+    # Step 4: Store CA cert.
+    store_ca_cert(ca_cert_pem)
+
+    # Step 5: Validate connection using the stored CA cert.
+    ok, reason = validate_connection(
+        host, port, api_key, scheme="https", ca_cert_path=str(CA_CERT_PATH)
+    )
     if not ok:
         err_console.print(f"Error: {reason}", style="red")
         raise typer.Exit(code=1)
+
+    # Step 6: Write mcp-proxy config.
     try:
-        write_proxy_config(f"{scheme}://{host}:{port}/mcp", api_key)
+        write_proxy_config(f"wss://{host}:{port}/mcp", api_key, str(CA_CERT_PATH))
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
@@ -771,6 +794,8 @@ def login_cmd(
             style="red",
         )
         raise typer.Exit(code=1) from exc
+
+    # Step 7: Print success.
     _emit(
         {"host": host, "port": port},
         f"Logged in to {host}:{port}. Restart Claude Code to apply.",
@@ -998,13 +1023,47 @@ def serve(
             help="Allowed CORS origin (repeatable). Default: http://localhost.",
         ),
     ] = None,
+    tls: Annotated[
+        bool,
+        typer.Option(
+            "--tls",
+            help=(
+                "Enable TLS using certificates from ~/.punt-labs/quarry/tls/. "
+                "Run 'quarry install' first to generate certificates."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Start the HTTP API server."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
     settings = _resolved_settings()
     origins = frozenset(cors_origin) if cors_origin else None
-    http_serve(settings, port=port, host=host, api_key=api_key, cors_origins=origins)
+
+    ssl_certfile: str | None = None
+    ssl_keyfile: str | None = None
+    if tls:
+        cert_path = TLS_DIR / "server.crt"
+        key_path = TLS_DIR / "server.key"
+        if not cert_path.exists() or not key_path.exists():
+            err_console.print(
+                "Error: TLS certificate files not found in "
+                f"{TLS_DIR}. Run 'quarry install' first.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        ssl_certfile = str(cert_path)
+        ssl_keyfile = str(key_path)
+
+    http_serve(
+        settings,
+        port=port,
+        host=host,
+        api_key=api_key,
+        cors_origins=origins,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 @app.command()

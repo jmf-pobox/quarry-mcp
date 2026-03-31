@@ -70,6 +70,47 @@ class TestHealth:
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
 
 
+class TestCaCertRoute:
+    """Tests for the /ca.crt auth-exempt route."""
+
+    def test_returns_404_when_no_cert(self, client: TestClient, tmp_path: Path) -> None:
+        empty_tls_dir = tmp_path / "tls"
+        with patch("quarry.tls.TLS_DIR", empty_tls_dir):
+            resp = client.get("/ca.crt")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert "error" in data
+        assert "quarry install" in data["error"]
+
+    def test_returns_cert_pem(self, client: TestClient, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
+        (tls_dir / "ca.crt").write_text(fake_pem)
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            resp = client.get("/ca.crt")
+        assert resp.status_code == 200
+        assert "BEGIN CERTIFICATE" in resp.text
+
+    def test_auth_exempt_without_api_key_check(self, tmp_path: Path) -> None:
+        """The /ca.crt route bypasses auth even when an API key is set."""
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings, api_key="secret-key")
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        auth_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
+        (tls_dir / "ca.crt").write_text(fake_pem)
+
+        # No Authorization header — should still get the cert.
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            resp = auth_client.get("/ca.crt")
+        assert resp.status_code == 200
+
+
 class TestConcurrency:
     """Verify the server handles concurrent requests without serializing."""
 

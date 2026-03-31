@@ -17,6 +17,11 @@ from quarry.service import (
     uninstall,
 )
 
+# Patch write_tls_files across all install() calls to avoid writing to
+# ~/.punt-labs/quarry/tls/ during tests.
+_PATCH_TLS = patch("quarry.service.write_tls_files")
+_PATCH_CERT_FP = patch("quarry.service.cert_fingerprint", return_value="")
+
 
 class TestDetectPlatform:
     def test_darwin(self) -> None:
@@ -43,19 +48,37 @@ class TestQuarryExecArgs:
         local_bin = tmp_path / ".local" / "bin" / "quarry"
         local_bin.parent.mkdir(parents=True, exist_ok=True)
         local_bin.symlink_to(fake_bin)
-        with patch("quarry.service.Path.home", return_value=tmp_path):
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
             args = _quarry_exec_args()
+        # No TLS certs present → no --tls flag
         assert args[-3:] == ["serve", "--port", str(DEFAULT_PORT)]
         assert str(fake_bin) == args[0]
 
     def test_falls_back_to_sys_executable(self, tmp_path: Path) -> None:
         import sys
 
-        with patch("quarry.service.Path.home", return_value=tmp_path):
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
             # No ~/.local/bin/quarry exists in tmp_path
             args = _quarry_exec_args()
         assert args[0] == sys.executable
         assert args[1:] == ["-m", "quarry", "serve", "--port", str(DEFAULT_PORT)]
+
+    def test_appends_tls_flag_when_cert_exists(self, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        (tls_dir / "server.crt").write_text("CERT")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tls_dir),
+        ):
+            args = _quarry_exec_args()
+        assert "--tls" in args
 
 
 class TestInstallMacOS:
@@ -68,6 +91,8 @@ class TestInstallMacOS:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            _PATCH_TLS,
+            _PATCH_CERT_FP,
         ):
             # First call: launchctl list → not found (fresh install)
             # Second call: launchctl load → success
@@ -106,6 +131,8 @@ class TestInstallMacOS:
         with (
             patch("quarry.service._LAUNCHD_DIR", tmp_path),
             patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            _PATCH_TLS,
+            _PATCH_CERT_FP,
         ):
             # First call: launchctl list → found (existing service)
             # Second call: launchctl unload → success
@@ -177,6 +204,8 @@ class TestInstallLinux:
         with (
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            _PATCH_TLS,
+            _PATCH_CERT_FP,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
 
@@ -205,6 +234,8 @@ class TestInstallLinux:
         with (
             patch("quarry.service._SYSTEMD_DIR", tmp_path),
             patch("quarry.service._SYSTEMD_UNIT", unit_path),
+            _PATCH_TLS,
+            _PATCH_CERT_FP,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
 

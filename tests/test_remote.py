@@ -12,9 +12,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quarry.remote import (
+    CA_CERT_PATH,
     delete_proxy_config,
+    fetch_ca_cert,
     mask_token,
     read_proxy_config,
+    store_ca_cert,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
@@ -209,7 +212,11 @@ class TestValidateConnectionFromWsUrl:
         mock_ctx.__enter__ = lambda s: MagicMock()
         mock_ctx.__exit__ = MagicMock(return_value=False)
 
-        def fake_urlopen(req: urllib.request.Request, timeout: int) -> MagicMock:
+        def fake_urlopen(
+            req: urllib.request.Request,
+            timeout: int,
+            context: object = None,
+        ) -> MagicMock:
             captured.append(req.full_url)
             return mock_ctx
 
@@ -231,3 +238,193 @@ class TestMaskToken:
 
     def test_normal_token(self) -> None:
         assert mask_token("sk-abcdef") == "sk-a****"
+
+
+class TestWriteProxyConfigWithCaCert:
+    def test_ca_cert_included_when_provided(self, proxy_config_path: Path) -> None:
+        write_proxy_config("wss://host:8420/mcp", "sk-test", "/path/to/ca.crt")
+        content = proxy_config_path.read_text()
+        assert 'ca_cert = "/path/to/ca.crt"' in content
+
+    def test_ca_cert_omitted_when_none(self, proxy_config_path: Path) -> None:
+        write_proxy_config("wss://host:8420/mcp", "sk-test")
+        content = proxy_config_path.read_text()
+        assert "ca_cert" not in content
+
+    def test_ca_cert_parses_as_toml(self, proxy_config_path: Path) -> None:
+        write_proxy_config("wss://host:8420/mcp", "sk-test", "/path/to/ca.crt")
+        data = read_proxy_config()
+        assert data["quarry"]["ca_cert"] == "/path/to/ca.crt"
+        assert data["quarry"]["url"] == "wss://host:8420/mcp"
+
+    def test_ca_cert_path_with_special_chars(self, proxy_config_path: Path) -> None:
+        path_with_quotes = '/path/to/"tricky"/ca.crt'
+        write_proxy_config("wss://host:8420/mcp", "sk-test", path_with_quotes)
+        data = read_proxy_config()
+        assert data["quarry"]["ca_cert"] == path_with_quotes
+
+
+class TestFetchCaCert:
+    def _make_response(self, body: bytes) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        return mock_resp
+
+    def test_success(self) -> None:
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        with patch("urllib.request.urlopen", return_value=self._make_response(pem)):
+            result = fetch_ca_cert("host.example.com", 8420)
+        assert result == pem
+
+    def test_404_raises_value_error(self) -> None:
+        exc = urllib.error.HTTPError(
+            url="http://host:8420/ca.crt",
+            code=404,
+            msg="Not Found",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+        with (
+            patch("urllib.request.urlopen", side_effect=exc),
+            pytest.raises(ValueError, match="no CA certificate"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
+    def test_other_http_error_raises_value_error(self) -> None:
+        exc = urllib.error.HTTPError(
+            url="http://host:8420/ca.crt",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+        with (
+            patch("urllib.request.urlopen", side_effect=exc),
+            pytest.raises(ValueError, match="HTTP 500"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
+    def test_connection_error_raises_value_error(self) -> None:
+        exc = urllib.error.URLError("connection refused")
+        with (
+            patch("urllib.request.urlopen", side_effect=exc),
+            pytest.raises(ValueError, match="Could not reach"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
+    def test_non_pem_response_raises_value_error(self) -> None:
+        with (
+            patch(
+                "urllib.request.urlopen",
+                return_value=self._make_response(b"not a certificate"),
+            ),
+            pytest.raises(ValueError, match="unexpected data"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
+    def test_uses_plain_http(self) -> None:
+        """Fetch must use plain http:// for the TOFU bootstrap."""
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        captured_urls: list[str] = []
+
+        def capture(req: urllib.request.Request, timeout: int) -> MagicMock:
+            captured_urls.append(req.full_url)
+            return self._make_response(pem)
+
+        with patch("urllib.request.urlopen", side_effect=capture):
+            fetch_ca_cert("host.example.com", 8420)
+
+        assert len(captured_urls) == 1
+        assert captured_urls[0].startswith("http://")
+        assert "https" not in captured_urls[0]
+
+
+class TestStoreCaCert:
+    def test_writes_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ca_path = tmp_path / "quarry-ca.crt"
+        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        pem = b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+        store_ca_cert(pem)
+        assert ca_path.read_bytes() == pem
+
+    def test_chmod_0600(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ca_path = tmp_path / "quarry-ca.crt"
+        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        store_ca_cert(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        mode = stat.S_IMODE(ca_path.stat().st_mode)
+        assert mode == 0o600
+
+    def test_creates_parent_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ca_path = tmp_path / "subdir" / "quarry-ca.crt"
+        monkeypatch.setattr("quarry.remote.CA_CERT_PATH", ca_path)
+        store_ca_cert(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        assert ca_path.exists()
+
+    def test_default_ca_cert_path(self) -> None:
+        expected = Path.home() / ".punt-labs" / "mcp-proxy" / "quarry-ca.crt"
+        assert expected == CA_CERT_PATH
+
+
+class TestValidateConnectionWithCaCert:
+    def test_passes_ssl_context_when_ca_cert_path_provided(
+        self, tmp_path: Path
+    ) -> None:
+        """When ca_cert_path is given and scheme=https, an SSLContext is created."""
+        from quarry.tls import generate_ca
+
+        # Write a real CA cert so ssl.create_default_context() can load it.
+        ca_pem, _ = generate_ca("test.example.com")
+        ca_file = tmp_path / "ca.crt"
+        ca_file.write_bytes(ca_pem)
+
+        ssl_contexts_used: list[object] = []
+
+        def capture_urlopen(
+            req: urllib.request.Request,
+            timeout: int,
+            context: object = None,
+        ) -> MagicMock:
+            ssl_contexts_used.append(context)
+            mock = MagicMock()
+            mock.__enter__ = lambda s: s
+            mock.__exit__ = MagicMock(return_value=False)
+            return mock
+
+        with patch("urllib.request.urlopen", side_effect=capture_urlopen):
+            validate_connection(
+                "test.example.com",
+                8420,
+                "sk-test",
+                scheme="https",
+                ca_cert_path=str(ca_file),
+            )
+
+        assert len(ssl_contexts_used) == 1
+        import ssl
+
+        assert isinstance(ssl_contexts_used[0], ssl.SSLContext)
+
+    def test_no_ssl_context_for_http(self) -> None:
+        """When scheme=http, no SSLContext should be created."""
+        ssl_contexts_used: list[object] = []
+
+        def capture_urlopen(
+            req: urllib.request.Request,
+            timeout: int,
+            context: object = None,
+        ) -> MagicMock:
+            ssl_contexts_used.append(context)
+            mock = MagicMock()
+            mock.__enter__ = lambda s: s
+            mock.__exit__ = MagicMock(return_value=False)
+            return mock
+
+        with patch("urllib.request.urlopen", side_effect=capture_urlopen):
+            validate_connection("localhost", 8420, "sk-test", scheme="http")
+
+        assert len(ssl_contexts_used) == 1
+        assert ssl_contexts_used[0] is None
