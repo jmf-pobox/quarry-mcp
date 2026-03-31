@@ -6,8 +6,10 @@ import http.client
 import importlib.metadata
 import json
 import logging
+import os
 import ssl
 import sys
+import tempfile
 import urllib.parse
 from collections.abc import Callable, Generator
 from pathlib import Path
@@ -276,6 +278,12 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
     port = parsed.port or 8420
 
     ca_cert = config.get("ca_cert")
+    scheme = "https" if raw_url.startswith("wss://") else "http"
+    if scheme == "https" and ca_cert is None:
+        raise SystemExit(
+            "Remote server uses HTTPS but no CA cert is pinned. "
+            "Run 'quarry login' to trust the server's certificate."
+        )
     ssl_ctx = ssl.create_default_context()
     if ca_cert:
         ssl_ctx.load_verify_locations(str(ca_cert))
@@ -878,16 +886,26 @@ def login_cmd(
             print("Aborted. Not logged in.")
             raise typer.Exit(code=0)
 
-    # Step 4: Store CA cert.
-    store_ca_cert(ca_cert_pem)
+    # Step 4: Validate connection using a tempfile — store CA cert only on success
+    # so a failed validation does not leave an orphaned cert on disk.
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".crt")
+    try:
+        try:
+            os.write(tmp_fd, ca_cert_pem)
+        finally:
+            os.close(tmp_fd)
+        ok, reason = validate_connection(
+            host, port, api_key, scheme="https", ca_cert_path=tmp_path
+        )
+        if not ok:
+            err_console.print(f"Error: {reason}", style="red")
+            raise typer.Exit(code=1)
+    finally:
+        with contextlib.suppress(OSError):
+            Path(tmp_path).unlink()
 
-    # Step 5: Validate connection using the stored CA cert.
-    ok, reason = validate_connection(
-        host, port, api_key, scheme="https", ca_cert_path=str(CA_CERT_PATH)
-    )
-    if not ok:
-        err_console.print(f"Error: {reason}", style="red")
-        raise typer.Exit(code=1)
+    # Step 5: Store CA cert (only reached on successful validation).
+    store_ca_cert(ca_cert_pem)
 
     # Step 6: Write mcp-proxy config.
     try:
@@ -957,10 +975,13 @@ def remote_list_cmd(
         return
     token = auth_header.removeprefix("Bearer ").strip()
     masked = mask_token(token)
+    ca_cert = quarry_cfg.get("ca_cert")
     text = f"Remote: {url}  token: {masked}"
     data: dict[str, object] = {"url": url, "token_prefix": masked}
     if ping:
-        ok, reason = validate_connection_from_ws_url(url, token)
+        ok, reason = validate_connection_from_ws_url(
+            url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
+        )
         status = "healthy" if ok else f"unreachable ({reason})"
         text += f"\nHealth: {status}"
         data["health"] = status

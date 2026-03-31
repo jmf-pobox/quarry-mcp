@@ -105,8 +105,16 @@ def delete_proxy_config() -> bool:
         return False
     stripped = cleaned.strip()
     if stripped:
-        MCP_PROXY_CONFIG_PATH.write_text(stripped + "\n")
-        MCP_PROXY_CONFIG_PATH.chmod(0o600)
+        tmp = MCP_PROXY_CONFIG_PATH.with_suffix(".tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(str(tmp), flags, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(stripped + "\n")
+        except:
+            tmp.unlink(missing_ok=True)
+            raise
+        tmp.replace(MCP_PROXY_CONFIG_PATH)
     else:
         MCP_PROXY_CONFIG_PATH.unlink()
     return True
@@ -159,14 +167,28 @@ def validate_connection(
         return False, f"Could not connect to {host}:{port} — {reason}."
 
 
-def validate_connection_from_ws_url(ws_url: str, token: str | None) -> tuple[bool, str]:
-    """Parse ws:// or wss:// URL and validate via HTTP/HTTPS."""
+def validate_connection_from_ws_url(
+    ws_url: str,
+    token: str | None,
+    ca_cert_path: str | None = None,
+) -> tuple[bool, str]:
+    """Parse ws:// or wss:// URL and validate via HTTP/HTTPS.
+
+    Args:
+        ws_url: The ws:// or wss:// WebSocket URL.
+        token: Bearer token for authentication, or None.
+        ca_cert_path: Optional path to a CA certificate PEM.  When provided,
+            TLS verification uses this CA instead of the system trust store.
+            Required for servers using self-signed certificates.
+    """
     http_url = _ws_to_http(ws_url)
     parsed = urllib.parse.urlparse(http_url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 8420
     scheme = parsed.scheme or "http"
-    return validate_connection(host, port, token, scheme=scheme)
+    return validate_connection(
+        host, port, token, scheme=scheme, ca_cert_path=ca_cert_path
+    )
 
 
 def mask_token(token: str) -> str:
@@ -238,11 +260,22 @@ def fetch_ca_cert(host: str, port: int) -> bytes:
 
 
 def store_ca_cert(cert_pem: bytes) -> None:
-    """Write the CA certificate to CA_CERT_PATH, chmod 0600.
+    """Write the CA certificate to CA_CERT_PATH atomically, chmod 0600.
+
+    Writes to a .tmp sibling, chmods it, then replaces the destination so a
+    crash between write and chmod cannot leave a cert with wrong permissions.
 
     Args:
         cert_pem: CA certificate in PEM format.
     """
     CA_CERT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CA_CERT_PATH.write_bytes(cert_pem)
-    CA_CERT_PATH.chmod(0o600)
+    tmp = CA_CERT_PATH.with_suffix(".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(str(tmp), flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(cert_pem)
+    except:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(CA_CERT_PATH)

@@ -141,7 +141,8 @@ class TestGenerateServerCert:
         aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
         assert aki is not None
 
-    def test_key_usage_digital_signature_and_key_encipherment(self) -> None:
+    def test_key_usage_digital_signature_and_key_agreement(self) -> None:
+        """EC keys must use key_agreement, not key_encipherment (RFC 5480)."""
         ca_cert, ca_key = self._make_ca()
         cert_pem, _ = generate_server_cert(ca_cert, ca_key, "myserver.local")
         cert = x509.load_pem_x509_certificate(cert_pem)
@@ -149,10 +150,10 @@ class TestGenerateServerCert:
         assert ku_ext.critical is True
         ku = ku_ext.value
         assert ku.digital_signature is True
-        assert ku.key_encipherment is True
+        assert ku.key_encipherment is False
         assert ku.key_cert_sign is False
         assert ku.crl_sign is False
-        assert ku.key_agreement is False
+        assert ku.key_agreement is True
 
     def test_extended_key_usage_server_auth(self) -> None:
         ca_cert, ca_key = self._make_ca()

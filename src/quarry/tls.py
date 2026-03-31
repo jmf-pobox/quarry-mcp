@@ -185,9 +185,9 @@ def generate_server_cert(
             x509.KeyUsage(
                 digital_signature=True,
                 content_commitment=False,
-                key_encipherment=True,
+                key_encipherment=False,
                 data_encipherment=False,
-                key_agreement=False,
+                key_agreement=True,
                 key_cert_sign=False,
                 crl_sign=False,
                 encipher_only=False,
@@ -282,6 +282,13 @@ def write_tls_files(hostname: str) -> None:
 
 
 def _write_file(path: Path, data: bytes, mode: int) -> None:
-    """Write binary data to path and set file permissions."""
-    path.write_bytes(data)
-    path.chmod(mode)
+    """Write binary data to path atomically and set file permissions.
+
+    Writes to a .tmp sibling, chmods it, then renames into place so that a
+    crash between write and chmod cannot leave a file with wrong permissions,
+    and idempotency checks on all-four-exist are never fooled by partial state.
+    """
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    tmp.chmod(mode)
+    tmp.rename(path)

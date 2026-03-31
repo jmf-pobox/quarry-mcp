@@ -134,7 +134,17 @@ printf '\n'
 
 info "Starting quarry daemon..."
 printf '\n'
-"$BINARY" install daemon 2>/dev/null || warn "Could not start daemon — run 'quarry install daemon' manually"
+QUARRY_LOG="$HOME/.punt-labs/quarry/quarry.log"
+mkdir -p "$(dirname "$QUARRY_LOG")"
+"$BINARY" serve --host 0.0.0.0 --tls >> "$QUARRY_LOG" 2>&1 &
+DAEMON_PID=$!
+sleep 2
+if kill -0 "$DAEMON_PID" 2>/dev/null; then
+  ok "Quarry daemon started (PID $DAEMON_PID) — logs: $QUARRY_LOG"
+else
+  warn "Quarry daemon exited — check $QUARRY_LOG"
+  warn "You can start it manually: quarry serve --host 0.0.0.0 --tls"
+fi
 printf '\n'
 
 # --- Step 6: Verify ---

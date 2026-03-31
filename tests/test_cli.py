@@ -2097,13 +2097,14 @@ class TestLoginCmd:
         assert "Restart Claude Code" in result.output
         assert _FAKE_FINGERPRINT in result.output
         mock_store.assert_called_once_with(_FAKE_CA_PEM)
-        mock_validate.assert_called_once_with(
-            "okinos.example.com",
-            8420,
-            "sk-test",
-            scheme="https",
-            ca_cert_path="/fake/quarry-ca.crt",
-        )
+        # validate_connection is called with a tempfile path (TOFU ordering: validate
+        # before persisting the cert), so we can't assert a fixed path.
+        assert mock_validate.call_count == 1
+        call_args = mock_validate.call_args
+        assert call_args.args[:3] == ("okinos.example.com", 8420, "sk-test")
+        assert call_args.kwargs.get("scheme") == "https"
+        tmp_path = call_args.kwargs.get("ca_cert_path", "")
+        assert isinstance(tmp_path, str) and tmp_path.endswith(".crt")
         mock_write.assert_called_once_with(
             "wss://okinos.example.com:8420/mcp", "sk-test", "/fake/quarry-ca.crt"
         )
@@ -2163,11 +2164,11 @@ class TestLoginCmd:
         assert "Server unreachable" in result.output
 
     def test_connection_failure_after_tofu(self) -> None:
-        """validate_connection fails — exits with code 1, config not written."""
+        """validate_connection fails — exits 1, cert and config not written."""
         with (
             patch("quarry.__main__.fetch_ca_cert", return_value=_FAKE_CA_PEM),
             patch("quarry.__main__.cert_fingerprint", return_value=_FAKE_FINGERPRINT),
-            patch("quarry.__main__.store_ca_cert"),
+            patch("quarry.__main__.store_ca_cert") as mock_store,
             patch(
                 "quarry.__main__.validate_connection",
                 return_value=(False, "Authentication failed — check --api-key."),
@@ -2182,6 +2183,8 @@ class TestLoginCmd:
         _reset_globals()
         assert result.exit_code == 1
         assert "Authentication failed" in result.output
+        # TOFU ordering: cert is stored only after successful validation.
+        mock_store.assert_not_called()
         mock_write.assert_not_called()
 
     def test_custom_port(self) -> None:
@@ -2227,14 +2230,14 @@ class TestLoginCmd:
             result = runner.invoke(app, ["login", "okinos.example.com", "--yes"])
         _reset_globals()
         assert result.exit_code == 0, result.output
-        # validate_connection called with token=None
-        mock_validate.assert_called_once_with(
-            "okinos.example.com",
-            8420,
-            None,
-            scheme="https",
-            ca_cert_path="/fake/quarry-ca.crt",
-        )
+        # validate_connection is called with a tempfile path (TOFU ordering: validate
+        # before persisting the cert), so we can't assert a fixed path.
+        assert mock_validate.call_count == 1
+        call_args = mock_validate.call_args
+        assert call_args.args[:3] == ("okinos.example.com", 8420, None)
+        assert call_args.kwargs.get("scheme") == "https"
+        tmp_path = call_args.kwargs.get("ca_cert_path", "")
+        assert isinstance(tmp_path, str) and tmp_path.endswith(".crt")
         # write_proxy_config called with token=None (no Authorization header)
         mock_write.assert_called_once_with(
             "wss://okinos.example.com:8420/mcp", None, "/fake/quarry-ca.crt"
