@@ -190,6 +190,21 @@ cleanup_https_rewrite
 
 # --- Step 8.5: Configure local TLS access ---
 
+# Wait for daemon to be ready (up to 30 seconds)
+info "Waiting for quarry daemon to be ready..."
+_i=0
+while [ $_i -lt 15 ]; do
+  if curl -fs "http://localhost:8420/health" >/dev/null 2>&1; then
+    ok "Daemon is ready"
+    break
+  fi
+  sleep 2
+  _i=$((_i + 1))
+done
+if [ $_i -eq 15 ]; then
+  warn "Daemon did not respond after 30s — login may fail (will retry automatically)"
+fi
+
 info "Configuring local TLS connection..."
 printf '\n'
 if QUARRY_API_KEY="${QUARRY_API_KEY:-}" "$BINARY" login localhost --yes 2>/dev/null; then

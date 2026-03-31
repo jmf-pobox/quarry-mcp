@@ -21,6 +21,7 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
@@ -133,11 +134,12 @@ def _launchd_plist_content() -> str:
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
     env_vars_block = ""
     if api_key:
+        escaped_key = _xml_escape(api_key)
         env_vars_block = textwrap.dedent(f"""\
             <key>EnvironmentVariables</key>
             <dict>
                 <key>QUARRY_API_KEY</key>
-                <string>{api_key}</string>
+                <string>{escaped_key}</string>
             </dict>
         """)
     return textwrap.dedent(f"""\

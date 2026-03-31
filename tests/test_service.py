@@ -272,6 +272,43 @@ class TestServiceFileApiKey:
         assert "QUARRY_API_KEY" not in content
         assert "--api-key" not in content
 
+    def test_launchd_plist_xml_escapes_api_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Characters &, <, > in QUARRY_API_KEY must be XML-escaped in the plist."""
+        monkeypatch.setenv("QUARRY_API_KEY", "te&st<key>")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+
+        # Find just the EnvironmentVariables section to avoid false matches
+        # in comments or other XML structure.
+        assert "EnvironmentVariables" in content
+        env_section_start = content.index("EnvironmentVariables")
+        env_section = content[env_section_start:]
+
+        # Escaped forms must appear in the EnvironmentVariables block.
+        assert "&amp;" in env_section
+        assert "&lt;" in env_section
+        assert "&gt;" in env_section
+
+        # Strip out all escaped sequences then verify no raw specials remain
+        # in the EnvironmentVariables section.  Check only this section —
+        # the full plist document uses & in the DTD URL (expected XML).
+        stripped = (
+            env_section.replace("&amp;", "")
+            .replace("&lt;", "")
+            .replace("&gt;", "")
+            .replace("&quot;", "")
+            .replace("&apos;", "")
+        )
+        assert "&" not in stripped
+        assert "<key>" in content  # sanity: normal XML structure still valid
+        # The raw un-escaped key value must not appear literally.
+        assert "te&st<key>" not in content
+
     def test_systemd_unit_contains_environment_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
