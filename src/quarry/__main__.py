@@ -732,23 +732,35 @@ def login_cmd(
             hide_input=True,
         ),
     ] = "",
+    insecure: Annotated[
+        bool,
+        typer.Option(
+            "--insecure",
+            help="Allow plaintext ws:// transport (not recommended outside localhost)",
+        ),
+    ] = False,
 ) -> None:
     """Connect to a remote quarry server."""
     if not api_key:
         err_console.print("Error: --api-key is required.", style="red")
         raise typer.Exit(code=1)
-    ok, reason = validate_connection(host, port, api_key)
+    if host in _LOCALHOST_NAMES:
+        scheme = "ws"
+    elif insecure:
+        scheme = "ws"
+        err_console.print(
+            f"Warning: --insecure flag set. "
+            f"Credentials will be sent in cleartext to {host}.",
+            style="yellow",
+        )
+    else:
+        scheme = "wss"
+    ok, reason = validate_connection(host, port, api_key, scheme=scheme)
     if not ok:
         err_console.print(f"Error: {reason}", style="red")
         raise typer.Exit(code=1)
-    if host not in _LOCALHOST_NAMES:
-        err_console.print(
-            f"Warning: connection to {host} uses unencrypted transport (ws://). "
-            "Credentials are sent in cleartext. Use on trusted networks only.",
-            style="yellow",
-        )
     try:
-        write_proxy_config(f"ws://{host}:{port}/mcp", api_key)
+        write_proxy_config(f"{scheme}://{host}:{port}/mcp", api_key)
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
