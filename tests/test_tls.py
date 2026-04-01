@@ -25,42 +25,42 @@ from quarry.tls import (
 
 class TestGenerateCa:
     def test_returns_pem_bytes(self) -> None:
-        cert_pem, key_pem = generate_ca("test.example.com")
+        cert_pem, key_pem = generate_ca()
         assert cert_pem.startswith(b"-----BEGIN CERTIFICATE-----")
         assert key_pem.startswith(b"-----BEGIN EC PRIVATE KEY-----")
 
     def test_ca_constraint_set(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
         assert bc.value.ca is True
 
-    def test_hostname_in_cn(self) -> None:
-        cert_pem, _ = generate_ca("myhost.local")
+    def test_cn_is_quarry_ca(self) -> None:
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         cn = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
-        assert "myhost.local" in str(cn)
+        assert cn == "Quarry CA"
 
     def test_self_signed(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         assert cert.subject == cert.issuer
 
     def test_valid_for_10_years(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         delta = cert.not_valid_after_utc - cert.not_valid_before_utc
         # Allow 1 day of slack for year boundary differences.
         assert delta.days >= 364 * 10
 
     def test_authority_key_identifier_present(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
         assert aki is not None
 
     def test_key_usage_key_cert_sign_and_crl_sign(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         cert = x509.load_pem_x509_certificate(cert_pem)
         ku_ext = cert.extensions.get_extension_for_class(x509.KeyUsage)
         assert ku_ext.critical is True
@@ -74,7 +74,7 @@ class TestGenerateCa:
 
 class TestGenerateServerCert:
     def _make_ca(self) -> tuple[bytes, bytes]:
-        return generate_ca("test.example.com")
+        return generate_ca()
 
     def test_returns_pem_bytes(self) -> None:
         ca_cert, ca_key = self._make_ca()
@@ -199,7 +199,7 @@ class TestGenerateServerCert:
 
 class TestCertFingerprint:
     def test_format(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         fp = cert_fingerprint(cert_pem)
         assert fp.startswith("SHA256:")
         hex_part = fp.removeprefix("SHA256:")
@@ -207,12 +207,12 @@ class TestCertFingerprint:
         assert all(c in "0123456789abcdef" for c in hex_part)
 
     def test_deterministic(self) -> None:
-        cert_pem, _ = generate_ca("test.example.com")
+        cert_pem, _ = generate_ca()
         assert cert_fingerprint(cert_pem) == cert_fingerprint(cert_pem)
 
     def test_different_certs_differ(self) -> None:
-        cert1, _ = generate_ca("host1.example.com")
-        cert2, _ = generate_ca("host2.example.com")
+        cert1, _ = generate_ca()
+        cert2, _ = generate_ca()
         assert cert_fingerprint(cert1) != cert_fingerprint(cert2)
 
 
@@ -294,8 +294,8 @@ class TestWriteTlsFiles:
         tls_dir = tmp_path / "tls"
         tls_dir.mkdir(parents=True)
         # Generate two independent CA keypairs; use cert from one, key from another.
-        ca_cert_pem_a, _ = generate_ca("host-a.local")
-        _, ca_key_pem_b = generate_ca("host-b.local")
+        ca_cert_pem_a, _ = generate_ca()
+        _, ca_key_pem_b = generate_ca()
         (tls_dir / "ca.crt").write_bytes(ca_cert_pem_a)
         (tls_dir / "ca.key").write_bytes(ca_key_pem_b)
         with (
@@ -308,7 +308,7 @@ class TestWriteTlsFiles:
         """ca.crt present but ca.key missing → ValueError, not silent regeneration."""
         tls_dir = tmp_path / "tls"
         tls_dir.mkdir(parents=True)
-        ca_cert_pem, _ = generate_ca("myhost.local")
+        ca_cert_pem, _ = generate_ca()
         (tls_dir / "ca.crt").write_bytes(ca_cert_pem)
         # ca.key intentionally absent
         with (
@@ -319,7 +319,7 @@ class TestWriteTlsFiles:
 
     def test_invalid_hostname_raises_friendly_error(self) -> None:
         """Hostname rejected by x509.DNSName raises ValueError with env-var hint."""
-        ca_cert_pem, ca_key_pem = generate_ca("localhost")
+        ca_cert_pem, ca_key_pem = generate_ca()
         # Simulate a cryptography build that rejects the hostname as invalid.
         original_dns_name = x509.DNSName
 
@@ -351,7 +351,7 @@ class TestWriteTlsFiles:
         """ca.key present but ca.crt missing → ValueError, not silent regeneration."""
         tls_dir = tmp_path / "tls"
         tls_dir.mkdir(parents=True)
-        _, ca_key_pem = generate_ca("myhost.local")
+        _, ca_key_pem = generate_ca()
         (tls_dir / "ca.key").write_bytes(ca_key_pem)
         # ca.crt intentionally absent
         with (

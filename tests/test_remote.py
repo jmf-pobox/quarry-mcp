@@ -272,7 +272,7 @@ class TestValidateConnectionFromWsUrl:
         """ca_cert_path must reach urlopen as a non-None SSL context."""
         from quarry.tls import generate_ca
 
-        ca_pem, _ = generate_ca("host.example.com")
+        ca_pem, _ = generate_ca()
         ca_file = tmp_path / "ca.crt"
         ca_file.write_bytes(ca_pem)
 
@@ -639,7 +639,7 @@ class TestValidateConnectionWithCaCert:
         from quarry.tls import generate_ca
 
         # Write a real CA cert so ssl.create_default_context() can load it.
-        ca_pem, _ = generate_ca("test.example.com")
+        ca_pem, _ = generate_ca()
         ca_file = tmp_path / "ca.crt"
         ca_file.write_bytes(ca_pem)
 

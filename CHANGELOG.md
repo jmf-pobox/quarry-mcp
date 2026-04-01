@@ -46,6 +46,9 @@ across `transform`, `index`, and `connector`).
 - **infra**: `quarry install` now restarts the quarry systemd service after cert
   regeneration. Previously `systemctl enable --now` did not restart an
   already-running service, causing it to serve stale TLS certs.
+- **infra**: CA cert CN is now `"Quarry CA"` instead of hostname-scoped
+  `"Quarry CA (hostname)"`. The CA is identified by its SHA256 fingerprint
+  (TOFU), not its CN.
 
 ## [1.10.1] - 2026-03-29
 
