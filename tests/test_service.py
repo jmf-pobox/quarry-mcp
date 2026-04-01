@@ -413,6 +413,96 @@ class TestLaunchdPlistArgEncoding:
         assert f"<string>'{spacey_path}'</string>" not in content
 
 
+class TestInstallHostKeyGuard:
+    """install() must reject non-loopback QUARRY_SERVE_HOST with no API key."""
+
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_raises_when_non_loopback_host_and_no_api_key(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """install() raises SystemExit when QUARRY_SERVE_HOST=0.0.0.0 and no API key."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "0.0.0.0")  # noqa: S104
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        with pytest.raises(SystemExit, match="QUARRY_API_KEY is empty"):
+            install()
+
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_raises_when_custom_host_and_empty_api_key(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """install() raises SystemExit for any non-loopback host with empty API key."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "192.168.1.50")
+        monkeypatch.setenv("QUARRY_API_KEY", "")
+        with pytest.raises(SystemExit, match="QUARRY_API_KEY is empty"):
+            install()
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_loopback_host_without_api_key_succeeds(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        _sys: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """install() with QUARRY_SERVE_HOST=127.0.0.1 and no key must not raise."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "127.0.0.1")
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=113),  # launchctl list: not found
+                MagicMock(returncode=0),  # launchctl load: success
+                MagicMock(returncode=0),  # launchctl list: running
+            ]
+            msg = install()
+        assert "running" in msg
+
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    @patch("quarry.service.write_tls_files")
+    @patch("quarry.service.cert_fingerprint", return_value="")
+    def test_non_loopback_host_with_api_key_succeeds(
+        self,
+        _fp: MagicMock,
+        _tls: MagicMock,
+        _sys: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """install() with non-loopback host AND a valid API key must not raise."""
+        monkeypatch.setenv("QUARRY_SERVE_HOST", "0.0.0.0")  # noqa: S104
+        monkeypatch.setenv("QUARRY_API_KEY", "validkey")
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=113),  # launchctl list: not found
+                MagicMock(returncode=0),  # launchctl load: success
+                MagicMock(returncode=0),  # launchctl list: running
+            ]
+            msg = install()
+        assert "running" in msg
+
+
 class TestInstallMacOS:
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")

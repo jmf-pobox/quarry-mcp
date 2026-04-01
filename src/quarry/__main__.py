@@ -275,7 +275,7 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
 
     ca_cert = config.get("ca_cert")
     scheme = "https" if raw_url.startswith("wss://") else "http"
-    if scheme == "https" and ca_cert is None:
+    if scheme == "https" and not ca_cert:
         raise SystemExit(
             "Remote server uses HTTPS but no CA cert is pinned. "
             "Run 'quarry login' to trust the server's certificate."
@@ -291,7 +291,13 @@ def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]
     conn: http.client.HTTPConnection | http.client.HTTPSConnection
     if scheme == "https":
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_ctx.load_verify_locations(str(ca_cert))
+        try:
+            ssl_ctx.load_verify_locations(str(ca_cert))
+        except (OSError, ssl.SSLError) as exc:
+            raise SystemExit(
+                f"Cannot load CA certificate {ca_cert!r}. "
+                f"Run 'quarry login' to configure. ({exc})"
+            ) from exc
         conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
     else:
         conn = http.client.HTTPConnection(host, port, timeout=15)

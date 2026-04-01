@@ -470,4 +470,4 @@ class TestWriteFile:
         ):
             _write_file(target, b"data", 0o600)
 
-        assert not (tmp_path / "out.tmp").exists()
+        assert not (tmp_path / "out.bin.tmp").exists()

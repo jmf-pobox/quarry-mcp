@@ -336,10 +336,21 @@ def detect_platform() -> str:
 
 def install() -> str:
     """Install quarry as a system service.  Returns a status message."""
+    # Validate that non-loopback binds have an API key — without one the daemon
+    # will crash-loop at runtime because http_server.serve() enforces this invariant.
+    serve_host = os.environ.get("QUARRY_SERVE_HOST", "").strip()
+    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
+    if serve_host and serve_host != "127.0.0.1" and not api_key:
+        msg = (
+            f"QUARRY_SERVE_HOST is set to {serve_host!r} but QUARRY_API_KEY is empty. "
+            "Non-loopback hosts require an API key. "
+            "Set QUARRY_API_KEY before running 'quarry install'."
+        )
+        raise SystemExit(msg)
+
     # Write the API key env file before registering the service so the daemon
     # can read it on first start.  The key is NOT baked into exec args —
     # it lives in a 0600 env file to keep it out of ps output and service files.
-    api_key = os.environ.get("QUARRY_API_KEY", "").strip()
     if api_key:
         _write_env_file(api_key)
 

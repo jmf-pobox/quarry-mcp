@@ -146,11 +146,12 @@ info "Waiting for daemon to be ready..."
 printf '\n'
 
 HEALTH_URL="https://localhost:8420/health"
+CA_CERT="${HOME}/.punt-labs/quarry/tls/ca.crt"
 MAX_TRIES=10
 i=0
 while [ "$i" -lt "$MAX_TRIES" ]; do
   i=$((i + 1))
-  if "$BINARY" doctor >/dev/null 2>&1; then
+  if curl -fsS --cacert "$CA_CERT" "$HEALTH_URL" >/dev/null 2>&1; then
     ok "Quarry daemon is healthy (attempt $i/$MAX_TRIES)"
     break
   fi

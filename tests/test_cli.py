@@ -2775,3 +2775,61 @@ class TestRemoteListCmd:
         assert result.exit_code == 0
         mock_validate.assert_called_once()
         assert "healthy" in result.output
+
+
+class TestRemoteHttpsGet:
+    """Unit tests for _remote_https_get() error handling."""
+
+    def test_empty_ca_cert_raises_system_exit(self) -> None:
+        """Empty string ca_cert must raise SystemExit with 'CA cert' in message.
+
+        Fix 3: the guard was `ca_cert is None` — an empty string passed through,
+        then ssl_ctx.load_verify_locations("") raised an unhelpful OSError.
+        The fix changes the guard to `not ca_cert` so "" is treated as absent.
+        """
+        import pytest
+
+        from quarry.__main__ import _remote_https_get
+
+        config: dict[str, object] = {
+            "url": "wss://host:8420/mcp",
+            "ca_cert": "",  # empty string — was previously passing the None guard
+            "headers": {},
+        }
+        with pytest.raises(SystemExit, match="CA cert"):
+            _remote_https_get("/health", config)
+
+    def test_none_ca_cert_raises_system_exit(self) -> None:
+        """None ca_cert raises SystemExit (existing behavior, regression guard)."""
+        import pytest
+
+        from quarry.__main__ import _remote_https_get
+
+        config: dict[str, object] = {
+            "url": "wss://host:8420/mcp",
+            "ca_cert": None,
+            "headers": {},
+        }
+        with pytest.raises(SystemExit, match="CA cert"):
+            _remote_https_get("/health", config)
+
+    def test_unreadable_ca_cert_path_raises_system_exit_with_ca_message(
+        self, tmp_path: Path
+    ) -> None:
+        """load_verify_locations failing on a non-existent file raises SystemExit.
+
+        Fix 3: wrap load_verify_locations in try/except to produce a clear message
+        rather than propagating the raw OSError or SSLError.
+        """
+        import pytest
+
+        from quarry.__main__ import _remote_https_get
+
+        missing_cert = str(tmp_path / "nonexistent-ca.crt")
+        config: dict[str, object] = {
+            "url": "wss://host:8420/mcp",
+            "ca_cert": missing_cert,
+            "headers": {},
+        }
+        with pytest.raises(SystemExit, match="CA certificate"):
+            _remote_https_get("/health", config)
