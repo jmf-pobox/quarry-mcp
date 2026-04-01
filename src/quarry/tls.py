@@ -75,11 +75,8 @@ def _signing_public_key(
     return pub
 
 
-def generate_ca(hostname: str) -> tuple[bytes, bytes]:
+def generate_ca() -> tuple[bytes, bytes]:
     """Generate a self-signed CA keypair.
-
-    Args:
-        hostname: The hostname that will be used in the CA subject CN.
 
     Returns:
         (ca_cert_pem, ca_key_pem) as bytes.
@@ -87,7 +84,7 @@ def generate_ca(hostname: str) -> tuple[bytes, bytes]:
     key = ec.generate_private_key(_EC_CURVE)
     subject = issuer = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, f"Quarry CA ({hostname})"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "Quarry CA"),
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Punt Labs"),
         ]
     )
@@ -323,8 +320,8 @@ def write_tls_files(hostname: str) -> bool:
         )
         raise ValueError(msg)
     else:
-        logger.info("Generating new CA for hostname=%r", hostname)
-        ca_cert_pem, ca_key_pem = generate_ca(hostname)
+        logger.info("Generating new CA")
+        ca_cert_pem, ca_key_pem = generate_ca()
         _write_file(ca_crt_path, ca_cert_pem, mode=0o644)
         _write_file(ca_key_path, ca_key_pem, mode=0o600)
 
