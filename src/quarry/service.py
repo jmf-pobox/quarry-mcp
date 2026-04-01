@@ -121,19 +121,23 @@ def _launchd_plist_content() -> str:
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     # launchd does not support EnvironmentFile — embed the API key directly in the
     # plist EnvironmentVariables dict.  The plist is written at install time (0700
-    # LaunchAgents dir, 0644 plist) by the installing user, so this matches the
+    # LaunchAgents dir, 0600 plist) by the installing user, so this matches the
     # security posture of any other credential in a launchd plist.
     api_key = os.environ.get("QUARRY_API_KEY", "").strip()
     env_vars_block = ""
     if api_key:
         escaped_key = _xml_escape(api_key)
-        env_vars_block = textwrap.dedent(f"""\
-            <key>EnvironmentVariables</key>
-            <dict>
-                <key>QUARRY_API_KEY</key>
-                <string>{escaped_key}</string>
-            </dict>
-        """)
+        # Do NOT use textwrap.dedent here — the outer dedent computes minimum
+        # indent across ALL lines including the substituted env_vars_block.
+        # A nested dedent produces 0-space lines, defeating the outer dedent.
+        env_vars_block = (
+            "<key>EnvironmentVariables</key>\n"
+            "        <dict>\n"
+            "            <key>QUARRY_API_KEY</key>\n"
+            f"            <string>{escaped_key}</string>\n"
+            "        </dict>\n"
+            "        "
+        )
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"

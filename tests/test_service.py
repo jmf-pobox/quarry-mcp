@@ -335,6 +335,36 @@ class TestServiceFileApiKey:
         # The raw un-escaped key value must not appear literally.
         assert "te&st<key>" not in content
 
+    def test_plist_content_starts_with_xml_declaration_no_leading_whitespace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plist must start with <?xml without leading whitespace."""
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            result = _launchd_plist_content()
+        assert result.startswith("<?xml"), (
+            f"Expected plist to start with <?xml, got: {result[:50]!r}"
+        )
+
+    def test_plist_content_with_api_key_no_leading_whitespace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Embedding an API key must not break the outer textwrap.dedent."""
+        monkeypatch.setenv("QUARRY_API_KEY", "test-key-abc")
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            result = _launchd_plist_content()
+        assert result.startswith("<?xml"), (
+            f"Expected <?xml at start, got: {result[:50]!r}"
+        )
+        assert "test-key-abc" in result
+        assert "<key>EnvironmentVariables</key>" in result
+
     def test_systemd_unit_contains_environment_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
