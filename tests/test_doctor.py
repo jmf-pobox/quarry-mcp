@@ -672,6 +672,25 @@ class TestRunInstall:
         assert result == 0
         assert data_dir.is_dir()
 
+    def test_gpu_failure_marks_error(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        with (
+            patch(
+                "quarry.service.ensure_gpu_runtime",
+                return_value="onnxruntime-gpu install failed, CPU restored",
+            ),
+            patch("quarry.embeddings.download_model_files") as mock_dl,
+        ):
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "\u2717" in captured.out
+        assert "failed" in captured.out
+
     def test_model_download_failure_returns_one(self, tmp_path: Path, monkeypatch: MP):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         _mock_install_deps(monkeypatch)
