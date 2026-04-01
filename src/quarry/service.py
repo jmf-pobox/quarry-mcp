@@ -117,7 +117,7 @@ _LAUNCHD_PLIST = _LAUNCHD_DIR / f"{_LABEL}.plist"
 
 def _launchd_plist_content() -> str:
     args = _quarry_exec_args()
-    program_args = "\n".join(f"        <string>{shlex.quote(a)}</string>" for a in args)
+    program_args = "\n".join(f"        <string>{_xml_escape(a)}</string>" for a in args)
     log_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
     # launchd does not support EnvironmentFile — embed the API key directly in the
     # plist EnvironmentVariables dict.  The plist is written at install time (0700

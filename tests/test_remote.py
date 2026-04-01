@@ -684,3 +684,25 @@ class TestValidateConnectionWithCaCert:
             )
         assert ok is False
         assert reason  # non-empty error message
+
+    def test_missing_ca_file_error_mentions_ca_certificate(
+        self, tmp_path: Path
+    ) -> None:
+        """When ca_cert_path points to a non-existent file, the error message
+        must mention 'CA certificate' — not the misleading 'Could not connect'
+        phrasing that implies a network failure."""
+        nonexistent = str(tmp_path / "does_not_exist" / "ca.crt")
+        ok, reason = validate_connection(
+            "localhost",
+            8420,
+            "sk-test",
+            scheme="https",
+            ca_cert_path=nonexistent,
+        )
+        assert ok is False
+        assert "CA certificate" in reason, (
+            f"Expected 'CA certificate' in error, got: {reason!r}"
+        )
+        assert "Could not connect" not in reason, (
+            f"Must not say 'Could not connect' for a CA cert problem; got: {reason!r}"
+        )

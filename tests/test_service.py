@@ -382,6 +382,35 @@ class TestServiceFileApiKey:
         assert "--api-key" not in content
 
 
+class TestLaunchdPlistArgEncoding:
+    def test_path_with_spaces_not_shell_quoted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ProgramArguments strings must be XML-escaped, not shell-quoted.
+
+        shlex.quote() would wrap '/path with spaces/quarry' in single-quotes,
+        producing the literal string `'/path with spaces/quarry'` (including
+        quote chars) as the exec argument — breaking execution.  launchd passes
+        ProgramArguments directly to exec; there is no shell.
+        """
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        spacey_path = "/path with spaces/quarry"
+        with (
+            patch(
+                "quarry.service._quarry_exec_args",
+                return_value=[spacey_path, "serve"],
+            ),
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+
+        # The path must appear verbatim inside <string> tags.
+        assert f"<string>{spacey_path}</string>" in content
+        # shlex.quote wraps in single-quotes — that must NOT happen.
+        assert f"<string>'{spacey_path}'</string>" not in content
+
+
 class TestInstallMacOS:
     @patch("quarry.service.subprocess.run")
     @patch.object(platform, "system", return_value="Darwin")
