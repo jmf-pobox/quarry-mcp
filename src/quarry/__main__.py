@@ -357,7 +357,7 @@ def find_cmd(
 ) -> None:
     """Search indexed documents."""
     proxy_config = _safe_proxy_config().get("quarry", {})
-    if proxy_config and "url" in proxy_config:
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
         params: dict[str, str | int] = {"q": query, "limit": limit}
         if collection:
             params["collection"] = collection
@@ -657,7 +657,7 @@ def remember(
 def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
     proxy_config = _safe_proxy_config().get("quarry", {})
-    if proxy_config and "url" in proxy_config:
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
         remote_data = _remote_https_get("/status", proxy_config)
         _emit(remote_data, format_status(remote_data))
         return
@@ -1006,7 +1006,7 @@ def remote_list_cmd(
     """Show configured remote server."""
     config = _safe_proxy_config()
     quarry_cfg = config.get("quarry", {})
-    if not quarry_cfg:
+    if not isinstance(quarry_cfg, dict) or not quarry_cfg:
         _emit({"remote": None}, "No remote configured.")
         return
     url = quarry_cfg.get("url", "")

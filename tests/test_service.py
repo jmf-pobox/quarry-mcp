@@ -463,6 +463,33 @@ class TestInstallMacOS:
             assert "uninstalled" in msg
             mock_run.assert_not_called()
 
+    @patch("quarry.service.subprocess.run")
+    @patch.object(platform, "system", return_value="Darwin")
+    def test_plist_written_with_mode_0600(
+        self, _sys: MagicMock, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """_launchd_install() must chmod the plist to 0600.
+
+        The plist embeds QUARRY_API_KEY so it must be owner-read-only.
+        """
+        plist_path = tmp_path / "com.punt-labs.quarry.plist"
+        with (
+            patch("quarry.service._LAUNCHD_DIR", tmp_path),
+            patch("quarry.service._LAUNCHD_PLIST", plist_path),
+            _PATCH_TLS,
+            _PATCH_CERT_FP,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=113),  # launchctl list: not found (fresh install)
+                MagicMock(returncode=0),  # launchctl load: success
+                MagicMock(returncode=0),  # launchctl list: running
+            ]
+            install()
+
+        assert plist_path.exists()
+        mode = stat.S_IMODE(plist_path.stat().st_mode)
+        assert oct(mode) == oct(0o600), f"expected 0o600, got {oct(mode)}"
+
 
 class TestInstallLinux:
     @patch("quarry.service._has_linger", return_value=True)

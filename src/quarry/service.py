@@ -160,7 +160,7 @@ def _launchd_plist_content() -> str:
 
 
 def _launchd_install() -> None:
-    _LAUNCHD_DIR.mkdir(parents=True, exist_ok=True)
+    _LAUNCHD_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     # Unload any existing service first — handles upgrades where the
     # old plist pointed to a different binary (e.g. editable install).
@@ -182,6 +182,7 @@ def _launchd_install() -> None:
             )
 
     _LAUNCHD_PLIST.write_text(_launchd_plist_content())
+    _LAUNCHD_PLIST.chmod(0o600)
     logger.info("Wrote %s", _LAUNCHD_PLIST)
 
     subprocess.run(

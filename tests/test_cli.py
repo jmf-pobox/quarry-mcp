@@ -770,6 +770,55 @@ class TestFindCmd:
         assert item["text"] == "full text here"
 
 
+class TestProxyConfigIsinstanceGuard:
+    """Regression tests: quarry = "somestring" in config must not crash find/status."""
+
+    def test_find_falls_back_to_local_when_quarry_config_is_string(self) -> None:
+        """find_cmd falls through to local mode when proxy_config['quarry'] is a string.
+
+        If the TOML has `quarry = "somestring"` rather than a table, the old
+        `if proxy_config and "url" in proxy_config` was a substring check.
+        The isinstance guard must short-circuit to local mode instead of crashing.
+        """
+        mock_vector = np.zeros(768, dtype=np.float32)
+        mock_backend = MagicMock()
+        mock_backend.embed_query.return_value = mock_vector
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value={"quarry": "not-a-dict"},
+            ),
+            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.get_embedding_backend", return_value=mock_backend),
+            patch("quarry.__main__.hybrid_search", return_value=[]),
+        ):
+            result = runner.invoke(app, ["find", "query"])
+
+        assert result.exit_code == 0
+
+    def test_status_falls_back_to_local_when_quarry_config_is_string(self) -> None:
+        """status_cmd falls through to local when proxy_config['quarry'] is a string."""
+        mock_settings = _mock_settings()
+        mock_settings.registry_path.exists.return_value = False
+        mock_settings.lancedb_path.exists.return_value = False
+        with (
+            patch(
+                "quarry.__main__.read_proxy_config",
+                return_value={"quarry": "not-a-dict"},
+            ),
+            patch("quarry.__main__._resolved_settings", return_value=mock_settings),
+            patch("quarry.__main__.get_db"),
+            patch("quarry.__main__.list_documents", return_value=[]),
+            patch("quarry.__main__.count_chunks", return_value=0),
+            patch("quarry.__main__.db_list_collections", return_value=[]),
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 0
+        assert "Documents" in result.output
+
+
 class TestDeleteCollectionCmd:
     def test_deletes_collection(self):
         with (
