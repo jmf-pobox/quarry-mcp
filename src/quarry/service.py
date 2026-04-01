@@ -345,6 +345,7 @@ def ensure_gpu_runtime() -> str:
     result = subprocess.run(
         [nvidia_smi],
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         logger.info(
@@ -354,14 +355,26 @@ def ensure_gpu_runtime() -> str:
         return "no NVIDIA GPU"
 
     # GPU is present — check if CUDA provider is already available.
-    try:
-        import onnxruntime as ort  # noqa: PLC0415
-
-        if "CUDAExecutionProvider" in ort.get_available_providers():
-            logger.info("CUDAExecutionProvider already available")
-            return "CUDA already available"
-    except ImportError:
-        pass  # onnxruntime not importable — proceed with install
+    # Use a subprocess to avoid stale native shared libraries (.so) that
+    # persist in the current process after a previous onnxruntime import.
+    provider_check = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import onnxruntime; "
+            "print(','.join(onnxruntime.get_available_providers()))",
+        ],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
+    cuda_available = (
+        provider_check.returncode == 0
+        and "CUDAExecutionProvider" in provider_check.stdout
+    )
+    if cuda_available:
+        logger.info("CUDAExecutionProvider already available")
+        return "CUDA already available"
 
     python = sys.executable
     logger.info("Swapping onnxruntime for onnxruntime-gpu (python=%s)", python)
@@ -370,12 +383,14 @@ def ensure_gpu_runtime() -> str:
     subprocess.run(
         [uv_path, "pip", "uninstall", "--python", python, "onnxruntime"],
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
 
     # Install onnxruntime-gpu.
     gpu_install = subprocess.run(
         [uv_path, "pip", "install", "--python", python, "onnxruntime-gpu>=1.18.0"],
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     if gpu_install.returncode == 0:
         logger.info("onnxruntime-gpu installed successfully")
@@ -391,6 +406,7 @@ def ensure_gpu_runtime() -> str:
     cpu_restore = subprocess.run(
         [uv_path, "pip", "install", "--python", python, "onnxruntime>=1.18.0"],
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     # Clear stale module cache so subsequent imports see the restored package.
     sys.modules.pop("onnxruntime", None)

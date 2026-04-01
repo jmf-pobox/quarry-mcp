@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import stat
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1004,24 +1005,29 @@ class TestEnsureGpuRuntime:
                 return "/usr/bin/nvidia-smi"
             return None
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = [
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ]
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if cmd[0] == "/usr/bin/nvidia-smi":
+                return MagicMock(returncode=0)
+            # Provider check subprocess — report CUDA available.
+            if cmd[0] == sys.executable and "-c" in cmd:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CUDAExecutionProvider,CPUExecutionProvider\n",
+                )
+            return MagicMock(returncode=0)
+
         with (
             patch("quarry.service.shutil.which", side_effect=which_side_effect),
-            patch(
-                "quarry.service.subprocess.run",
-                return_value=MagicMock(returncode=0),
-            ) as mock_run,
-            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
+            patch("quarry.service.subprocess.run", side_effect=run_side_effect),
         ):
             result = ensure_gpu_runtime()
 
         assert result == "CUDA already available"
-        # Only nvidia-smi should have been called — no pip commands.
-        mock_run.assert_called_once()
+        # nvidia-smi + provider check = 2 subprocess calls, no pip commands.
+        assert len(calls) == 2
 
     def test_swap_success(self) -> None:
         """When nvidia-smi works and CUDA not available, swap succeeds."""
@@ -1033,14 +1039,17 @@ class TestEnsureGpuRuntime:
                 return "/usr/bin/nvidia-smi"
             return None
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
-
         call_count = 0
 
-        def run_side_effect(*args: object, **kwargs: object) -> MagicMock:
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
             nonlocal call_count
             call_count += 1
+            # Provider check subprocess — report CPU only.
+            if cmd[0] == sys.executable and "-c" in cmd:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CPUExecutionProvider\n",
+                )
             return MagicMock(returncode=0)
 
         with (
@@ -1049,13 +1058,12 @@ class TestEnsureGpuRuntime:
                 "quarry.service.subprocess.run",
                 side_effect=run_side_effect,
             ),
-            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
         ):
             result = ensure_gpu_runtime()
 
         assert result == "onnxruntime-gpu installed"
-        # nvidia-smi + uninstall + install = 3 subprocess calls
-        assert call_count == 3
+        # nvidia-smi + provider check + uninstall + install = 4 subprocess calls
+        assert call_count == 4
 
     def test_swap_failure_restores_cpu(self) -> None:
         """When onnxruntime-gpu install fails, CPU onnxruntime is restored."""
@@ -1067,13 +1075,16 @@ class TestEnsureGpuRuntime:
                 return "/usr/bin/nvidia-smi"
             return None
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
-
         calls: list[list[str]] = []
 
         def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
             calls.append(cmd)
+            # Provider check — CPU only.
+            if cmd[0] == sys.executable and "-c" in cmd:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CPUExecutionProvider\n",
+                )
             # nvidia-smi OK, uninstall OK, gpu fails, cpu restore OK
             if "onnxruntime-gpu>=1.18.0" in cmd:
                 return MagicMock(returncode=1)
@@ -1082,7 +1093,6 @@ class TestEnsureGpuRuntime:
         with (
             patch("quarry.service.shutil.which", side_effect=which_side_effect),
             patch("quarry.service.subprocess.run", side_effect=run_side_effect),
-            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
         ):
             result = ensure_gpu_runtime()
 
@@ -1103,10 +1113,13 @@ class TestEnsureGpuRuntime:
                 return "/usr/bin/nvidia-smi"
             return None
 
-        mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
-
         def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            # Provider check — CPU only.
+            if cmd[0] == sys.executable and "-c" in cmd:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CPUExecutionProvider\n",
+                )
             # nvidia-smi OK, uninstall OK, gpu install fails, cpu restore fails
             if "onnxruntime-gpu>=1.18.0" in cmd:
                 return MagicMock(returncode=1)
@@ -1117,7 +1130,6 @@ class TestEnsureGpuRuntime:
         with (
             patch("quarry.service.shutil.which", side_effect=which_side_effect),
             patch("quarry.service.subprocess.run", side_effect=run_side_effect),
-            patch.dict("sys.modules", {"onnxruntime": mock_ort}),
         ):
             result = ensure_gpu_runtime()
 
@@ -1135,13 +1147,21 @@ class TestEnsureGpuRuntime:
             return None
 
         mock_ort = MagicMock()
-        mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            # Provider check subprocess — report CPU only.
+            if cmd[0] == sys.executable and "-c" in cmd:
+                return MagicMock(
+                    returncode=0,
+                    stdout="CPUExecutionProvider\n",
+                )
+            return MagicMock(returncode=0)
 
         with (
             patch("quarry.service.shutil.which", side_effect=which_side_effect),
             patch(
                 "quarry.service.subprocess.run",
-                return_value=MagicMock(returncode=0),
+                side_effect=run_side_effect,
             ),
             patch.dict("sys.modules", {"onnxruntime": mock_ort}),
         ):
