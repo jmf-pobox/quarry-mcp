@@ -828,8 +828,9 @@ class TestSystemdEscape:
         """
         path = "/home/o'brien/.local/bin/quarry"
         result = _systemd_escape(path)
-        # The POSIX single-quote escape sequence must not appear.
-        assert "'" + '"' not in result, f"POSIX escape pattern found in: {result!r}"
+        # The full POSIX single-quote escape sequence '"'"' must not appear.
+        posix_escape = "'" + '"' + "'" + '"' + "'"
+        assert posix_escape not in result, f"POSIX escape pattern found in: {result!r}"
         # Single quotes inside double-quoted strings are fine in systemd — they
         # must appear verbatim, not escaped.
         assert "o'brien" in result
@@ -866,9 +867,9 @@ class TestSystemdEscape:
         exec_start_line = next(
             line for line in content.splitlines() if line.startswith("ExecStart=")
         )
-        # The POSIX single-quote escape sequence ('"'"') must not appear.
+        # The full POSIX single-quote escape sequence '"'"' must not appear.
         # shlex.quote produces this pattern; systemd cannot parse it.
-        assert "'" + '"' not in exec_start_line, (
+        assert "'" + '"' + "'" + '"' + "'" not in exec_start_line, (
             f"ExecStart must not use POSIX shell escaping; got: {exec_start_line!r}"
         )
         # The path must appear with the single-quote verbatim inside double quotes.

@@ -361,14 +361,12 @@ def install() -> str:
 
     plat = detect_platform()
 
-    # Write the API key env file before registering the service so the daemon
-    # can read it on first start.  The key is NOT baked into exec args —
-    # it lives in a 0600 env file to keep it out of ps output and service files.
-    # macOS: the key goes into the plist EnvironmentVariables block — no env
-    # file needed there.  Linux: systemd reads it via EnvironmentFile=.
+    # Linux: API key written to ~/.punt-labs/quarry/quarry.env (0600) before
+    # service registration so systemd can read it via EnvironmentFile= on first
+    # start.  The key is NOT baked into ExecStart args to stay out of ps output.
+    # macOS: API key embedded in the plist EnvironmentVariables block only —
+    # no env file is written.
     if api_key and plat == "linux":
-        # macOS: key goes into plist EnvironmentVariables block — no env file needed.
-        # Linux: systemd reads it via EnvironmentFile=.
         _write_env_file(api_key)
 
     # Generate TLS certificates before registering the service so that the
