@@ -437,6 +437,28 @@ class TestFetchCaCert:
             fetch_ca_cert("host.example.com", 8420)
         mock_conn.close.assert_called_once()
 
+    def test_remote_disconnected_raises_value_error(self) -> None:
+        """http.client.RemoteDisconnected must be caught and re-raised as ValueError."""
+        mock_conn = MagicMock(spec=http.client.HTTPSConnection)
+        mock_conn.request.side_effect = http.client.RemoteDisconnected(
+            "Remote end closed connection without response"
+        )
+        with (
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
+            pytest.raises(ValueError, match="Could not reach"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
+    def test_http_exception_raises_value_error(self) -> None:
+        """Any http.client.HTTPException must be caught and re-raised as ValueError."""
+        mock_conn = MagicMock(spec=http.client.HTTPSConnection)
+        mock_conn.getresponse.side_effect = http.client.BadStatusLine("")
+        with (
+            patch("http.client.HTTPSConnection", return_value=mock_conn),
+            pytest.raises(ValueError, match="Could not reach"),
+        ):
+            fetch_ca_cert("host.example.com", 8420)
+
 
 class TestStoreCaCert:
     def test_writes_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

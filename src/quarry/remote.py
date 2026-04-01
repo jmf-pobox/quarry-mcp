@@ -258,7 +258,7 @@ def fetch_ca_cert(host: str, port: int) -> bytes:
         data: bytes = resp.read()
     except ValueError:
         raise
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise ValueError(
             f"Could not reach {host}:{port} to fetch CA cert — {exc}. "
             "Check that the quarry server is running and reachable."
