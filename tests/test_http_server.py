@@ -25,6 +25,7 @@ def _mock_settings(tmp_path: Path) -> MagicMock:
     s = MagicMock()
     s.lancedb_path = tmp_path / "lancedb"
     s.lancedb_path.mkdir(parents=True)
+    s.registry_path = tmp_path / "registry.db"  # does not exist → regs = []
     s.embedding_model = "Snowflake/snowflake-arctic-embed-m-v1.5"
     s.embedding_dimension = 768
     return s
@@ -70,6 +71,47 @@ class TestHealth:
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
 
 
+class TestCaCertRoute:
+    """Tests for the /ca.crt auth-exempt route."""
+
+    def test_returns_404_when_no_cert(self, client: TestClient, tmp_path: Path) -> None:
+        empty_tls_dir = tmp_path / "tls"
+        with patch("quarry.tls.TLS_DIR", empty_tls_dir):
+            resp = client.get("/ca.crt")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert "error" in data
+        assert "quarry install" in data["error"]
+
+    def test_returns_cert_pem(self, client: TestClient, tmp_path: Path) -> None:
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
+        (tls_dir / "ca.crt").write_text(fake_pem)
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            resp = client.get("/ca.crt")
+        assert resp.status_code == 200
+        assert "BEGIN CERTIFICATE" in resp.text
+
+    def test_auth_exempt_without_api_key_check(self, tmp_path: Path) -> None:
+        """The /ca.crt route bypasses auth even when an API key is set."""
+        settings = _mock_settings(tmp_path)
+        ctx = _QuarryContext(settings, api_key="secret-key")
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        auth_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        tls_dir = tmp_path / "tls"
+        tls_dir.mkdir()
+        fake_pem = "-----BEGIN CERTIFICATE-----\nfakecert\n-----END CERTIFICATE-----\n"
+        (tls_dir / "ca.crt").write_text(fake_pem)
+
+        # No Authorization header — should still get the cert.
+        with patch("quarry.tls.TLS_DIR", tls_dir):
+            resp = auth_client.get("/ca.crt")
+        assert resp.status_code == 200
+
+
 class TestConcurrency:
     """Verify the server handles concurrent requests without serializing."""
 
@@ -85,7 +127,7 @@ class TestConcurrency:
             return []
 
         with (
-            patch("quarry.http_server.search", side_effect=slow_search),
+            patch("quarry.http_server.hybrid_search", side_effect=slow_search),
             concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
         ):
             start = time.monotonic()
@@ -122,48 +164,143 @@ class TestSearch:
                 "_distance": 0.1,
             }
         ]
-        with patch("quarry.http_server.search", return_value=mock_results):
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
             data = client.get("/search?q=hello").json()
 
         assert data["query"] == "hello"
         assert data["total_results"] == 1
         assert data["results"][0]["document_name"] == "test.pdf"
         assert data["results"][0]["similarity"] == 0.9
+        assert "summary" in data["results"][0]
+
+    def test_search_result_includes_summary_field(self, client: TestClient) -> None:
+        """HTTP /search results must include the summary field."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 2,
+                "text": "some content",
+                "page_type": "text",
+                "source_format": ".md",
+                "_distance": 0.2,
+                "summary": "a brief summary",
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=content").json()
+
+        result = data["results"][0]
+        assert result["summary"] == "a brief summary"
+
+    def test_search_result_summary_defaults_to_empty_string(
+        self, client: TestClient
+    ) -> None:
+        """summary must default to empty string when absent from DB row."""
+        mock_results = [
+            {
+                "document_name": "doc.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "content",
+                "page_type": "text",
+                "source_format": ".md",
+                "_distance": 0.1,
+                # no summary key
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=content").json()
+
+        assert data["results"][0]["summary"] == ""
 
     def test_search_with_limit(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 5
 
     def test_search_limit_capped_at_50(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=999")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 50
 
     def test_search_negative_limit_clamped_to_1(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&limit=-5")
 
         _, kwargs = mock_search.call_args
         assert kwargs["limit"] == 1
 
     def test_search_with_collection_filter(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]) as mock_search:
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
             client.get("/search?q=hello&collection=research")
 
         _, kwargs = mock_search.call_args
         assert kwargs["collection_filter"] == "research"
 
     def test_search_empty_results(self, client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = client.get("/search?q=nonexistent").json()
 
         assert data["total_results"] == 0
         assert data["results"] == []
+
+    def test_search_agent_handle_filter_passed_through(
+        self, client: TestClient
+    ) -> None:
+        """agent_handle query param must reach hybrid_search as agent_handle_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&agent_handle=someagent")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["agent_handle_filter"] == "someagent"
+
+    def test_search_memory_type_filter_passed_through(self, client: TestClient) -> None:
+        """memory_type query param must reach hybrid_search as memory_type_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&memory_type=episodic")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["memory_type_filter"] == "episodic"
+
+    def test_search_document_filter_passed_through(self, client: TestClient) -> None:
+        """document query param must reach hybrid_search as document_filter."""
+        with patch("quarry.http_server.hybrid_search", return_value=[]) as mock_search:
+            client.get("/search?q=hello&document=report.pdf")
+
+        _, kwargs = mock_search.call_args
+        assert kwargs["document_filter"] == "report.pdf"
+
+    def test_search_result_includes_agent_and_memory_fields(
+        self, client: TestClient
+    ) -> None:
+        """Results must include agent_handle and memory_type fields."""
+        mock_results = [
+            {
+                "document_name": "note.md",
+                "collection": "default",
+                "page_number": 1,
+                "chunk_index": 0,
+                "text": "remember this",
+                "page_type": "text",
+                "source_format": ".md",
+                "agent_handle": "rmh",
+                "memory_type": "episodic",
+                "_distance": 0.2,
+            }
+        ]
+        with patch("quarry.http_server.hybrid_search", return_value=mock_results):
+            data = client.get("/search?q=remember").json()
+
+        result = data["results"][0]
+        assert result["agent_handle"] == "rmh"
+        assert result["memory_type"] == "episodic"
 
 
 class TestDocuments:
@@ -217,6 +354,49 @@ class TestStatus:
         assert data["collection_count"] == 0
         assert "database_path" in data
         assert "embedding_model" in data
+
+    def test_registered_directories_present_and_integer(self, tmp_path: Path) -> None:
+        """registered_directories must appear in the /status response as an int."""
+        settings = _mock_settings(tmp_path)
+        # Create the registry file so registry_path.exists() returns True.
+        settings.registry_path.touch()
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        fake_regs = [MagicMock(), MagicMock()]
+        with (
+            patch("quarry.http_server.list_documents", return_value=[]),
+            patch("quarry.http_server.count_chunks", return_value=0),
+            patch("quarry.http_server.db_list_collections", return_value=[]),
+            patch("quarry.http_server.open_registry", return_value=MagicMock()),
+            patch("quarry.http_server.list_registrations", return_value=fake_regs),
+        ):
+            data = reg_client.get("/status").json()
+
+        assert "registered_directories" in data
+        assert isinstance(data["registered_directories"], int)
+        assert data["registered_directories"] == 2
+
+    def test_registered_directories_zero_when_no_registry(self, tmp_path: Path) -> None:
+        """When registry_path does not exist, registered_directories must be 0."""
+        settings = _mock_settings(tmp_path)
+        # registry_path points to a non-existent file
+        settings.registry_path = tmp_path / "no-registry.db"
+        ctx = _QuarryContext(settings)
+        ctx.__dict__["db"] = _SHARED_DB
+        ctx.__dict__["embedder"] = _SHARED_EMBEDDER
+        no_reg_client = TestClient(build_app(ctx), raise_server_exceptions=False)
+
+        with (
+            patch("quarry.http_server.list_documents", return_value=[]),
+            patch("quarry.http_server.count_chunks", return_value=0),
+            patch("quarry.http_server.db_list_collections", return_value=[]),
+        ):
+            data = no_reg_client.get("/status").json()
+
+        assert data["registered_directories"] == 0
 
 
 class TestNotFound:
@@ -365,7 +545,7 @@ class TestApiKeyAuth:
         assert resp.status_code == 401
 
     def test_search_allowed_with_correct_key(self, auth_client: TestClient) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
@@ -385,7 +565,7 @@ class TestApiKeyAuth:
 
     def test_no_auth_required_when_key_not_configured(self, client: TestClient) -> None:
         """The default client fixture has no api_key — all open."""
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = client.get("/search?q=test").json()
         assert data["query"] == "test"
 
@@ -397,7 +577,7 @@ class TestApiKeyAuth:
 
     def test_bearer_scheme_case_insensitive(self, auth_client: TestClient) -> None:
         """RFC 7235: auth scheme names are case-insensitive."""
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = auth_client.get(
                 "/search?q=test",
                 headers={"Authorization": f"bearer {_TEST_API_KEY}"},
@@ -421,6 +601,6 @@ class TestEmptyApiKey:
     def test_empty_key_does_not_require_auth(
         self, empty_key_client: TestClient
     ) -> None:
-        with patch("quarry.http_server.search", return_value=[]):
+        with patch("quarry.http_server.hybrid_search", return_value=[]):
             data = empty_key_client.get("/search?q=test").json()
         assert data["query"] == "test"

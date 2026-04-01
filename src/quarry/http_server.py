@@ -28,7 +28,7 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route, WebSocketRoute
 
 from quarry.backends import get_embedding_backend
@@ -36,11 +36,12 @@ from quarry.config import DEFAULT_PORT, Settings
 from quarry.database import (
     count_chunks,
     get_db,
+    hybrid_search,
     list_collections as db_list_collections,
     list_documents,
-    search,
 )
 from quarry.provider import provider_display
+from quarry.sync_registry import list_registrations, open_registry
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -54,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CORS_ORIGINS = frozenset({"http://localhost"})
 
-_AUTH_EXEMPT_PATHS = frozenset({"/health"})
+_AUTH_EXEMPT_PATHS = frozenset({"/health", "/ca.crt"})
 
 # Strip control characters from user-supplied log values (CWE-117).
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -131,6 +132,26 @@ def _health_route(request: Request) -> JSONResponse:
     )
 
 
+def _ca_cert_route(request: Request) -> Response:  # noqa: ARG001
+    """Serve the CA certificate PEM for TOFU bootstrap.
+
+    Auth-exempt so the client can fetch it before login.
+    Returns 404 with JSON error if no cert file exists.
+    """
+    from quarry.tls import TLS_DIR  # noqa: PLC0415
+
+    ca_path = TLS_DIR / "ca.crt"
+    if not ca_path.exists():
+        return JSONResponse(
+            {"error": "No CA certificate found. Run 'quarry install' first."},
+            status_code=404,
+        )
+    return PlainTextResponse(
+        ca_path.read_text(),
+        media_type="application/x-pem-file",
+    )
+
+
 def _search_route(request: Request) -> JSONResponse:
     auth_resp = _check_auth(request)
     if auth_resp is not None:
@@ -149,16 +170,23 @@ def _search_route(request: Request) -> JSONResponse:
     collection = request.query_params.get("collection") or None
     page_type = request.query_params.get("page_type") or None
     source_format = request.query_params.get("source_format") or None
+    document = request.query_params.get("document") or None
+    agent_handle = request.query_params.get("agent_handle") or None
+    memory_type = request.query_params.get("memory_type") or None
 
     ctx = _ctx(request)
     query_vector = ctx.embedder.embed_query(query)
-    results = search(
+    results = hybrid_search(
         ctx.db,
+        query,
         query_vector,
         limit=limit,
+        document_filter=document,
         collection_filter=collection,
         page_type_filter=page_type,
         source_format_filter=source_format,
+        agent_handle_filter=agent_handle,
+        memory_type_filter=memory_type,
     )
 
     formatted = [
@@ -170,6 +198,9 @@ def _search_route(request: Request) -> JSONResponse:
             "text": r["text"],
             "page_type": r["page_type"],
             "source_format": r["source_format"],
+            "agent_handle": r.get("agent_handle"),
+            "memory_type": r.get("memory_type"),
+            "summary": r.get("summary", ""),
             "similarity": round(1 - float(str(r.get("_distance", 0))), 4),
         }
         for r in results
@@ -213,6 +244,15 @@ def _status_route(request: Request) -> JSONResponse:
     chunks = count_chunks(ctx.db)
     cols = db_list_collections(ctx.db)
 
+    if settings.registry_path.exists():
+        conn = open_registry(settings.registry_path)
+        try:
+            regs = list_registrations(conn)
+        finally:
+            conn.close()
+    else:
+        regs = []
+
     db_size_bytes = (
         sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
         if settings.lancedb_path.exists()
@@ -224,6 +264,7 @@ def _status_route(request: Request) -> JSONResponse:
             "document_count": len(docs),
             "collection_count": len(cols),
             "chunk_count": chunks,
+            "registered_directories": len(regs),
             "database_path": str(settings.lancedb_path),
             "database_size_bytes": db_size_bytes,
             "embedding_model": settings.embedding_model,
@@ -300,6 +341,7 @@ def build_app(
 
     routes = [
         Route("/health", _health_route, methods=["GET"]),
+        Route("/ca.crt", _ca_cert_route, methods=["GET"]),
         Route("/search", _search_route, methods=["GET"]),
         Route("/documents", _documents_route, methods=["GET"]),
         Route("/collections", _collections_route, methods=["GET"]),
@@ -388,6 +430,8 @@ def serve(
     host: str = "127.0.0.1",
     api_key: str | None = None,
     cors_origins: frozenset[str] | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
 ) -> None:
     """Start the HTTP + WebSocket server.  Blocks until shutdown signal.
 
@@ -397,8 +441,12 @@ def serve(
         host: Address to bind.  ``127.0.0.1`` for local-only (default),
             ``0.0.0.0`` for container/production deployment.
         api_key: Optional Bearer token.  When set, all endpoints except
-            /health require ``Authorization: Bearer <key>``.
+            ``/health`` and ``/ca.crt`` require
+            ``Authorization: Bearer <key>``.
         cors_origins: Allowed CORS origins.  Defaults to ``http://localhost``.
+        ssl_certfile: Path to TLS server certificate PEM.  When provided
+            (with ssl_keyfile), the server uses HTTPS/WSS.
+        ssl_keyfile: Path to TLS server private key PEM.
     """
     _validate_host_key(host, api_key)
 
@@ -420,6 +468,7 @@ def serve(
 
     app = build_app(ctx, lifespan=lifespan)
 
+    tls_enabled = ssl_certfile is not None and ssl_keyfile is not None
     config = uvicorn.Config(
         app,
         host=host,
@@ -427,12 +476,15 @@ def serve(
         log_config=None,
         log_level="warning",
         access_log=False,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
     server = uvicorn.Server(config)
 
     # Write the port file after bind so callers always see the actual port
     # (important when port == 0 requests an OS-assigned ephemeral port).
     original_startup = server.startup
+    scheme = "https" if tls_enabled else "http"
 
     async def _startup_with_port_file(
         sockets: list[socket] | None = None,
@@ -441,7 +493,9 @@ def serve(
         if server.servers and server.servers[0].sockets:
             actual_port = server.servers[0].sockets[0].getsockname()[1]
             _write_port_file(port_path, actual_port)
-            logger.info("Quarry server listening on http://%s:%d", host, actual_port)
+            logger.info(
+                "Quarry server listening on %s://%s:%d", scheme, host, actual_port
+            )
         else:
             logger.error("Server started but no bound sockets; port file not written")
 

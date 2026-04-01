@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import http.client
 import importlib.metadata
 import json
 import logging
+import os
+import ssl
 import sys
+import tempfile
+import urllib.parse
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import typer.core
@@ -41,14 +46,18 @@ from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.provider import provider_display
 from quarry.remote import (
+    CA_CERT_PATH,
     MCP_PROXY_CONFIG_PATH,
     PermissionWarning,
     delete_proxy_config,
+    fetch_ca_cert,
     mask_token,
     read_proxy_config,
+    store_ca_cert,
     validate_connection,
     validate_connection_from_ws_url,
     write_proxy_config,
+    ws_to_http,
 )
 from quarry.sync import sync_all
 from quarry.sync_registry import (
@@ -57,11 +66,10 @@ from quarry.sync_registry import (
     open_registry,
     register_directory,
 )
+from quarry.tls import TLS_DIR, cert_fingerprint
 
 configure_logging(stderr_level="WARNING")
 logger = logging.getLogger(__name__)
-
-_LOCALHOST_NAMES: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _COMMAND_ORDER: list[str] = [
     # Product commands
@@ -235,9 +243,92 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 
 
 # ---------------------------------------------------------------------------
+# Remote helpers
+# ---------------------------------------------------------------------------
+
+
+def _remote_https_get(path: str, config: dict[str, object]) -> dict[str, object]:
+    """Make an authenticated GET request to the remote quarry server.
+
+    Derives the HTTPS base URL from the wss:// URL in ``config``, builds a
+    pinned SSL context using the CA cert when provided, and returns the parsed
+    JSON response body.
+
+    Args:
+        path: Request path including query string, e.g. ``/search?q=foo&limit=10``.
+        config: Dict from ``read_proxy_config()`` with keys ``url``, optional
+            ``ca_cert``, and ``headers``.
+
+    Returns:
+        Parsed JSON response as a dict.
+
+    Raises:
+        RuntimeError: If the server returns a non-200 status code.
+        OSError: If the connection cannot be established.
+        SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
+    """
+    raw_url = str(config["url"])
+    http_base = ws_to_http(raw_url)
+    parsed = urllib.parse.urlparse(http_base)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 8420
+
+    ca_cert = config.get("ca_cert")
+    scheme = "https" if raw_url.startswith("wss://") else "http"
+    if scheme == "https" and not ca_cert:
+        raise SystemExit(
+            "Remote server uses HTTPS but no CA cert is pinned. "
+            "Run 'quarry login' to trust the server's certificate."
+        )
+
+    headers_raw = config.get("headers", {})
+    headers: dict[str, str] = (
+        {k: str(v) for k, v in headers_raw.items()}
+        if isinstance(headers_raw, dict)
+        else {}
+    )
+
+    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    if scheme == "https":
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        try:
+            ssl_ctx.load_verify_locations(str(ca_cert))
+        except (OSError, ssl.SSLError) as exc:
+            raise SystemExit(
+                f"Cannot load CA certificate {ca_cert!r}. "
+                f"Run 'quarry login' to configure. ({exc})"
+            ) from exc
+        conn = http.client.HTTPSConnection(host, port, context=ssl_ctx, timeout=15)
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=15)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status != 200:
+            body_text = body.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Remote quarry server returned HTTP {resp.status}: {body_text}"
+            )
+        response_data: dict[str, object] = json.loads(body)
+        return response_data
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Product commands — ordered: find, ingest, show, remember, status, use,
 # delete, register, deregister, sync, list
 # ---------------------------------------------------------------------------
+
+
+def _safe_proxy_config() -> dict[str, Any]:
+    """Return parsed proxy config, falling back to {} on malformed TOML."""
+    try:
+        return read_proxy_config()
+    except ValueError as exc:
+        err_console.print(f"Warning: {exc}", style="yellow")
+        return {}
 
 
 @app.command(name="find")
@@ -271,6 +362,55 @@ def find_cmd(
     ] = "",
 ) -> None:
     """Search indexed documents."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        params: dict[str, str | int] = {"q": query, "limit": limit}
+        if collection:
+            params["collection"] = collection
+        if document:
+            params["document"] = document
+        if page_type:
+            params["page_type"] = page_type
+        if source_format:
+            params["source_format"] = source_format
+        if agent_handle:
+            params["agent_handle"] = agent_handle
+        if memory_type:
+            params["memory_type"] = memory_type
+        qs = urllib.parse.urlencode(params)
+        remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
+        raw_results = remote_resp.get("results", [])
+        remote_results: list[dict[str, object]] = (
+            list(raw_results) if isinstance(raw_results, list) else []
+        )
+        json_results: list[dict[str, object]] = []
+        lines: list[str] = []
+        for r in remote_results:
+            similarity = round(float(str(r.get("similarity", 0))), 4)
+            meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
+            doc = r.get("document_name", "")
+            pg = r.get("page_number", "")
+            lines.append(f"\n[{doc} p.{pg} | {meta}] (similarity: {similarity})")
+            text = str(r.get("text", ""))
+            lines.append(text[:300])
+            json_results.append(
+                {
+                    "document_name": r.get("document_name", ""),
+                    "collection": r.get("collection", ""),
+                    "page_number": r.get("page_number", 0),
+                    "chunk_index": r.get("chunk_index", 0),
+                    "page_type": r.get("page_type", ""),
+                    "source_format": r.get("source_format", ""),
+                    "agent_handle": r.get("agent_handle", ""),
+                    "memory_type": r.get("memory_type", ""),
+                    "summary": r.get("summary", ""),
+                    "similarity": similarity,
+                    "text": text,
+                }
+            )
+        _emit(json_results, "\n".join(lines))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -288,33 +428,34 @@ def find_cmd(
         memory_type_filter=memory_type or None,
     )
 
-    json_results = []
-    lines: list[str] = []
-    for r in results:
-        similarity = round(1 - float(str(r.get("_distance", 0))), 4)
-        meta = f"{r['page_type']}/{r['source_format']}"
-        lines.append(
-            f"\n[{r['document_name']} p.{r['page_number']} | {meta}]"
+    local_json_results: list[dict[str, object]] = []
+    local_lines: list[str] = []
+    for row in results:
+        similarity = round(1 - float(str(row.get("_distance", 0))), 4)
+        meta = f"{row['page_type']}/{row['source_format']}"
+        local_lines.append(
+            f"\n[{row['document_name']} p.{row['page_number']} | {meta}]"
             f" (similarity: {similarity})"
         )
-        text = str(r["text"])
-        lines.append(text[:300])
-        json_results.append(
+        text = str(row["text"])
+        local_lines.append(text[:300])
+        local_json_results.append(
             {
-                "document_name": r["document_name"],
-                "page_number": r["page_number"],
-                "page_type": r["page_type"],
-                "source_format": r["source_format"],
+                "document_name": row["document_name"],
+                "collection": row.get("collection", ""),
+                "page_number": row["page_number"],
+                "chunk_index": row.get("chunk_index", 0),
+                "page_type": row["page_type"],
+                "source_format": row["source_format"],
+                "agent_handle": row.get("agent_handle", ""),
+                "memory_type": row.get("memory_type", ""),
+                "summary": row.get("summary", ""),
                 "similarity": similarity,
                 "text": text,
-                "collection": r.get("collection", ""),
-                "agent_handle": r.get("agent_handle", ""),
-                "memory_type": r.get("memory_type", ""),
-                "summary": r.get("summary", ""),
             }
         )
 
-    _emit(json_results, "\n".join(lines))
+    _emit(local_json_results, "\n".join(local_lines))
 
 
 @app.command(name="ingest")
@@ -521,6 +662,12 @@ def remember(
 @_cli_errors
 def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        remote_data = _remote_https_get("/status", proxy_config)
+        _emit(remote_data, format_status(remote_data))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -724,44 +871,81 @@ def login_cmd(
     host: Annotated[str, typer.Argument(help="Remote quarry host (hostname or IP)")],
     port: Annotated[int, typer.Option("--port", "-p", help="Port")] = DEFAULT_PORT,
     api_key: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--api-key",
-            help="Bearer token for remote server",
-            prompt=True,
+            help="Bearer token for remote server (omit for unauthenticated servers)",
             hide_input=True,
+            envvar="QUARRY_API_KEY",
         ),
-    ] = "",
-    insecure: Annotated[
+    ] = None,
+    yes: Annotated[
         bool,
         typer.Option(
-            "--insecure",
-            help="Allow plaintext ws:// transport (not recommended outside localhost)",
+            "--yes",
+            "-y",
+            help="Skip TOFU confirmation prompt (non-interactive, trust automatically).",  # noqa: E501
         ),
     ] = False,
 ) -> None:
-    """Connect to a remote quarry server."""
-    if not api_key:
-        err_console.print("Error: --api-key is required.", style="red")
-        raise typer.Exit(code=1)
-    if host in _LOCALHOST_NAMES:
-        scheme = "ws"
-    elif insecure:
-        scheme = "ws"
-        err_console.print(
-            f"Warning: --insecure flag set. "
-            f"Credentials will be sent in cleartext to {host}.",
-            style="yellow",
-        )
-    else:
-        scheme = "wss"
-    http_scheme = "https" if scheme == "wss" else "http"
-    ok, reason = validate_connection(host, port, api_key, scheme=http_scheme)
-    if not ok:
-        err_console.print(f"Error: {reason}", style="red")
-        raise typer.Exit(code=1)
+    """Connect to a remote quarry server using TOFU certificate pinning.
+
+    Fetches the server's CA certificate over HTTPS with SSL verification
+    disabled (TOFU bootstrap), displays its fingerprint, prompts for trust
+    confirmation, then validates the connection over HTTPS/WSS and writes
+    the mcp-proxy config.
+    """
+    # Step 1: Fetch CA cert over HTTPS with SSL verification disabled (TOFU bootstrap).
     try:
-        write_proxy_config(f"{scheme}://{host}:{port}/mcp", api_key)
+        ca_cert_pem = fetch_ca_cert(host, port)
+    except ValueError as exc:
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from exc
+
+    # Step 2: Display fingerprint.
+    fp = cert_fingerprint(ca_cert_pem)
+    err_console.print(f"Server CA fingerprint: {fp}")
+
+    # Step 3: Prompt for trust (skip if --yes).
+    if not yes:
+        confirmed = typer.confirm("Trust this server?", default=False)
+        if not confirmed:
+            print("Aborted. Not logged in.")
+            raise typer.Exit(code=0)
+
+    # Step 4: Validate connection using a tempfile — store CA cert only on success
+    # so a failed validation does not leave an orphaned cert on disk.
+    # Two-block pattern: close the fd explicitly if os.fdopen raises (Fix 1).
+    tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".crt")
+    tmp_path = Path(tmp_path_str)
+    try:
+        try:
+            tmp_file = os.fdopen(tmp_fd, "wb")
+        except BaseException:
+            os.close(tmp_fd)
+            tmp_path.unlink(missing_ok=True)
+            raise
+        try:
+            with tmp_file:
+                tmp_file.write(ca_cert_pem)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        ok, reason = validate_connection(
+            host, port, api_key, scheme="https", ca_cert_path=tmp_path_str
+        )
+        if not ok:
+            err_console.print(f"Error: {reason}", style="red")
+            raise typer.Exit(code=1)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    # Step 5: Write mcp-proxy config first, then store the CA cert.
+    # This order ensures that if the CA cert write fails, we can roll back
+    # the config — the reverse order has no recovery path (Fix 2).
+    ws_url = f"wss://{host}:{port}/mcp"
+    try:
+        write_proxy_config(ws_url, api_key, str(CA_CERT_PATH))
     except PermissionWarning as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
     except OSError as exc:
@@ -771,6 +955,20 @@ def login_cmd(
             style="red",
         )
         raise typer.Exit(code=1) from exc
+
+    # Step 6: Store CA cert — roll back the config on failure.
+    try:
+        store_ca_cert(ca_cert_pem)
+    except Exception as exc:
+        with contextlib.suppress(OSError):
+            delete_proxy_config()
+        err_console.print(
+            f"Error: could not store CA certificate: {exc}",
+            style="red",
+        )
+        raise typer.Exit(code=1) from exc
+
+    # Step 7: Print success.
     _emit(
         {"host": host, "port": port},
         f"Logged in to {host}:{port}. Restart Claude Code to apply.",
@@ -813,22 +1011,37 @@ def remote_list_cmd(
     ping: Annotated[bool, typer.Option("--ping", help="Check server health")] = False,
 ) -> None:
     """Show configured remote server."""
-    config = read_proxy_config()
+    config = _safe_proxy_config()
     quarry_cfg = config.get("quarry", {})
-    if not quarry_cfg:
+    if not isinstance(quarry_cfg, dict) or not quarry_cfg:
         _emit({"remote": None}, "No remote configured.")
         return
     url = quarry_cfg.get("url", "")
-    auth_header = quarry_cfg.get("headers", {}).get("Authorization", "")
-    if not url or not auth_header.startswith("Bearer "):
-        _emit({"remote": None}, "No remote configured (config is incomplete).")
+    if not url:
+        _emit(
+            {
+                "configured": False,
+                "message": "No remote configured. Run 'quarry login <host>'.",
+            },
+            "No remote configured. Run 'quarry login <host>'.",
+        )
         return
-    token = auth_header.removeprefix("Bearer ").strip()
-    masked = mask_token(token)
+    headers_raw = quarry_cfg.get("headers")
+    auth_header = (
+        headers_raw.get("Authorization", "") if isinstance(headers_raw, dict) else ""
+    ) or ""
+    token: str | None = auth_header.removeprefix("Bearer ").strip() or None
+    masked = mask_token(token) if token is not None else "(none)"
+    ca_cert = quarry_cfg.get("ca_cert") or None
     text = f"Remote: {url}  token: {masked}"
     data: dict[str, object] = {"url": url, "token_prefix": masked}
     if ping:
-        ok, reason = validate_connection_from_ws_url(url, token)
+        if url.startswith("wss://") and not ca_cert:
+            ok, reason = False, "wss:// configured but no CA certificate pinned"
+        else:
+            ok, reason = validate_connection_from_ws_url(
+                url, token, ca_cert_path=str(ca_cert) if ca_cert is not None else None
+            )
         status = "healthy" if ok else f"unreachable ({reason})"
         text += f"\nHealth: {status}"
         data["health"] = status
@@ -998,13 +1211,47 @@ def serve(
             help="Allowed CORS origin (repeatable). Default: http://localhost.",
         ),
     ] = None,
+    tls: Annotated[
+        bool,
+        typer.Option(
+            "--tls",
+            help=(
+                "Enable TLS using certificates from ~/.punt-labs/quarry/tls/. "
+                "Run 'quarry install' first to generate certificates."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Start the HTTP API server."""
     from quarry.http_server import serve as http_serve  # noqa: PLC0415
 
     settings = _resolved_settings()
     origins = frozenset(cors_origin) if cors_origin else None
-    http_serve(settings, port=port, host=host, api_key=api_key, cors_origins=origins)
+
+    ssl_certfile: str | None = None
+    ssl_keyfile: str | None = None
+    if tls:
+        cert_path = TLS_DIR / "server.crt"
+        key_path = TLS_DIR / "server.key"
+        if not cert_path.exists() or not key_path.exists():
+            err_console.print(
+                "Error: TLS certificate files not found in "
+                f"{TLS_DIR}. Run 'quarry install' first.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        ssl_certfile = str(cert_path)
+        ssl_keyfile = str(key_path)
+
+    http_serve(
+        settings,
+        port=port,
+        host=host,
+        api_key=api_key,
+        cors_origins=origins,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+    )
 
 
 @app.command()

@@ -44,6 +44,7 @@ dependencies = [
     "pathspec>=0.12.0",
     "ultimate-sitemap-parser>=1.8.0",
     "pyyaml>=6.0.0",
+    "cryptography>=46.0.0",
 ]
 
 [project.optional-dependencies]
