@@ -91,22 +91,33 @@ No intermediary service layer.
 
 \subsection{Deployment Topology}
 
+\textbf{Single machine (localhost TLS):}
 \begin{lstlisting}
-                    stdio                      WebSocket
+                    stdio                      wss:// (TLS)
 Claude Code <------------------> mcp-proxy <-------------------> quarry serve
-             MCP JSON-RPC        (~5 MB Go)                      (one daemon)
+             MCP JSON-RPC        (~5 MB Go)   pinned CA cert     (one daemon)
+\end{lstlisting}
 
-Claude Desktop <--- stdio ---> quarry mcp
-                               (standalone process, no daemon)
+\textbf{Remote server (GPU):}
+\begin{lstlisting}
+Mac (client)                                   Linux (server)
+                    stdio                       wss:// (TLS)
+Claude Code <------------------> mcp-proxy <---------------------> quarry serve
+             MCP JSON-RPC        (~5 MB Go)     pinned CA cert     (GPU daemon)
+
+CLI -----> HTTPS GET/POST ---------> quarry serve
+           Bearer + pinned CA
 \end{lstlisting}
 
 Without the proxy, every Claude Code tab spawns a separate Python
 process, each loading the embedding model into $\sim$200\,MB of RAM.
 With it, startup is instant and state is shared across all sessions.
+All connections use TLS with TOFU certificate pinning (DES-020) ---
+even on localhost.
 
-The CLI (\texttt{quarry find}, \texttt{quarry ingest}, etc.) uses
-the library directly --- no daemon involved.  Each invocation loads
-the embedding model, does the work, and exits.
+When a remote server is configured, the CLI routes data commands
+over HTTPS to the server (DES-021).  Only authentication and
+administration commands remain local.
 
 \subsection{Surface Summary}
 
@@ -402,8 +413,9 @@ overridable with \texttt{-{}-port}.
 \midrule
 \texttt{/health}      & GET & \texttt{\{"status":"ok",
   "uptime\_seconds":N\}} & No \\
-\texttt{/search}      & GET & Vector-only search
-  (\field{q}, \field{limit}, \field{collection}, \field{page\_type}, \field{source\_format}) & Yes \\
+\texttt{/ca.crt}      & GET & CA certificate PEM (TOFU bootstrap) & No \\
+\texttt{/search}      & GET & Hybrid search
+  (\field{q}, \field{limit}, \field{collection}, \field{page\_type}, \field{source\_format}, \field{agent\_handle}, \field{memory\_type}) & Yes \\
 \texttt{/documents}   & GET & List indexed documents & Yes \\
 \texttt{/collections} & GET & List collections & Yes \\
 \texttt{/status}      & GET & Database statistics & Yes \\
@@ -411,6 +423,11 @@ overridable with \texttt{-{}-port}.
 \bottomrule
 \end{tabular}
 \end{center}
+
+\textbf{Planned endpoints} (DES-021, epic quarry-g0ed): \texttt{GET /show},
+\texttt{POST /ingest}, \texttt{POST /remember}, \texttt{DELETE /documents},
+\texttt{DELETE /collections}, \texttt{GET|POST|DELETE /registrations},
+\texttt{POST /sync}, \texttt{GET /databases}, \texttt{POST /use}.
 
 \subsection{Port File}
 
@@ -747,6 +764,35 @@ matches the allow list, and adds \texttt{Vary: Origin} to signal
 cacheability varies by origin.  When no \texttt{Origin} is present,
 no CORS headers are emitted.
 
+\subsection{TLS and TOFU Certificate Pinning}
+
+All connections use TLS --- including localhost.  There is no insecure
+mode.  Certificate management uses TOFU (Trust On First Use) with
+self-signed CA pinning (DES-020).
+
+\textbf{Certificate generation:} \texttt{quarry install} generates
+an EC~P-256 CA and server certificate.  Files are written atomically
+to \texttt{\~{}/.punt-labs/quarry/tls/} with restricted permissions
+(0600 for keys, 0644 for CA cert).  The server cert SAN includes the
+configured hostname (via \texttt{QUARRY\_TLS\_HOSTNAME}), localhost,
+and loopback addresses.
+
+\textbf{TOFU login:}
+\begin{enumerate}
+  \item Client fetches \texttt{/ca.crt} over HTTPS (verification
+    disabled --- bootstrap).
+  \item Displays SHA256 fingerprint for out-of-band confirmation.
+  \item Pins CA cert at
+    \texttt{\~{}/.punt-labs/mcp-proxy/quarry-ca.crt}.
+  \item All subsequent connections verify against the pinned CA only
+    --- system roots excluded.
+\end{enumerate}
+
+\textbf{mcp-proxy:} The \texttt{quarry.toml} profile includes
+\texttt{ca\_cert} pointing to the pinned CA.  mcp-proxy builds a
+custom \texttt{tls.Config} with the pinned CA as the sole root,
+enforcing TLS~1.3 minimum.
+
 \subsection{Log Safety (CWE-532, CWE-117)}
 
 Uvicorn's access log is disabled (\texttt{access\_log=False}),
@@ -760,22 +806,47 @@ log injection (CWE-117) and log flooding.
 \section{Deployment}
 % ===================================================================
 
-\subsection{Local (CLI)}
+\subsection{Single Machine}
 
 \begin{lstlisting}
-uv tool install punt-quarry
-quarry install      # downloads model + mcp-proxy
-quarry doctor       # verifies environment
+curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh
 \end{lstlisting}
+
+Installs quarry, embedding model, mcp-proxy, Claude Code plugin, and
+registers a daemon with TLS on localhost.
+
+\subsection{Server (Remote GPU)}
+
+\begin{lstlisting}
+curl -fsSL https://raw.githubusercontent.com/.../install-server.sh | sh
+\end{lstlisting}
+
+No Claude Code required.  Installs quarry, embedding model, generates
+TLS certificates, registers systemd service on \texttt{0.0.0.0:8420}.
+Detects NVIDIA GPUs and swaps \texttt{onnxruntime} for
+\texttt{onnxruntime-gpu}.  Prints CA fingerprint for client TOFU.
+
+\subsection{Client (Remote Access)}
+
+\begin{lstlisting}
+curl -fsSL https://raw.githubusercontent.com/.../install-client.sh | sh
+quarry login <server> --api-key <token>
+\end{lstlisting}
+
+No model download, no daemon.  Installs CLI, mcp-proxy, and Claude
+Code plugin.  \texttt{quarry login} performs TOFU certificate pinning
+and writes the mcp-proxy config.
 
 \subsection{Daemon (\texttt{quarry serve})}
 
 \begin{lstlisting}
-quarry serve --port 8420 --api-key $QUARRY_API_KEY
+quarry serve --port 8420 --host 0.0.0.0 --tls
 \end{lstlisting}
 
 Managed by \texttt{launchd} (macOS) or \texttt{systemd} (Linux) via
-\texttt{quarry install}.
+\texttt{quarry install}.  API key delivered via systemd
+\texttt{EnvironmentFile} (Linux) or launchd
+\texttt{EnvironmentVariables} (macOS) --- never in process arguments.
 
 \subsection{Container (Fly.io)}
 
@@ -918,16 +989,27 @@ user/assistant message text, skipping tool-use blocks.  Capped at
 \texttt{list registrations}   & List registered directories \\
 \texttt{serve}                & Start HTTP API server \\
 \texttt{mcp}                  & Start MCP server (stdio) \\
-\texttt{install}              & Set up data directory, download model, configure ethos ext \\
-\texttt{doctor}               & Check environment health \\
-\texttt{uninstall}            & Remove system daemon \\
-\texttt{version}              & Print version \\
+\texttt{login <host>}         & TOFU login to remote server (cert pinning) \\
+\texttt{logout}              & Disconnect from remote server \\
+\texttt{remote list}         & Show remote config; \texttt{-{}-ping} validates connection \\
+\texttt{install}             & Set up data directory, download model, generate TLS certs,
+  register daemon, detect GPU, configure ethos ext \\
+\texttt{doctor}              & Check environment health \\
+\texttt{uninstall}           & Remove system daemon \\
+\texttt{version}             & Print version \\
 \bottomrule
 \end{longtable}
 \end{center}
 
 Global flags: \texttt{-{}-json}, \texttt{-{}-verbose}/\texttt{-v},
 \texttt{-{}-quiet}/\texttt{-q}, \texttt{-{}-db <name>}.
+
+\textbf{Remote routing:} When a remote server is configured (via
+\texttt{quarry login}), all data commands route to the remote server
+over HTTPS with the pinned CA cert.  Only authentication commands
+(\texttt{login}, \texttt{logout}, \texttt{remote}) and administration
+commands (\texttt{install}, \texttt{uninstall}, \texttt{serve},
+\texttt{mcp}, \texttt{version}) are local-only.  See DES-021.
 
 % ===================================================================
 \section{Test Architecture}
