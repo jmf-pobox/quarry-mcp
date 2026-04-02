@@ -372,3 +372,81 @@ Without this install step, agents with existing `quarry.yaml` ext files (contain
 1. **YAML round-trip via `yaml.safe_load` + `yaml.dump`** — Rejected. Destroys comments, blank lines, and key ordering in the user's file. Silent data corruption on the happy path.
 2. **Ethos writes quarry's instructions** — Rejected. Violates the one-way dependency: quarry depends on ethos for identity, but ethos has zero knowledge of quarry's internals (DES-008).
 3. **Require users to manually add `session_context`** — Rejected. Silent failure with no error message. Users would not know their memory stopped working until they noticed missing recall.
+
+---
+
+## DES-020: TLS Everywhere with TOFU Certificate Pinning
+
+**Date:** 2026-04-01
+**Status:** SETTLED
+**Topic:** How quarry secures remote connections
+
+### Design
+
+The installed quarry service always runs with TLS enabled — including on localhost. `quarry serve` without `--tls` is supported for local development but must not be used for production. The security model is TOFU (Trust On First Use) with self-signed CA certificate pinning.
+
+**Certificate generation:** `quarry install` generates a self-signed EC P-256 CA and server certificate with full x509 extension set. Certs are written atomically to `~/.punt-labs/quarry/tls/` with 0600/0644 permissions. The CA cert CN is `"Quarry CA"` (not hostname-scoped). The server cert SAN includes the configured hostname, localhost, and loopback addresses.
+
+**TOFU login flow:** `quarry login <host>` fetches the server's CA cert over HTTPS with verification disabled (bootstrap), displays the SHA256 fingerprint for out-of-band confirmation, then pins the CA cert locally at `~/.punt-labs/mcp-proxy/quarry-ca.crt`. All subsequent connections verify against the pinned CA only — system roots are excluded.
+
+**mcp-proxy integration:** The `quarry.toml` profile includes a `ca_cert` field pointing to the pinned CA cert. mcp-proxy builds a custom TLS config with a cert pool containing only this CA, enforcing TLS 1.3 minimum.
+
+### Why This Design
+
+Quarry servers hold the user's entire document corpus. Plaintext connections expose both the content and the API key to any network observer. TLS on localhost adds zero user friction (handled by `quarry install`) and eliminates the "it's just localhost" exception that leads to split security models. TOFU is appropriate because there is no PKI — quarry servers are personal infrastructure, not public services.
+
+### Alternatives Considered
+
+1. **Let's Encrypt / ACME** — Rejected. Requires a public domain name and port 80/443 access. Personal home servers often have neither.
+2. **System trust store** — Rejected. Adding a self-signed CA to the system trust store requires root and varies by OS. TOFU pinning works in userspace.
+3. **Optional TLS (`--insecure` flag)** — Rejected. Two code paths, two security models. Users who start with `--insecure` never switch. One path, always encrypted.
+
+---
+
+## DES-021: Remote CLI Routing — No Split Horizon
+
+**Date:** 2026-04-01
+**Status:** PROPOSED
+**Topic:** How CLI commands route when a remote server is configured
+
+### Design
+
+When a remote quarry server is configured (via `quarry login`), **every data command routes to the remote server**. There is no split horizon where some commands go remote and others silently fall back to the local database. The only local-only commands are authentication and administration:
+
+**Local-only:** `login`, `logout`, `remote list`, `install`, `uninstall`, `serve`, `mcp`, `version`
+
+**Everything else routes remotely:** `find`, `status`, `list` (all subcommands), `show`, `ingest`, `remember`, `delete`, `register`, `deregister`, `sync`, `use`, `doctor`
+
+The CLI detects remote configuration via `_safe_proxy_config()` and routes through HTTP helpers with the pinned CA cert and Bearer token. Currently only `_remote_https_get()` exists; a matching `_remote_https_post()` / `_remote_https_delete()` helper is needed for write operations (tracked as `quarry-stcd`).
+
+**Current state (v1.11.0):** Only `find` and `status` route remotely. All other commands silently hit the local database. This is tracked as epic `quarry-g0ed` with 11 tasks to complete parity.
+
+**Target endpoint surface:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/search` | GET | Semantic search (exists) |
+| `/status` | GET | Database statistics (exists) |
+| `/collections` | GET | List collections (exists, CLI not wired) |
+| `/documents` | GET | List documents (exists, CLI not wired) |
+| `/show` | GET | Document metadata and page text (needs endpoint) |
+| `/ingest` | POST | File upload or URL ingestion (needs endpoint) |
+| `/remember` | POST | Inline text ingestion (needs endpoint) |
+| `/documents` | DELETE | Remove a document (needs endpoint) |
+| `/collections` | DELETE | Remove a collection (needs endpoint) |
+| `/registrations` | GET/POST/DELETE | Directory registration CRUD (needs endpoint) |
+| `/sync` | POST | Trigger incremental sync (needs endpoint) |
+| `/databases` | GET | List named databases (needs endpoint) |
+| `/use` | POST | Switch active database (needs endpoint) |
+| `/health` | GET | Server health for doctor (exists) |
+
+### Why This Design
+
+When a user is connected to a remote server, they expect every command to operate on the remote data. A user who runs `quarry list collections` after `quarry login` expects to see the remote server's collections, not whatever happens to be on their local machine. Silent local fallback gives wrong data with no warning — the worst kind of bug.
+
+The "local-only" classification applies only to commands that genuinely operate on local configuration (authentication, service management). There is no data operation that makes sense locally when the user has chosen to work with a remote server.
+
+### Alternatives Considered
+
+1. **Split horizon with explicit `--local`/`--remote` flags** — Rejected. Adds complexity to every command. Users shouldn't have to think about where their data lives after logging in.
+2. **Only route read operations remotely** — Rejected. A user who can search remotely but can't ingest remotely has a broken workflow. Remote means remote for everything.
