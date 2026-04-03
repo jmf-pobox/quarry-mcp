@@ -16,7 +16,7 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
-- `connector` Fall back to single-page ingestion when sitemap discovery finds pages but path filtering yields zero matches — previously silently ingested nothing for sites with partially parseable sitemaps (e.g. namespace-prefixed XML)
+- **connector**: Fall back to single-page ingestion when sitemap discovery finds pages but path filtering yields zero matches — previously silently ingested nothing for sites with partially parseable sitemaps (e.g. namespace-prefixed XML)
 
 ## [1.11.0] - 2026-04-01
 

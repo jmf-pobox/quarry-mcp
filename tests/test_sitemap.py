@@ -595,9 +595,12 @@ class TestIngestAuto:
 
         assert "sitemap_url" in result
         assert result["ingested"] == 2  # type: ignore[typeddict-item]
-        # Verify path prefix filter was derived
+        # Pre-filtering is applied before _bulk_ingest_entries; entries
+        # are already filtered so include is not passed through.
         call_kwargs = mock_bulk.call_args
-        assert call_kwargs.kwargs["include"] == ["/docs", "/docs/*"]
+        entries_arg = call_kwargs.args[0]
+        assert len(entries_arg) == 2
+        assert all(e.loc.startswith("https://example.com/docs") for e in entries_arg)
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.sitemap.discover_pages")
@@ -651,7 +654,8 @@ class TestIngestAuto:
         ingest_auto("https://example.com/", MagicMock(), MagicMock())
 
         call_kwargs = mock_bulk.call_args
-        assert call_kwargs.kwargs["include"] is None
+        # Root URL has no path filter; include is not passed (defaults to None)
+        assert call_kwargs.kwargs.get("include") is None
 
     @patch("quarry.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.discover_pages")
