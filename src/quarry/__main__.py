@@ -11,7 +11,7 @@ import ssl
 import sys
 import tempfile
 import urllib.parse
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -41,7 +41,12 @@ from quarry.database import (
     list_collections as db_list_collections,
     list_documents,
 )
-from quarry.formatting import format_document_detail, format_status
+from quarry.formatting import (
+    format_collections,
+    format_document_detail,
+    format_documents,
+    format_status,
+)
 from quarry.logging_config import configure_logging
 from quarry.pipeline import ingest_auto, ingest_content, ingest_document
 from quarry.provider import provider_display
@@ -1087,33 +1092,6 @@ def list_callback(ctx: typer.Context) -> None:
         raise typer.Exit(code=1)
 
 
-def _format_documents_text(
-    docs: Sequence[Mapping[str, object]],
-) -> str:
-    """Format a list of document summaries for human output."""
-    if not docs:
-        return "No documents indexed."
-    return "\n".join(
-        f"[{d.get('collection', '')}] {d.get('document_name', '')}: "
-        f"{d.get('indexed_pages', 0)}/{d.get('total_pages', 0)} pages, "
-        f"{d.get('chunk_count', 0)} chunks"
-        for d in docs
-    )
-
-
-def _format_collections_text(
-    cols: Sequence[Mapping[str, object]],
-) -> str:
-    """Format a list of collection summaries for human output."""
-    if not cols:
-        return "No collections found."
-    return "\n".join(
-        f"{c.get('collection', '')}: "
-        f"{c.get('document_count', 0)} documents, "
-        f"{c.get('chunk_count', 0)} chunks"
-        for c in cols
-    )
-
 
 @list_app.command(name="documents")
 @_cli_errors
@@ -1137,13 +1115,13 @@ def list_documents_cmd(
             )
             raw_docs = []
         docs: list[dict[str, object]] = list(raw_docs)
-        _emit(docs, _format_documents_text(docs))
+        _emit(docs, format_documents(docs))
         return
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     local_docs = list_documents(db, collection_filter=collection or None)
-    _emit(local_docs, _format_documents_text(local_docs))
+    _emit(local_docs, format_documents(local_docs))
 
 
 @list_app.command(name="collections")
@@ -1160,13 +1138,13 @@ def list_collections_cmd() -> None:
             )
             raw_cols = []
         cols: list[dict[str, object]] = list(raw_cols)
-        _emit(cols, _format_collections_text(cols))
+        _emit(cols, format_collections(cols))
         return
 
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
     local_cols = db_list_collections(db)
-    _emit(local_cols, _format_collections_text(local_cols))
+    _emit(local_cols, format_collections(local_cols))
 
 
 @list_app.command(name="registrations")
