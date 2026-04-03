@@ -595,9 +595,12 @@ class TestIngestAuto:
 
         assert "sitemap_url" in result
         assert result["ingested"] == 2  # type: ignore[typeddict-item]
-        # Verify path prefix filter was derived
+        # Pre-filtering is applied before _bulk_ingest_entries; entries
+        # are already filtered so include is not passed through.
         call_kwargs = mock_bulk.call_args
-        assert call_kwargs.kwargs["include"] == ["/docs", "/docs/*"]
+        entries_arg = call_kwargs.args[0]
+        assert len(entries_arg) == 2
+        assert all(e.loc.startswith("https://example.com/docs") for e in entries_arg)
 
     @patch("quarry.pipeline.ingest_url")
     @patch("quarry.sitemap.discover_pages")
@@ -651,7 +654,8 @@ class TestIngestAuto:
         ingest_auto("https://example.com/", MagicMock(), MagicMock())
 
         call_kwargs = mock_bulk.call_args
-        assert call_kwargs.kwargs["include"] is None
+        # Root URL has no path filter; include is not passed (defaults to None)
+        assert call_kwargs.kwargs.get("include") is None
 
     @patch("quarry.pipeline._bulk_ingest_entries")
     @patch("quarry.sitemap.discover_pages")
@@ -790,3 +794,33 @@ class TestIngestAuto:
 
         # Should fall through to single-page, not route to ingest_sitemap
         assert "document_name" in result
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_falls_back_to_single_page_when_filter_yields_zero(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        """Sitemap found but no pages match the requested path — fall back."""
+        from quarry.pipeline import ingest_auto
+
+        # Sitemap returns pages that don't match the requested path
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://docs.example.com/guide/a", lastmod=None),
+            SitemapEntry(loc="https://docs.example.com/guide/b", lastmod=None),
+        ]
+        mock_ingest_url.return_value = {
+            "document_name": "https://docs.example.com/ai/sandboxes/get-started/",
+            "collection": "test",
+            "chunks": 5,
+        }
+
+        result = ingest_auto(
+            "https://docs.example.com/ai/sandboxes/get-started/",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        mock_ingest_url.assert_called_once()
