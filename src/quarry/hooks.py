@@ -176,7 +176,7 @@ def _sync_in_background() -> bool:
         return False
 
     try:
-        proc = subprocess.Popen(  # noqa: S603
+        proc = subprocess.Popen(
             [sys.executable, "-m", "quarry", "sync"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

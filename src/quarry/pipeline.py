@@ -1298,6 +1298,26 @@ def ingest_auto(
     if path:
         include = [path, f"{path}/*"]
 
+    # Pre-check: if filtering would yield 0 URLs, fall back to single page.
+    # This handles sites whose sitemap is partially parseable but doesn't
+    # contain the requested path (e.g. namespace-prefixed XML).
+    from quarry.sitemap import filter_entries  # noqa: PLC0415
+
+    if include and not filter_entries(entries, include=include):
+        progress("Sitemap has no pages matching %s, ingesting single page", path)
+        return ingest_url(
+            url,
+            db,
+            settings,
+            overwrite=overwrite,
+            collection=collection,
+            timeout=timeout,
+            progress_callback=progress_callback,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
+            summary=summary,
+        )
+
     return _bulk_ingest_entries(
         entries,
         db,

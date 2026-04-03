@@ -790,3 +790,33 @@ class TestIngestAuto:
 
         # Should fall through to single-page, not route to ingest_sitemap
         assert "document_name" in result
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_falls_back_to_single_page_when_filter_yields_zero(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        """Sitemap found but no pages match the requested path — fall back."""
+        from quarry.pipeline import ingest_auto
+
+        # Sitemap returns pages that don't match the requested path
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://docs.example.com/guide/a", lastmod=None),
+            SitemapEntry(loc="https://docs.example.com/guide/b", lastmod=None),
+        ]
+        mock_ingest_url.return_value = {
+            "document_name": "https://docs.example.com/ai/sandboxes/get-started/",
+            "collection": "test",
+            "chunks": 5,
+        }
+
+        result = ingest_auto(
+            "https://docs.example.com/ai/sandboxes/get-started/",
+            MagicMock(),
+            MagicMock(),
+        )
+
+        assert "document_name" in result
+        mock_ingest_url.assert_called_once()
