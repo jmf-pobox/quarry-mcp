@@ -252,6 +252,14 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 # ---------------------------------------------------------------------------
 
 
+class RemoteError(RuntimeError):
+    """Error from the remote quarry server with HTTP status code."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 def _remote_https_request(
     method: str,
     path: str,
@@ -324,8 +332,9 @@ def _remote_https_request(
         resp_body = resp.read()
         if resp.status >= 300:
             body_text = resp_body.decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Remote quarry server returned HTTP {resp.status}: {body_text}"
+            raise RemoteError(
+                resp.status,
+                f"Remote quarry server returned HTTP {resp.status}: {body_text}",
             )
         if not resp_body:
             return {}
@@ -582,6 +591,38 @@ def show_cmd(
     ] = "",
 ) -> None:
     """Show document metadata or a specific page's text."""
+    if page is not None and page < 1:
+        err_console.print(
+            f"Error: page number must be >= 1, got {page}",
+            style="red",
+        )
+        raise typer.Exit(code=1)
+
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        params: dict[str, str] = {"document": document_name}
+        if page is not None:
+            params["page"] = str(page)
+        if collection:
+            params["collection"] = collection
+        qs = urllib.parse.urlencode(params)
+        try:
+            remote_resp = _remote_https_get(f"/show?{qs}", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        # If page was requested, format as page text
+        if page is not None:
+            _emit(
+                remote_resp,
+                f"Document: {remote_resp.get('document_name', '')}\n"
+                f"Page: {remote_resp.get('page_number', '')}\n---\n"
+                f"{remote_resp.get('text', '')}",
+            )
+        else:
+            _emit(remote_resp, format_document_detail(remote_resp))
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -594,7 +635,7 @@ def show_cmd(
             )
             raise typer.Exit(code=1)
         _emit(
-            {"document_name": document_name, "page": page, "text": text},
+            {"document_name": document_name, "page_number": page, "text": text},
             f"Document: {document_name}\nPage: {page}\n---\n{text}",
         )
         return
@@ -757,6 +798,37 @@ def delete_cmd(
     ] = "",
 ) -> None:
     """Delete indexed data for a document or collection."""
+    proxy_config = _safe_proxy_config().get("quarry", {})
+    if isinstance(proxy_config, dict) and "url" in proxy_config:
+        if kind == "collection":
+            path = f"/collections?name={urllib.parse.quote(name)}"
+        elif kind == "document":
+            del_params: dict[str, str] = {"name": name}
+            if collection:
+                del_params["collection"] = collection
+            path = f"/documents?{urllib.parse.urlencode(del_params)}"
+        else:
+            err_console.print(
+                f"Error: unknown type {kind!r}. Use 'document' or 'collection'.",
+                style="red",
+            )
+            raise typer.Exit(code=1)
+        label = f"collection {name!r}" if kind == "collection" else f"{name!r}"
+        try:
+            remote_resp = _remote_https_request("DELETE", path, proxy_config)
+        except RemoteError as exc:
+            if exc.status == 404:
+                err_console.print(f"No data found for {label}", style="red")
+                raise typer.Exit(code=1) from exc
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
+        deleted = remote_resp.get("deleted", 0)
+        _emit(
+            remote_resp,
+            f"Deleted {deleted} chunks for {label}",
+        )
+        return
+
     settings = _resolved_settings()
     db = get_db(settings.lancedb_path)
 
@@ -774,12 +846,12 @@ def delete_cmd(
         raise typer.Exit(code=1)
 
     if deleted == 0:
-        _emit({"deleted": 0, "name": name, "type": kind}, f"No data found for {label}")
-    else:
-        _emit(
-            {"deleted": deleted, "name": name, "type": kind},
-            f"Deleted {deleted} chunks for {label}",
-        )
+        err_console.print(f"No data found for {label}", style="red")
+        raise typer.Exit(code=1)
+    _emit(
+        {"deleted": deleted, "name": name, "type": kind},
+        f"Deleted {deleted} chunks for {label}",
+    )
 
 
 @app.command()
