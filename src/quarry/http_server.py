@@ -264,6 +264,11 @@ def _show_route(request: Request) -> JSONResponse:
                 {"error": f"Invalid page number: {page_str!r}"},
                 status_code=400,
             )
+        if page < 1:
+            return JSONResponse(
+                {"error": f"Invalid page number: {page} (must be >= 1)"},
+                status_code=400,
+            )
 
     ctx = _ctx(request)
 

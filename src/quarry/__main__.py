@@ -252,6 +252,14 @@ def _cli_errors(fn: Callable[..., None]) -> Callable[..., None]:
 # ---------------------------------------------------------------------------
 
 
+class RemoteError(RuntimeError):
+    """Error from the remote quarry server with HTTP status code."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 def _remote_https_request(
     method: str,
     path: str,
@@ -324,8 +332,9 @@ def _remote_https_request(
         resp_body = resp.read()
         if resp.status >= 300:
             body_text = resp_body.decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Remote quarry server returned HTTP {resp.status}: {body_text}"
+            raise RemoteError(
+                resp.status,
+                f"Remote quarry server returned HTTP {resp.status}: {body_text}",
             )
         if not resp_body:
             return {}
@@ -582,6 +591,13 @@ def show_cmd(
     ] = "",
 ) -> None:
     """Show document metadata or a specific page's text."""
+    if page is not None and page < 1:
+        err_console.print(
+            f"Error: page number must be >= 1, got {page}",
+            style="red",
+        )
+        raise typer.Exit(code=1)
+
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         params: dict[str, str] = {"document": document_name}
@@ -592,7 +608,7 @@ def show_cmd(
         qs = urllib.parse.urlencode(params)
         try:
             remote_resp = _remote_https_get(f"/show?{qs}", proxy_config)
-        except RuntimeError as exc:
+        except RemoteError as exc:
             err_console.print(f"Error: {exc}", style="red")
             raise typer.Exit(code=1) from exc
         # If page was requested, format as page text
@@ -800,8 +816,8 @@ def delete_cmd(
         label = f"collection {name!r}" if kind == "collection" else f"{name!r}"
         try:
             remote_resp = _remote_https_request("DELETE", path, proxy_config)
-        except RuntimeError as exc:
-            if "404" in str(exc):
+        except RemoteError as exc:
+            if exc.status == 404:
                 err_console.print(f"No data found for {label}", style="red")
                 raise typer.Exit(code=1) from exc
             err_console.print(f"Error: {exc}", style="red")

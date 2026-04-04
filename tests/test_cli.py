@@ -257,26 +257,21 @@ class TestShowCmd:
         assert "No data found" in result.output
 
     def test_show_page_zero(self):
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.get_page_text", return_value=None),
-        ):
-            result = runner.invoke(app, ["show", "report.pdf", "--page", "0"])
+        result = runner.invoke(app, ["show", "report.pdf", "--page", "0"])
 
         assert result.exit_code == 1
-        assert "No data found" in result.output
+        assert "page number must be >= 1" in result.output
 
     def test_show_negative_page(self):
-        with (
-            patch("quarry.__main__._resolved_settings", return_value=_mock_settings()),
-            patch("quarry.__main__.get_db"),
-            patch("quarry.__main__.get_page_text", return_value=None),
-        ):
-            result = runner.invoke(app, ["show", "report.pdf", "--page", "-1"])
+        result = runner.invoke(app, ["show", "report.pdf", "--page", "-1"])
 
         assert result.exit_code == 1
-        assert "No data found" in result.output
+        assert "page number must be >= 1" in result.output
+
+    def test_page_zero_errors(self):
+        result = runner.invoke(app, ["show", "doc", "--page", "0"])
+
+        assert result.exit_code == 1
 
     def test_show_collection_filter(self):
         with (
@@ -3423,11 +3418,11 @@ class TestRemoteHttpsRequest:
         sent_headers = call_args[1].get("headers", {})
         assert "Content-Type" not in sent_headers
 
-    def test_non_2xx_raises_runtime_error(self) -> None:
-        """Status codes >= 300 raise RuntimeError."""
+    def test_non_2xx_raises_remote_error(self) -> None:
+        """Status codes >= 300 raise RemoteError with correct status."""
         import pytest
 
-        from quarry.__main__ import _remote_https_request
+        from quarry.__main__ import RemoteError, _remote_https_request
 
         config: dict[str, object] = {
             "url": "ws://localhost:8420/mcp",
@@ -3441,6 +3436,8 @@ class TestRemoteHttpsRequest:
 
         with (
             patch("http.client.HTTPConnection", return_value=mock_conn),
-            pytest.raises(RuntimeError, match="HTTP 404"),
+            pytest.raises(RemoteError, match="HTTP 404") as exc_info,
         ):
             _remote_https_request("DELETE", "/documents?name=foo", config)
+
+        assert exc_info.value.status == 404

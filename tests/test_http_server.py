@@ -700,6 +700,16 @@ class TestShow:
         assert resp.status_code == 400
         assert "Invalid page number" in resp.json()["error"]
 
+    def test_show_negative_page_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/show?document=foo&page=-1")
+        assert resp.status_code == 400
+        assert "must be >= 1" in resp.json()["error"]
+
+    def test_show_zero_page_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/show?document=foo&page=0")
+        assert resp.status_code == 400
+        assert "must be >= 1" in resp.json()["error"]
+
 
 class TestDeleteDocuments:
     """Tests for DELETE /documents endpoint."""
