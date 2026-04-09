@@ -627,6 +627,28 @@ class TestStatusCmd:
         assert "Warning" in result.output
         assert "bad toml" in result.output
 
+    def test_remote_connection_refused_exits_1(self) -> None:
+        """RemoteError from _remote_https_get exits 1 and prints the error."""
+        from quarry.__main__ import RemoteError
+
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get",
+                side_effect=RemoteError(0, "Cannot connect to remote quarry server"),
+            ),
+        ):
+            result = runner.invoke(app, ["status"])
+
+        assert result.exit_code == 1
+        assert "Cannot connect" in result.output
+
 
 class TestUseCmd:
     def test_sets_default_db(self):
@@ -1121,6 +1143,32 @@ class TestFindCmd:
         assert "collection=math" in call_path
         assert "document=notes.pdf" in call_path
 
+    def test_remote_connection_refused_exits_1(self) -> None:
+        """RemoteError from _remote_https_get exits 1 and prints the error message."""
+        from quarry.__main__ import RemoteError
+
+        inner_config = {
+            "url": "wss://quarry.example.com:8420/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        }
+        proxy_config = {"quarry": inner_config}
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get",
+                side_effect=RemoteError(
+                    0,
+                    "Cannot connect to remote quarry server at "
+                    "quarry.example.com:8420: [Errno 111] Connection refused",
+                ),
+            ),
+        ):
+            result = runner.invoke(app, ["find", "some query"])
+
+        assert result.exit_code == 1
+        assert "Cannot connect" in result.output
+        assert "quarry.example.com" in result.output
+
     def test_local_path_when_no_config(self):
         mock_vector = np.zeros(768, dtype=np.float32)
         mock_backend = MagicMock()
@@ -1407,6 +1455,28 @@ class TestListCollectionsCmd:
             f"Field mismatch: remote-only={remote_keys - local_keys}, "
             f"local-only={local_keys - remote_keys}"
         )
+
+    def test_remote_connection_refused_exits_1(self) -> None:
+        """RemoteError from _remote_https_get exits 1 and prints the error."""
+        from quarry.__main__ import RemoteError
+
+        proxy_config = {
+            "quarry": {
+                "url": "wss://quarry.example.com:8420/mcp",
+                "headers": {"Authorization": "Bearer tok"},
+            }
+        }
+        with (
+            patch("quarry.__main__.read_proxy_config", return_value=proxy_config),
+            patch(
+                "quarry.__main__._remote_https_get",
+                side_effect=RemoteError(0, "Cannot connect to remote quarry server"),
+            ),
+        ):
+            result = runner.invoke(app, ["list", "collections"])
+
+        assert result.exit_code == 1
+        assert "Cannot connect" in result.output
 
 
 class TestRegisterCmd:
@@ -4642,6 +4712,31 @@ class TestRemoteHttpsRequest:
 
         _, kwargs = mock_cls.call_args
         assert kwargs["timeout"] == 600.0
+
+    def test_connection_refused_raises_remote_error(self) -> None:
+        """OSError from conn.request is wrapped as RemoteError with status 0."""
+        import pytest
+
+        from quarry.__main__ import RemoteError, _remote_https_request
+
+        config: dict[str, object] = {
+            "url": "ws://localhost:8420/mcp",
+            "headers": {},
+        }
+        mock_conn = MagicMock()
+        mock_conn.request.side_effect = ConnectionRefusedError(
+            111, "Connection refused"
+        )
+
+        with (
+            patch("http.client.HTTPConnection", return_value=mock_conn),
+            pytest.raises(RemoteError) as exc_info,
+        ):
+            _remote_https_request("GET", "/search?q=test", config)
+
+        assert exc_info.value.status == 0
+        assert "localhost" in str(exc_info.value)
+        assert "8420" in str(exc_info.value)
 
 
 class TestIngestExitCodes:

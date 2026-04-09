@@ -292,9 +292,9 @@ def _remote_https_request(
         Parsed JSON response as a dict.
 
     Raises:
-        RemoteError: If the server returns a non-2xx status code or a
-            non-JSON / non-dict response body.
-        OSError: If the connection cannot be established.
+        RemoteError: If the server returns a non-2xx status code, a
+            non-JSON / non-dict response body, or if the connection cannot
+            be established (status 0 for connection failures).
         SystemExit: If the remote URL uses HTTPS but no CA cert is pinned.
     """
     raw_url = str(config["url"])
@@ -364,6 +364,11 @@ def _remote_https_request(
             )
         response_data: dict[str, object] = parsed_body
         return response_data
+    except OSError as exc:
+        raise RemoteError(
+            0,
+            f"Cannot connect to remote quarry server at {host}:{port}: {exc}",
+        ) from exc
     finally:
         conn.close()
 
@@ -386,6 +391,69 @@ def _safe_proxy_config() -> dict[str, Any]:
     except ValueError as exc:
         err_console.print(f"Warning: {exc}", style="yellow")
         return {}
+
+
+def _find_remote(
+    proxy_config: dict[str, object],
+    query: str,
+    limit: int,
+    collection: str,
+    document: str,
+    page_type: str,
+    source_format: str,
+    agent_handle: str,
+    memory_type: str,
+) -> None:
+    """Execute a remote find and emit results, exiting 1 on connection failure."""
+    params: dict[str, str | int] = {"q": query, "limit": limit}
+    if collection:
+        params["collection"] = collection
+    if document:
+        params["document"] = document
+    if page_type:
+        params["page_type"] = page_type
+    if source_format:
+        params["source_format"] = source_format
+    if agent_handle:
+        params["agent_handle"] = agent_handle
+    if memory_type:
+        params["memory_type"] = memory_type
+    qs = urllib.parse.urlencode(params)
+    try:
+        remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
+    except RemoteError as exc:
+        err_console.print(f"Error: {exc}", style="red")
+        raise typer.Exit(code=1) from exc
+    raw_results = remote_resp.get("results", [])
+    remote_results: list[dict[str, object]] = (
+        list(raw_results) if isinstance(raw_results, list) else []
+    )
+    json_results: list[dict[str, object]] = []
+    lines: list[str] = []
+    for r in remote_results:
+        similarity = round(float(str(r.get("similarity", 0))), 4)
+        meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
+        doc = r.get("document_name", "")
+        pg = r.get("page_number", "")
+        lines.append(f"\n[{doc} p.{pg} | {meta}] (similarity: {similarity})")
+        text = str(r.get("text", ""))
+        lines.append(text[:300])
+        json_results.append(
+            {
+                "document_name": r.get("document_name", ""),
+                "collection": r.get("collection", ""),
+                "page_number": r.get("page_number", 0),
+                "chunk_index": r.get("chunk_index", 0),
+                "page_type": r.get("page_type", ""),
+                "source_format": r.get("source_format", ""),
+                "agent_handle": r.get("agent_handle", ""),
+                "memory_type": r.get("memory_type", ""),
+                "summary": r.get("summary", ""),
+                "similarity": similarity,
+                "text": text,
+            }
+        )
+    _emit(json_results, "\n".join(lines))
 
 
 def _exit_on_ingest_failure(result: dict[str, object] | object) -> None:
@@ -443,51 +511,17 @@ def find_cmd(
     """Search indexed documents."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        params: dict[str, str | int] = {"q": query, "limit": limit}
-        if collection:
-            params["collection"] = collection
-        if document:
-            params["document"] = document
-        if page_type:
-            params["page_type"] = page_type
-        if source_format:
-            params["source_format"] = source_format
-        if agent_handle:
-            params["agent_handle"] = agent_handle
-        if memory_type:
-            params["memory_type"] = memory_type
-        qs = urllib.parse.urlencode(params)
-        remote_resp = _remote_https_get(f"/search?{qs}", proxy_config)
-        raw_results = remote_resp.get("results", [])
-        remote_results: list[dict[str, object]] = (
-            list(raw_results) if isinstance(raw_results, list) else []
+        _find_remote(
+            proxy_config,
+            query,
+            limit,
+            collection,
+            document,
+            page_type,
+            source_format,
+            agent_handle,
+            memory_type,
         )
-        json_results: list[dict[str, object]] = []
-        lines: list[str] = []
-        for r in remote_results:
-            similarity = round(float(str(r.get("similarity", 0))), 4)
-            meta = f"{r.get('page_type', '')}/{r.get('source_format', '')}"
-            doc = r.get("document_name", "")
-            pg = r.get("page_number", "")
-            lines.append(f"\n[{doc} p.{pg} | {meta}] (similarity: {similarity})")
-            text = str(r.get("text", ""))
-            lines.append(text[:300])
-            json_results.append(
-                {
-                    "document_name": r.get("document_name", ""),
-                    "collection": r.get("collection", ""),
-                    "page_number": r.get("page_number", 0),
-                    "chunk_index": r.get("chunk_index", 0),
-                    "page_type": r.get("page_type", ""),
-                    "source_format": r.get("source_format", ""),
-                    "agent_handle": r.get("agent_handle", ""),
-                    "memory_type": r.get("memory_type", ""),
-                    "summary": r.get("summary", ""),
-                    "similarity": similarity,
-                    "text": text,
-                }
-            )
-        _emit(json_results, "\n".join(lines))
         return
 
     settings = _resolved_settings()
@@ -842,7 +876,11 @@ def status_cmd() -> None:
     """Show database status: documents, chunks, storage, model info."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        remote_data = _remote_https_get("/status", proxy_config)
+        try:
+            remote_data = _remote_https_get("/status", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
         _emit(remote_data, format_status(remote_data))
         return
 
@@ -1419,7 +1457,11 @@ def list_documents_cmd(
         if collection:
             params["collection"] = collection
         qs = f"?{urllib.parse.urlencode(params)}" if params else ""
-        remote_resp = _remote_https_get(f"/documents{qs}", proxy_config)
+        try:
+            remote_resp = _remote_https_get(f"/documents{qs}", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
         raw_docs = remote_resp.get("documents", [])
         if not isinstance(raw_docs, list):
             err_console.print(
@@ -1442,7 +1484,11 @@ def list_collections_cmd() -> None:
     """List all collections with document and chunk counts."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        remote_resp = _remote_https_get("/collections", proxy_config)
+        try:
+            remote_resp = _remote_https_get("/collections", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
         raw_cols = remote_resp.get("collections", [])
         if not isinstance(raw_cols, list):
             err_console.print(
@@ -1473,7 +1519,11 @@ def list_registrations_cmd() -> None:
     """List all registered directories."""
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        remote_resp = _remote_https_get("/registrations", proxy_config)
+        try:
+            remote_resp = _remote_https_get("/registrations", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
         raw = remote_resp.get("registrations", [])
         if not isinstance(raw, list):
             err_console.print(
@@ -1531,7 +1581,11 @@ def list_databases_cmd() -> None:
     """
     proxy_config = _safe_proxy_config().get("quarry", {})
     if isinstance(proxy_config, dict) and "url" in proxy_config:
-        remote_resp = _remote_https_get("/databases", proxy_config)
+        try:
+            remote_resp = _remote_https_get("/databases", proxy_config)
+        except RemoteError as exc:
+            err_console.print(f"Error: {exc}", style="red")
+            raise typer.Exit(code=1) from exc
         raw = remote_resp.get("databases", [])
         if not isinstance(raw, list):
             err_console.print(
