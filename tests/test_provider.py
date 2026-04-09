@@ -14,6 +14,7 @@ class TestSelectProvider:
     def test_cpu_only_returns_cpu_int8(self) -> None:
         with patch(
             "onnxruntime.get_available_providers",
+            create=True,
             return_value=["CPUExecutionProvider"],
         ):
             result = select_provider()
@@ -25,6 +26,7 @@ class TestSelectProvider:
     def test_cuda_available_returns_cuda_fp16(self) -> None:
         with patch(
             "onnxruntime.get_available_providers",
+            create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
             result = select_provider()
@@ -37,6 +39,7 @@ class TestSelectProvider:
         monkeypatch.setenv("QUARRY_PROVIDER", "cpu")
         with patch(
             "onnxruntime.get_available_providers",
+            create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
             result = select_provider()
@@ -51,6 +54,7 @@ class TestSelectProvider:
         monkeypatch.setenv("QUARRY_PROVIDER", "cuda")
         with patch(
             "onnxruntime.get_available_providers",
+            create=True,
             return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
         ):
             result = select_provider()
@@ -66,6 +70,7 @@ class TestSelectProvider:
         with (
             patch(
                 "onnxruntime.get_available_providers",
+                create=True,
                 return_value=["CPUExecutionProvider"],
             ),
             pytest.raises(RuntimeError, match="CUDAExecutionProvider not available"),
@@ -86,6 +91,7 @@ class TestSelectProvider:
         with (
             patch(
                 "onnxruntime.get_available_providers",
+                create=True,
                 return_value=["CPUExecutionProvider"],
             ),
             caplog.at_level(logging.INFO, logger="quarry.provider"),
@@ -97,6 +103,7 @@ class TestSelectProvider:
     def test_empty_providers_returns_cpu(self) -> None:
         with patch(
             "onnxruntime.get_available_providers",
+            create=True,
             return_value=[],
         ):
             result = select_provider()
