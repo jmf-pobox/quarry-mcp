@@ -1103,9 +1103,22 @@ def deregister(
     )
 
 
-def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
-    """Select worker count. Local backends are CPU-bound — 1 worker."""
-    return 1
+def _auto_workers(settings: Settings) -> int:
+    """Return worker count for sync ThreadPoolExecutor.
+
+    Returns 4 when CUDAExecutionProvider is active — parsing N files in
+    parallel while the GPU handles embedding is the right model.  Falls
+    back to 1 for CPU-only deployments so sync does not starve the daemon
+    or the editor for cores.
+    """
+    _ = settings  # reserved for provider config in future
+    try:
+        import onnxruntime  # noqa: PLC0415
+
+        providers = onnxruntime.get_available_providers()
+    except ImportError:
+        return 1
+    return 4 if "CUDAExecutionProvider" in providers else 1
 
 
 def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:

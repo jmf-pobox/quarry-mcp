@@ -3213,6 +3213,32 @@ class TestAutoWorkers:
         settings = Settings()
         assert _auto_workers(settings) == 1
 
+    def test_returns_1_when_cuda_not_available(self) -> None:
+        with patch(
+            "onnxruntime.get_available_providers",
+            return_value=["CPUExecutionProvider"],
+        ):
+            from quarry.__main__ import _auto_workers
+
+            assert _auto_workers(_mock_settings()) == 1
+
+    def test_returns_4_when_cuda_available(self) -> None:
+        with patch(
+            "onnxruntime.get_available_providers",
+            return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ):
+            from quarry.__main__ import _auto_workers
+
+            assert _auto_workers(_mock_settings()) == 4
+
+    def test_returns_1_when_onnxruntime_import_fails(self) -> None:
+        import sys
+
+        with patch.dict(sys.modules, {"onnxruntime": None}):
+            from quarry.__main__ import _auto_workers
+
+            assert _auto_workers(_mock_settings()) == 1
+
 
 class TestVersionCmd:
     def test_prints_version(self):
