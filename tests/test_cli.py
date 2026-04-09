@@ -3206,12 +3206,42 @@ class TestDatabasesCmdSizeFormatting:
 
 
 class TestAutoWorkers:
-    def test_local_backends_default_to_one(self) -> None:
+    def test_returns_1_when_cpu_provider(self) -> None:
         from quarry.__main__ import _auto_workers
-        from quarry.config import Settings
+        from quarry.provider import ProviderSelection
 
-        settings = Settings()
-        assert _auto_workers(settings) == 1
+        with patch(
+            "quarry.provider.select_provider",
+            return_value=ProviderSelection("CPUExecutionProvider", "model-cpu.onnx"),
+        ):
+            assert _auto_workers(_mock_settings()) == 1
+
+    def test_returns_4_when_cuda_provider(self) -> None:
+        from quarry.__main__ import _auto_workers
+        from quarry.provider import ProviderSelection
+
+        with patch(
+            "quarry.provider.select_provider",
+            return_value=ProviderSelection("CUDAExecutionProvider", "model-cuda.onnx"),
+        ):
+            assert _auto_workers(_mock_settings()) == 4
+
+    def test_returns_1_when_select_provider_raises(self) -> None:
+        from quarry.__main__ import _auto_workers
+
+        with patch(
+            "quarry.provider.select_provider",
+            side_effect=RuntimeError("onnxruntime broken"),
+        ):
+            assert _auto_workers(_mock_settings()) == 1
+
+    def test_returns_1_when_onnxruntime_import_fails(self) -> None:
+        import sys
+
+        from quarry.__main__ import _auto_workers
+
+        with patch.dict(sys.modules, {"quarry.provider": None}):
+            assert _auto_workers(_mock_settings()) == 1
 
 
 class TestVersionCmd:

@@ -1104,8 +1104,19 @@ def deregister(
 
 
 def _auto_workers(settings: Settings) -> int:  # noqa: ARG001
-    """Select worker count. Local backends are CPU-bound — 1 worker."""
-    return 1
+    """Select worker count based on the active ONNX execution provider.
+
+    Returns 4 when CUDAExecutionProvider is active (GPU-accelerated embedding
+    is fast; parsing is the bottleneck and is parallelizable). Returns 1 for
+    CPU-only deployments. Respects the QUARRY_PROVIDER environment variable.
+    Falls back to 1 on any error (broken runtime, missing dependency, etc.).
+    """
+    try:
+        from quarry.provider import select_provider  # noqa: PLC0415
+
+        return 4 if select_provider().provider == "CUDAExecutionProvider" else 1
+    except Exception:  # noqa: BLE001
+        return 1
 
 
 def _format_sync_results(json_data: dict[str, dict[str, object]]) -> str:
