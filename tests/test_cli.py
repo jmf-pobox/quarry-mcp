@@ -1166,8 +1166,7 @@ class TestFindCmd:
             result = runner.invoke(app, ["find", "some query"])
 
         assert result.exit_code == 1
-        assert "Cannot connect" in result.output
-        assert "quarry.example.com" in result.output
+        assert "Cannot connect to remote quarry server" in result.output
 
     def test_local_path_when_no_config(self):
         mock_vector = np.zeros(768, dtype=np.float32)

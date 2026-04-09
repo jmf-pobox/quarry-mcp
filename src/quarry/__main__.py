@@ -404,7 +404,7 @@ def _find_remote(
     agent_handle: str,
     memory_type: str,
 ) -> None:
-    """Execute a remote find and emit results, exiting 1 on connection failure."""
+    """Execute a remote find and emit results, exiting 1 on remote request failure."""
     params: dict[str, str | int] = {"q": query, "limit": limit}
     if collection:
         params["collection"] = collection
@@ -513,14 +513,14 @@ def find_cmd(
     if isinstance(proxy_config, dict) and "url" in proxy_config:
         _find_remote(
             proxy_config,
-            query,
-            limit,
-            collection,
-            document,
-            page_type,
-            source_format,
-            agent_handle,
-            memory_type,
+            query=query,
+            limit=limit,
+            collection=collection,
+            document=document,
+            page_type=page_type,
+            source_format=source_format,
+            agent_handle=agent_handle,
+            memory_type=memory_type,
         )
         return
 
