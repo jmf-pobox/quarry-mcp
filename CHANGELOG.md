@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-04-11
+
 ### Fixed
 
 - **infra**: Install scripts (`install-server.sh`, `install-client.sh`,
