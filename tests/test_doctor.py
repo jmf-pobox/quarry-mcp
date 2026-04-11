@@ -196,44 +196,177 @@ class TestCheckStorage:
 
 
 class TestCheckClaudeCodeMcp:
-    def test_claude_not_on_path(self, monkeypatch: MP):
-        monkeypatch.setattr("quarry.doctor.shutil.which", lambda _name: None)
-        result = _check_claude_code_mcp()
-        assert result.passed is False
-        assert result.required is False
-        assert "not found" in result.message
+    """Tests for the file-based Claude Code MCP check.
 
-    def test_quarry_configured(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+    The check reads ``~/.claude/plugins/installed_plugins.json`` directly
+    instead of shelling out to ``claude mcp list``.
+    """
+
+    @staticmethod
+    def _write_plugins(
+        tmp_path: Path,
+        plugins: dict[str, object],
+        *,
+        version: int = 2,
+    ) -> Path:
+        """Write an installed_plugins.json under *tmp_path* and return its path."""
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": version, "plugins": plugins}
+        plugins_path.write_text(json.dumps(payload), encoding="utf-8")
+        return plugins_path
+
+    @staticmethod
+    def _make_plugin_dir(install_path: Path) -> None:
+        """Create a minimal ``.claude-plugin/plugin.json`` with an mcpServers entry."""
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "name": "quarry",
+            "mcpServers": {
+                "quarry": {"type": "stdio", "command": "quarry", "args": ["mcp"]},
+            },
+        }
+        plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def test_quarry_configured(self, tmp_path: Path, monkeypatch: MP):
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        self._make_plugin_dir(install_path)
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {"scope": "user", "installPath": str(install_path)}
+                ],
+            },
         )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 0, "stdout": "quarry: uvx quarry mcp", "stderr": ""},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
         result = _check_claude_code_mcp()
         assert result.passed is True
         assert "configured" in result.message
 
-    def test_quarry_not_configured(self, monkeypatch: MP):
-        monkeypatch.setattr(
-            "quarry.doctor.shutil.which", lambda _name: "/usr/bin/claude"
+    def test_quarry_not_configured(self, tmp_path: Path, monkeypatch: MP):
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "other@example": [{"scope": "user", "installPath": "/fake"}],
+            },
         )
-        mock_result = type(
-            "CompletedProcess",
-            (),
-            {"returncode": 0, "stdout": "other-tool: npx other", "stderr": ""},
-        )()
-        monkeypatch.setattr(
-            "quarry.doctor.subprocess.run", lambda *_a, **_kw: mock_result
-        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
         result = _check_claude_code_mcp()
         assert result.passed is False
         assert "not configured" in result.message
+
+    def test_no_plugin_registry(self, tmp_path: Path, monkeypatch: MP):
+        missing = tmp_path / "nonexistent" / "installed_plugins.json"
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", missing)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert result.required is False
+        assert "no plugin registry" in result.message
+
+    def test_invalid_json(self, tmp_path: Path, monkeypatch: MP):
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        plugins_path.write_text("{invalid json", encoding="utf-8")
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert "config error" in result.message
+
+    def test_install_path_missing(self, tmp_path: Path, monkeypatch: MP):
+        """Registry lists quarry but the installPath directory doesn't exist."""
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {"scope": "user", "installPath": "/nonexistent/path"}
+                ],
+            },
+        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert "plugin files missing" in result.message
+
+    def test_empty_entries_list(self, tmp_path: Path, monkeypatch: MP):
+        """Registry has the key but an empty list of entries."""
+        plugins_path = self._write_plugins(tmp_path, {"quarry@punt-labs": []})
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert "not configured" in result.message
+
+    def test_unexpected_schema_list_returns_error(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        """Registry with unexpected shape (list not dict) degrades."""
+        plugins_path = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        plugins_path.parent.mkdir(parents=True, exist_ok=True)
+        plugins_path.write_text("[]", encoding="utf-8")
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert not result.passed
+        assert result.required is False
+        assert "config error" in result.message
+
+    def test_unexpected_schema_plugins_not_list(self, tmp_path: Path, monkeypatch: MP):
+        """Plugin entry is a string instead of list of dicts."""
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": "not-a-list"},
+        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert not result.passed
+        assert result.required is False
+        assert "config error" in result.message
+
+    def test_empty_install_path_returns_error(self, tmp_path: Path, monkeypatch: MP):
+        """Entry with empty installPath is caught before Path('') becomes '.'."""
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": [{"scope": "user", "installPath": ""}]},
+        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert not result.passed
+        assert result.required is False
+        assert "empty installPath" in result.message
+
+    def test_missing_install_path_key_returns_error(
+        self, tmp_path: Path, monkeypatch: MP
+    ):
+        """Entry with no installPath key at all is caught."""
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {"quarry@punt-labs": [{"scope": "user"}]},
+        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert not result.passed
+        assert result.required is False
+        assert "empty installPath" in result.message
+
+    def test_manifest_missing_mcp_server(self, tmp_path: Path, monkeypatch: MP):
+        """plugin.json exists but has no quarry MCP server entry."""
+        install_path = tmp_path / "plugins" / "cache" / "punt-labs" / "quarry" / "1.0.0"
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        plugin_json.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {"name": "quarry", "mcpServers": {}}
+        plugin_json.write_text(json.dumps(manifest), encoding="utf-8")
+        plugins_path = self._write_plugins(
+            tmp_path,
+            {
+                "quarry@punt-labs": [
+                    {"scope": "user", "installPath": str(install_path)}
+                ],
+            },
+        )
+        monkeypatch.setattr("quarry.doctor._CLAUDE_CODE_PLUGINS_PATH", plugins_path)
+        result = _check_claude_code_mcp()
+        assert result.passed is False
+        assert "manifest missing" in result.message
 
 
 class TestCheckClaudeDesktopMcp:

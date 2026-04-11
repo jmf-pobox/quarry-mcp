@@ -349,49 +349,95 @@ def _check_mcp_proxy() -> CheckResult:
     )
 
 
+_CLAUDE_CODE_PLUGINS_PATH = (
+    Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+)
+
+_QUARRY_PLUGIN_KEY = "quarry@punt-labs"
+
+
 def _check_claude_code_mcp() -> CheckResult:
-    """Check whether quarry MCP is configured in Claude Code (read-only)."""
-    claude_path = shutil.which("claude")
-    if claude_path is None:
+    """Check whether quarry MCP is configured in Claude Code (read-only).
+
+    Reads the plugin registry JSON directly instead of shelling out to
+    ``claude mcp list``, which spawns every configured MCP server and
+    exceeds the timeout when many plugins are installed.
+
+    NOTE: This check reads the plugin registry (installed_plugins.json),
+    which is populated by ``claude plugin install``.  The write path in
+    ``_configure_claude_code()`` uses ``claude mcp add``, which writes to a
+    different store.  In practice these are in sync because quarry is
+    always installed as a plugin via the install scripts.  If a user
+    runs ``quarry install`` standalone (without the plugin), this check
+    may report "not configured" even though the MCP server was added.
+    This is acceptable for a ``required=False`` diagnostic check.
+    """
+    plugins_path = _CLAUDE_CODE_PLUGINS_PATH
+    if not plugins_path.exists():
         return CheckResult(
             name="Claude Code MCP",
             passed=False,
-            message="claude CLI not found on PATH",
+            message="no plugin registry found",
             required=False,
         )
     try:
-        result = subprocess.run(  # noqa: S603
-            [claude_path, "mcp", "list"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message="claude CLI timed out",
-            required=False,
-        )
-    if result.returncode != 0:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message="could not list MCP servers (run 'quarry install')",
-            required=False,
-        )
-    if _MCP_SERVER_NAME in result.stdout:
+        data = json.loads(plugins_path.read_text(encoding="utf-8"))
+        plugins = data.get("plugins", {})
+        if _QUARRY_PLUGIN_KEY not in plugins:
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message="not configured (run 'quarry install')",
+                required=False,
+            )
+        # Verify the install path contains a valid plugin manifest with
+        # an mcpServers entry for quarry.  This catches stale registry
+        # entries where the plugin directory was deleted or corrupted.
+        entries = plugins[_QUARRY_PLUGIN_KEY]
+        if not entries:
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message="not configured (run 'quarry install')",
+                required=False,
+            )
+        raw_path = entries[0].get("installPath", "")
+        if not raw_path:
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message="plugin registry has empty installPath",
+                required=False,
+            )
+        install_path = Path(raw_path)
+        plugin_json = install_path / ".claude-plugin" / "plugin.json"
+        if not plugin_json.exists():
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message=f"plugin files missing at {install_path}",
+                required=False,
+            )
+        manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+        if _MCP_SERVER_NAME not in manifest.get("mcpServers", {}):
+            return CheckResult(
+                name="Claude Code MCP",
+                passed=False,
+                message="plugin manifest missing quarry MCP server entry",
+                required=False,
+            )
         return CheckResult(
             name="Claude Code MCP",
             passed=True,
             message="configured",
         )
-    return CheckResult(
-        name="Claude Code MCP",
-        passed=False,
-        message="not configured (run 'quarry install')",
-        required=False,
-    )
+    except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as exc:
+        return CheckResult(
+            name="Claude Code MCP",
+            passed=False,
+            message=f"config error: {exc}",
+            required=False,
+        )
 
 
 def _check_claude_desktop_mcp() -> CheckResult:
