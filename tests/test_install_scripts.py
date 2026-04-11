@@ -67,7 +67,17 @@ def mock_bin(tmp_path: Path) -> Path:
 
     # git — prerequisite check only.
     _write_mock(bin_dir / "git", log_header + "exit 0\n")
-    _write_mock(bin_dir / "python3", log_header + "exit 0\n")
+    _write_mock(
+        bin_dir / "python3",
+        log_header
+        + 'if [ "$1" = "-c" ]; then\n'
+        + '  case "$2" in\n'
+        + '    *major*) printf "3\\n"; exit 0 ;;\n'
+        + '    *minor*) printf "13\\n"; exit 0 ;;\n'
+        + "  esac\n"
+        + "fi\n"
+        + "exit 0\n",
+    )
 
     # claude — marketplace/plugin commands.
     _write_mock(
@@ -411,7 +421,12 @@ def test_install_script_passes_shellcheck(script: Path) -> None:
     """Per CLAUDE.md Class 5: every install script must pass ``shellcheck -x``."""
     shellcheck_bin = shutil.which("shellcheck")
     if shellcheck_bin is None:
-        pytest.skip("shellcheck not available")
+        pytest.fail(
+            "shellcheck is required for install-script linting "
+            "but was not found on PATH. Install shellcheck in "
+            "CI (apt-get install shellcheck) so this gate "
+            "cannot be skipped."
+        )
     result = subprocess.run(  # noqa: S603 — shellcheck resolved via shutil.which
         [shellcheck_bin, "-x", str(script)],
         capture_output=True,
