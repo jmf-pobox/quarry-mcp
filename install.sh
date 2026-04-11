@@ -61,7 +61,7 @@ if command -v claude >/dev/null 2>&1; then
   ok "claude CLI found"
   HAS_CLAUDE=1
 else
-  warn "Claude Code not found -- skipping plugin install. Run 'quarry install' after installing Claude Code."
+  warn "Claude Code not found -- skipping plugin install. Re-run install.sh after installing Claude Code."
 fi
 
 if command -v git >/dev/null 2>&1; then
@@ -333,8 +333,7 @@ else
   if [ "$HAS_CLAUDE" = "1" ]; then
     printf 'Restart Claude Code to activate the plugin.\n\n'
   else
-    printf 'Claude Code was not found. After installing it, run:\n'
-    printf '  quarry install\n\n'
+    printf 'Claude Code was not found. Re-run install.sh after installing Claude Code.\n\n'
   fi
   printf 'Quick start:\n'
   printf '  /find <query>                     # semantic search\n'
