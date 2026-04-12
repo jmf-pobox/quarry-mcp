@@ -17,7 +17,7 @@ Parse the first token as a subcommand. Default to `status` if empty.
 - **collections**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"collections"`
 - **databases**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"databases"`
 - **registrations**: Call `mcp__plugin_quarry_quarry__list` with `kind` set to `"registrations"`
-- **use <name>**: Call `mcp__plugin_quarry_quarry__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry use <database-name>`
+- **use `<name>`**: Call `mcp__plugin_quarry_quarry__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry use <database-name>`
 
 ## Output
 
