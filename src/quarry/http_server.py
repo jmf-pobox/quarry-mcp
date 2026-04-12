@@ -43,6 +43,7 @@ from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
+    dir_size_bytes,
     format_size,
     get_db,
     get_page_text,
@@ -648,11 +649,7 @@ def _databases_route(request: Request) -> JSONResponse:
             docs = []
     else:
         docs = []
-    size_bytes = (
-        sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
-        if lance_dir.exists()
-        else 0
-    )
+    size_bytes = dir_size_bytes(lance_dir) if lance_dir.exists() else 0
     name = lance_dir.parent.name or "default"
     summary = {
         "name": name,
@@ -937,9 +934,7 @@ def _status_route(request: Request) -> JSONResponse:
         regs = []
 
     db_size_bytes = (
-        sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
-        if settings.lancedb_path.exists()
-        else 0
+        dir_size_bytes(settings.lancedb_path) if settings.lancedb_path.exists() else 0
     )
 
     return JSONResponse(

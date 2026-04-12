@@ -202,7 +202,9 @@ def _check_storage() -> CheckResult:
             message="no data yet",
             required=False,
         )
-    total = sum(f.stat().st_size for f in data_dir.rglob("*") if f.is_file())
+    from quarry.database import dir_size_bytes  # noqa: PLC0415
+
+    total = dir_size_bytes(data_dir)
     return CheckResult(
         name="Storage",
         passed=True,

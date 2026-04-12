@@ -318,7 +318,7 @@ class TestLoadHookConfig:
 
 
 class TestSyncInBackground:
-    def test_returns_true_on_success(self, tmp_path: Path) -> None:
+    def test_returns_launched_on_success(self, tmp_path: Path) -> None:
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
@@ -331,11 +331,11 @@ class TestSyncInBackground:
             patch("quarry.hooks._is_sync_running", return_value=False),
             patch("quarry.hooks._sync_lockfile", return_value=lockfile),
         ):
-            assert _sync_in_background() is True
+            assert _sync_in_background() == "launched"
             assert lockfile.exists()
             assert lockfile.read_text() == "99999"
 
-    def test_returns_false_on_oserror(self, tmp_path: Path) -> None:
+    def test_returns_failed_on_oserror(self, tmp_path: Path) -> None:
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
@@ -346,17 +346,17 @@ class TestSyncInBackground:
             patch("quarry.hooks._is_sync_running", return_value=False),
             patch("quarry.hooks._sync_lockfile", return_value=lockfile),
         ):
-            assert _sync_in_background() is False
+            assert _sync_in_background() == "failed"
             assert not lockfile.exists()  # Lock cleaned up on failure
 
-    def test_skips_when_already_running(self) -> None:
+    def test_returns_running_when_already_running(self) -> None:
         from quarry.hooks import _sync_in_background
 
         with patch("quarry.hooks._is_sync_running", return_value=True):
-            assert _sync_in_background() is False
+            assert _sync_in_background() == "running"
 
-    def test_skips_when_lock_held(self, tmp_path: Path) -> None:
-        """Atomic lock prevents TOCTOU race — second caller gets None."""
+    def test_returns_running_when_lock_held(self, tmp_path: Path) -> None:
+        """Atomic lock prevents TOCTOU race — second caller gets 'running'."""
         from quarry.hooks import _sync_in_background
 
         lockfile = tmp_path / "sync.pid"
@@ -365,10 +365,10 @@ class TestSyncInBackground:
             patch("quarry.hooks._is_sync_running", return_value=False),
             patch("quarry.hooks._sync_lockfile", return_value=lockfile),
         ):
-            assert _sync_in_background() is False
+            assert _sync_in_background() == "running"
 
-    def test_pidfile_write_failure_still_returns_true(self, tmp_path: Path) -> None:
-        """If Popen succeeds but PID write fails, sync is running — return True."""
+    def test_pidfile_write_failure_still_returns_launched(self, tmp_path: Path) -> None:
+        """If Popen succeeds but PID write fails, sync is running — return launched."""
         import subprocess as _subprocess
 
         from quarry.hooks import _sync_in_background
@@ -384,7 +384,8 @@ class TestSyncInBackground:
             patch("quarry.hooks._sync_lockfile", return_value=lockfile),
             patch("os.write", side_effect=OSError("disk full")),
         ):
-            assert _sync_in_background() is True  # Sync launched despite write failure
+            # Sync launched despite write failure.
+            assert _sync_in_background() == "launched"
 
 
 class TestIsSyncRunning:
@@ -464,7 +465,10 @@ class TestHandleSessionStart:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value=True) as mock_sync,
+            patch(
+                "quarry.hooks._sync_in_background",
+                return_value="launched",
+            ) as mock_sync,
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -495,14 +499,33 @@ class TestHandleSessionStart:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value=False),
+            patch("quarry.hooks._sync_in_background", return_value="failed"),
         ):
             result = handle_session_start({"cwd": str(project)})
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "Background sync skipped" in ctx
+        assert "Background sync failed to launch." in ctx
+
+    def test_context_reflects_sync_already_running(self, tmp_path: Path) -> None:
+        project = tmp_path / "runningproject"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value="running"),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "Background sync already running." in ctx
 
     def test_skips_registration_when_already_registered(self, tmp_path: Path) -> None:
         project = tmp_path / "existing"
@@ -608,7 +631,7 @@ class TestHandleSessionStart:
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
-            patch("quarry.hooks._sync_in_background", return_value=True),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
         ):
             result = handle_session_start({"cwd": str(project)})
 

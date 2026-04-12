@@ -115,11 +115,13 @@ With it, startup is instant and state is shared across all sessions.
 Installed services use TLS with TOFU certificate pinning (DES-020)
 --- even on localhost.
 
-When a remote server is configured (DES-021), the CLI should route
+When a remote server is configured (DES-021), the CLI routes
 all data commands over HTTPS to the server, with only authentication
-and administration commands remaining local.  As of v1.11.0, only
-\texttt{find} and \texttt{status} are remote-routed; remaining
-commands are tracked in epic quarry-g0ed.
+and administration commands remaining local.  As of v1.12.4,
+\texttt{find}, \texttt{show}, \texttt{status}, \texttt{ingest},
+\texttt{remember}, \texttt{delete}, \texttt{sync}, and all
+\texttt{list} subcommands route remotely.  Registration
+create/delete and \texttt{use} are the remaining gaps.
 
 \subsection{Surface Summary}
 
@@ -1019,9 +1021,10 @@ remote server over HTTPS with the pinned CA cert.  Only authentication
 commands (\texttt{login}, \texttt{logout}, \texttt{remote}) and
 administration commands (\texttt{install}, \texttt{uninstall},
 \texttt{serve}, \texttt{mcp}, \texttt{version}) are local-only.
-As of v1.11.0, only \texttt{find} and \texttt{status} are
-remote-routed; remaining commands (including \texttt{doctor}) are
-tracked in epic quarry-g0ed.
+As of v1.12.4, all data commands (\texttt{find}, \texttt{show},
+\texttt{status}, \texttt{ingest}, \texttt{remember}, \texttt{delete},
+\texttt{sync}, and all \texttt{list} subcommands) route remotely.
+Registration create/delete and \texttt{use} remain local-only.
 
 % ===================================================================
 \section{Test Architecture}
