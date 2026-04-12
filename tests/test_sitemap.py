@@ -770,6 +770,92 @@ class TestIngestAuto:
         assert "document_name" in result
         mock_ingest_url.assert_called_once()
 
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_explicit_collection_passed_through_single_page_fallback(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        """Explicit collection is preserved when falling back to single-page ingest."""
+        from quarry.pipeline import ingest_auto
+
+        mock_discover.return_value = []
+        mock_ingest_url.return_value = {
+            "document_name": "https://example.com/page",
+            "collection": "my-custom-collection",
+            "chunks": 5,
+        }
+
+        ingest_auto(
+            "https://example.com/page",
+            MagicMock(),
+            MagicMock(),
+            collection="my-custom-collection",
+        )
+
+        call_kwargs = mock_ingest_url.call_args
+        assert call_kwargs.kwargs["collection"] == "my-custom-collection"
+
+    @patch("quarry.pipeline.ingest_url")
+    @patch("quarry.sitemap.discover_pages")
+    def test_explicit_collection_passed_through_filter_zero_fallback(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+    ) -> None:
+        """Explicit collection is preserved when sitemap filter yields zero pages."""
+        from quarry.pipeline import ingest_auto
+
+        # Sitemap returns pages that don't match the requested path
+        mock_discover.return_value = [
+            SitemapEntry(loc="https://docs.example.com/other/a", lastmod=None),
+        ]
+        mock_ingest_url.return_value = {
+            "document_name": "https://docs.example.com/ai/sandboxes/",
+            "collection": "docker-sandboxes",
+            "chunks": 3,
+        }
+
+        ingest_auto(
+            "https://docs.example.com/ai/sandboxes/",
+            MagicMock(),
+            MagicMock(),
+            collection="docker-sandboxes",
+        )
+
+        call_kwargs = mock_ingest_url.call_args
+        assert call_kwargs.kwargs["collection"] == "docker-sandboxes"
+
+    @patch("quarry.pipeline.ingest_sitemap")
+    def test_explicit_collection_passed_through_sitemap_url(
+        self,
+        mock_ingest_sitemap: MagicMock,
+    ) -> None:
+        """Explicit collection is preserved when URL is detected as a sitemap."""
+        from quarry.pipeline import ingest_auto
+
+        mock_ingest_sitemap.return_value = {
+            "sitemap_url": "https://example.com/sitemap.xml",
+            "collection": "my-docs",
+            "total_discovered": 5,
+            "after_filter": 5,
+            "ingested": 5,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        ingest_auto(
+            "https://example.com/sitemap.xml",
+            MagicMock(),
+            MagicMock(),
+            collection="my-docs",
+        )
+
+        call_kwargs = mock_ingest_sitemap.call_args
+        assert call_kwargs.kwargs["collection"] == "my-docs"
+
     @patch("quarry.sitemap.discover_pages")
     def test_sitemap_substring_not_misdetected(
         self,

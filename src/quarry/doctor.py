@@ -411,7 +411,12 @@ _MCP_SERVER_NAME = "quarry"
 
 
 def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
-    """Build ``sh -c`` command that prefers mcp-proxy, falls back to ``quarry mcp``.
+    """Build ``sh -c`` command preferring mcp-proxy --config quarry.
+
+    Uses ``mcp-proxy --config quarry`` which reads TLS and bearer token
+    settings from ``~/.punt-labs/mcp-proxy/quarry.toml``.  Falls back to
+    ``quarry mcp`` (direct stdio) when mcp-proxy is not installed or the
+    TOML profile does not exist.
 
     When *resolve_paths* is True (Claude Desktop), embeds shell-quoted
     absolute paths because Desktop runs with a minimal PATH.  The
@@ -420,9 +425,7 @@ def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]
     """
     import shlex  # noqa: PLC0415
 
-    from quarry.config import DEFAULT_PORT  # noqa: PLC0415
-
-    ws_url = f"ws://localhost:{DEFAULT_PORT}/mcp"
+    toml_path = "${HOME}/.punt-labs/mcp-proxy/quarry.toml"
 
     if resolve_paths:
         proxy_exec = shlex.quote(shutil.which("mcp-proxy") or "mcp-proxy")
@@ -434,8 +437,10 @@ def _mcp_fallback_script(*, resolve_paths: bool = False) -> tuple[str, list[str]
         sh = "sh"
 
     script = (
-        "if command -v mcp-proxy >/dev/null 2>&1; "
-        f"then exec {proxy_exec} {ws_url}; "
+        "if command -v mcp-proxy >/dev/null 2>&1"
+        f' && [ -f "{toml_path}" ]'
+        f" && grep -q '^\\[quarry\\]' \"{toml_path}\"; "
+        f"then exec {proxy_exec} --config quarry; "
         f"else exec {quarry_exec} mcp; fi"
     )
     return sh, ["-c", script]

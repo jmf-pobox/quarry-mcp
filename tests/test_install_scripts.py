@@ -561,6 +561,76 @@ def test_piped_default_mode(env: dict[str, str], mock_bin: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Plugin uninstall error handling
+# ---------------------------------------------------------------------------
+
+
+def test_uninstall_suppresses_not_installed_error(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """Plugin uninstall silently suppresses 'not installed' errors."""
+    # Replace claude mock: uninstall fails with "not installed", everything
+    # else works normally.
+    _write_mock(
+        mock_bin / "claude",
+        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
+        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
+        'printf "\\n" >> "$LOG_FILE"\n'
+        'case "$1" in\n'
+        "  plugin)\n"
+        '    case "$2" in\n'
+        '      marketplace) [ "$3" = "list" ] && printf "punt-labs\\n"; exit 0 ;;\n'
+        '      uninstall) printf "Plugin not installed\\n" >&2; exit 1 ;;\n'
+        '      list) printf "quarry@punt-labs\\n"; exit 0 ;;\n'
+        "    esac\n"
+        "    exit 0 ;;\n"
+        "esac\n"
+        "exit 0\n",
+    )
+
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    # "not installed" is silently suppressed — no warning in output.
+    assert "Plugin uninstall failed" not in result.stdout
+
+
+def test_uninstall_warns_on_unexpected_error(
+    env: dict[str, str], mock_bin: Path
+) -> None:
+    """Plugin uninstall warns (but continues) on unexpected errors."""
+    _write_mock(
+        mock_bin / "claude",
+        'printf "%s" "$(basename "$0")" >> "$LOG_FILE"\n'
+        'for a in "$@"; do printf " %s" "$a" >> "$LOG_FILE"; done\n'
+        'printf "\\n" >> "$LOG_FILE"\n'
+        'case "$1" in\n'
+        "  plugin)\n"
+        '    case "$2" in\n'
+        '      marketplace) [ "$3" = "list" ] && printf "punt-labs\\n"; exit 0 ;;\n'
+        '      uninstall) printf "permission denied\\n"; exit 1 ;;\n'
+        '      list) printf "quarry@punt-labs\\n"; exit 0 ;;\n'
+        "    esac\n"
+        "    exit 0 ;;\n"
+        "esac\n"
+        "exit 0\n",
+    )
+
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    # Unexpected error emits a warning.
+    assert "Plugin uninstall failed" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Shellcheck
+# ---------------------------------------------------------------------------
+
+
 def test_install_script_passes_shellcheck() -> None:
     """Per CLAUDE.md Class 5: install.sh must pass ``shellcheck -x``."""
     shellcheck_bin = shutil.which("shellcheck")
