@@ -27,6 +27,7 @@ from quarry.doctor import (
     _configure_claude_desktop,
     _configure_ethos_ext,
     _human_size,
+    _mcp_fallback_script,
     _quiet_logging,
     check_environment,
     run_install,
@@ -1007,6 +1008,59 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     monkeypatch.setattr("quarry.proxy.install", lambda: "mocked (skipped in test)")
     monkeypatch.setattr("quarry.service._systemd_install", lambda: None)
     monkeypatch.setattr("quarry.service._launchd_install", lambda: None)
+
+
+class TestMcpFallbackScript:
+    """Tests for the sh -c command that bridges mcp-proxy or quarry mcp."""
+
+    def test_uses_mcp_proxy_config_quarry(self) -> None:
+        """Script must use 'mcp-proxy --config quarry', not bare ws:// URL."""
+        _sh, args = _mcp_fallback_script()
+        script = args[1]
+        assert "--config quarry" in script
+        assert "ws://localhost" not in script
+
+    def test_checks_toml_exists(self) -> None:
+        """Script must check that the TOML profile exists before using mcp-proxy."""
+        _sh, args = _mcp_fallback_script()
+        script = args[1]
+        assert "quarry.toml" in script
+        assert "[ -f" in script
+
+    def test_checks_toml_has_quarry_section(self) -> None:
+        """Script must grep for [quarry] section in TOML before using mcp-proxy."""
+        _sh, args = _mcp_fallback_script()
+        script = args[1]
+        assert "grep" in script
+        # The [quarry] pattern is shell-escaped in the grep argument
+        assert "quarry" in script
+        assert "grep -q" in script
+
+    def test_falls_back_to_quarry_mcp(self) -> None:
+        """Script must fall back to 'quarry mcp' when mcp-proxy is unavailable."""
+        _sh, args = _mcp_fallback_script()
+        script = args[1]
+        assert "quarry mcp" in script
+
+    def test_resolve_paths_uses_absolute_paths(self, monkeypatch: MP) -> None:
+        """When resolve_paths=True, paths are resolved via shutil.which."""
+        monkeypatch.setattr(
+            "quarry.doctor.shutil.which",
+            lambda name: f"/usr/local/bin/{name}",
+        )
+        sh, args = _mcp_fallback_script(resolve_paths=True)
+        script = args[1]
+        assert "/usr/local/bin/mcp-proxy" in script
+        assert "/usr/local/bin/quarry" in script
+        assert sh == "/usr/local/bin/sh"
+
+    def test_default_uses_bare_names(self) -> None:
+        """Default (resolve_paths=False) uses bare command names."""
+        sh, args = _mcp_fallback_script()
+        assert sh == "sh"
+        script = args[1]
+        # Should not contain absolute paths
+        assert "/usr/" not in script
 
 
 class TestConfigureClaudeCode:

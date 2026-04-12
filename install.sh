@@ -285,7 +285,16 @@ fi
 if [ "$HAS_CLAUDE" = "1" ]; then
   info "Installing $PLUGIN_NAME plugin..."
 
-  claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" < /dev/null 2>/dev/null || true
+  UNINSTALL_ERR=$(claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" < /dev/null 2>&1) || {
+    case "$UNINSTALL_ERR" in
+      *"not installed"*|*"not found"*|*"No plugin"*|*"does not exist"*|*"no plugin"*)
+        # Expected on fresh machines — suppress silently.
+        ;;
+      *)
+        warn "Plugin uninstall failed: $UNINSTALL_ERR (continuing with install)"
+        ;;
+    esac
+  }
   if ! claude plugin install "${PLUGIN_NAME}@${MARKETPLACE_NAME}" < /dev/null; then
     cleanup_https_rewrite
     fail "Failed to install $PLUGIN_NAME"

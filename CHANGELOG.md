@@ -18,6 +18,8 @@ across `transform`, `index`, and `connector`).
 
 - **tool**: `quarry doctor` now checks FTS index health, sync recency across
   registered collections, and existence of registered sync directories.
+- **tool**: `/use <database>` slash command for switching databases. Also
+  available as `/quarry use <name>`.
 
 ### Changed
 
@@ -27,6 +29,9 @@ across `transform`, `index`, and `connector`).
 - **infra**: Replace `rglob("*")` size calculations with `du`-based
   `dir_size_bytes()` helper across 6 call sites. Reduces `quarry list databases`
   from ~30s to <1s on large (59K file) lance directories.
+- **infra**: `_configure_claude_code()` now generates `mcp-proxy --config quarry`
+  (reads TLS + bearer from TOML) instead of bare `mcp-proxy ws://localhost:8420/mcp`.
+  Falls back to `quarry mcp` when mcp-proxy or the TOML profile is absent.
 
 ### Fixed
 
@@ -40,6 +45,9 @@ across `transform`, `index`, and `connector`).
   route remotely).
 - **infra**: Mock `_systemd_install` and `_launchd_install` in
   `TestRunInstall` to prevent flakes on CI/dev machines without user systemd.
+- **infra**: `install.sh` plugin uninstall now only suppresses "not installed"
+  errors. Other failures (permissions, network) emit a warning instead of
+  being silently swallowed.
 
 ## [1.12.4] - 2026-04-11
 
