@@ -17,6 +17,7 @@ from quarry.database import (
     count_chunks,
     delete_collection as db_delete_collection,
     delete_document as db_delete_document,
+    dir_size_bytes,
     discover_databases,
     get_db,
     get_page_text,
@@ -509,9 +510,7 @@ def status() -> str:
         regs = []
 
     db_size_bytes = (
-        sum(f.stat().st_size for f in settings.lancedb_path.rglob("*") if f.is_file())
-        if settings.lancedb_path.exists()
-        else 0
+        dir_size_bytes(settings.lancedb_path) if settings.lancedb_path.exists() else 0
     )
 
     return format_status(

@@ -19,6 +19,23 @@ across `transform`, `index`, and `connector`).
 - **tool**: `quarry doctor` now checks FTS index health, sync recency across
   registered collections, and existence of registered sync directories.
 
+### Changed
+
+- **tool**: `_sync_in_background` now returns `"launched"`, `"running"`, or
+  `"failed"` instead of a boolean. Session-start context message distinguishes
+  "sync already running" from "sync failed to launch".
+- **infra**: Replace `rglob("*")` size calculations with `du`-based
+  `dir_size_bytes()` helper across 6 call sites. Reduces `quarry list databases`
+  from ~30s to <1s on large (59K file) lance directories.
+
+### Fixed
+
+- **infra**: Updated stale "As of v1.11.0" remote routing references in
+  DESIGN.md and architecture.tex to reflect v1.12.4 state (12 commands now
+  route remotely).
+- **infra**: Mock `_systemd_install` and `_launchd_install` in
+  `TestRunInstall` to prevent flakes on CI/dev machines without user systemd.
+
 ## [1.12.4] - 2026-04-11
 
 ## [1.12.3] - 2026-04-11

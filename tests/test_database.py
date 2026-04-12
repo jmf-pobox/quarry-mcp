@@ -715,3 +715,32 @@ class TestOptimizeRebuildsFtsIndex:
 
         # Data still accessible — no corruption.
         assert count_chunks(db) == 2
+
+
+class TestDirSizeBytes:
+    """Verify dir_size_bytes returns correct size using du or fallback."""
+
+    def test_returns_correct_size(self, tmp_path: Path) -> None:
+        from quarry.database import dir_size_bytes
+
+        (tmp_path / "a.txt").write_bytes(b"x" * 100)
+        (tmp_path / "b.txt").write_bytes(b"y" * 200)
+        result = dir_size_bytes(tmp_path)
+        # du reports disk usage (block-aligned), so result >= sum of file sizes.
+        assert result >= 300
+
+    def test_fallback_on_du_failure(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from quarry.database import dir_size_bytes
+
+        (tmp_path / "a.txt").write_bytes(b"x" * 50)
+        with patch("subprocess.run", side_effect=OSError("no du")):
+            result = dir_size_bytes(tmp_path)
+        assert result == 50
+
+    def test_empty_directory(self, tmp_path: Path) -> None:
+        from quarry.database import dir_size_bytes
+
+        result = dir_size_bytes(tmp_path)
+        assert result >= 0

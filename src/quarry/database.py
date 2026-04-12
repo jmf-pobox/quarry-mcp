@@ -770,6 +770,41 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes} bytes"
 
 
+def dir_size_bytes(path: Path) -> int:
+    """Total size in bytes of a directory tree.
+
+    Uses ``du`` for speed — a single C-level filesystem walk is orders
+    of magnitude faster than Python's ``rglob`` + ``stat`` for large
+    trees (e.g. 59K lance files: <1s vs 30s).  Falls back to rglob if
+    ``du`` is unavailable or fails.
+    """
+    import subprocess  # noqa: PLC0415
+
+    try:
+        # du -sb (Linux) gives exact bytes.
+        result = subprocess.run(  # noqa: S603
+            ["du", "-sb", str(path)],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.split()[0])
+        # macOS: -sb not supported, try -sk (kilobytes).
+        result = subprocess.run(  # noqa: S603
+            ["du", "-sk", str(path)],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.split()[0]) * 1024
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    # Fallback: Python rglob (slow but always works).
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
 def discover_databases(root: Path) -> list[DatabaseSummary]:
     """Scan *root* for named databases and return structured summaries."""
     results: list[DatabaseSummary] = []
@@ -781,7 +816,7 @@ def discover_databases(root: Path) -> list[DatabaseSummary]:
             continue
         db = get_db(lance_dir)
         docs = list_documents(db)
-        size_bytes = sum(f.stat().st_size for f in lance_dir.rglob("*") if f.is_file())
+        size_bytes = dir_size_bytes(lance_dir)
         results.append(
             DatabaseSummary(
                 name=entry.name,

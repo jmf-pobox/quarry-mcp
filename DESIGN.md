@@ -417,28 +417,16 @@ When a remote quarry server is configured (via `quarry login`), **every data com
 
 **Everything else routes remotely:** `find`, `status`, `list` (all subcommands), `show`, `ingest`, `remember`, `delete`, `register`, `deregister`, `sync`, `use`, `doctor`
 
-The CLI detects remote configuration via `_safe_proxy_config()` and routes through HTTP helpers with the pinned CA cert and Bearer token. Currently only `_remote_https_get()` exists; a matching `_remote_https_post()` / `_remote_https_delete()` helper is needed for write operations (tracked as `quarry-stcd`).
+The CLI detects remote configuration via `_safe_proxy_config()` and routes through `_remote_https_get()`, `_remote_https_post()`, and `_remote_https_delete()` helpers with the pinned CA cert and Bearer token.
 
-**Current state (v1.11.0):** Only `find` and `status` route remotely. All other commands silently hit the local database. This is tracked as epic `quarry-g0ed` with 11 tasks to complete parity.
+**Current state (v1.12.4):** The following commands route remotely: `find` (/search), `show` (/show), `status` (/status), `ingest` (/ingest POST), `remember` (/remember POST), `delete document` (DELETE /documents), `delete collection` (DELETE /collections), `sync` (POST /sync), `list documents` (GET /documents), `list collections` (GET /collections), `list registrations` (GET /registrations), `list databases` (GET /databases).
 
-**Target endpoint surface:**
+**Remaining endpoint surface:**
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/search` | GET | Semantic search (exists) |
-| `/status` | GET | Database statistics (exists) |
-| `/collections` | GET | List collections (exists, CLI not wired) |
-| `/documents` | GET | List documents (exists, CLI not wired) |
-| `/show` | GET | Document metadata and page text (needs endpoint) |
-| `/ingest` | POST | File upload or URL ingestion (needs endpoint) |
-| `/remember` | POST | Inline text ingestion (needs endpoint) |
-| `/documents` | DELETE | Remove a document (needs endpoint) |
-| `/collections` | DELETE | Remove a collection (needs endpoint) |
-| `/registrations` | GET/POST/DELETE | Directory registration CRUD (needs endpoint) |
-| `/sync` | POST | Trigger incremental sync (needs endpoint) |
-| `/databases` | GET | List named databases (needs endpoint) |
+| `/registrations` | POST/DELETE | Directory registration create/delete (needs endpoint) |
 | `/use` | POST | Switch active database (needs endpoint) |
-| `/health` | GET | Server health for doctor (exists) |
 
 ### Why This Design
 
@@ -450,3 +438,86 @@ The "local-only" classification applies only to commands that genuinely operate 
 
 1. **Split horizon with explicit `--local`/`--remote` flags** — Rejected. Adds complexity to every command. Users shouldn't have to think about where their data lives after logging in.
 2. **Only route read operations remotely** — Rejected. A user who can search remotely but can't ingest remotely has a broken workflow. Remote means remote for everything.
+
+---
+
+## DES-022: Single Install Script with --network Flag
+
+**Date:** 2026-04-11
+**Status:** SETTLED
+**Topic:** How the installer handles local-only vs network-accessible daemon modes
+
+### Design
+
+One `install.sh` with a single optional flag: `--network`. Default (no flags) installs everything with the daemon on localhost. `--network` binds the daemon to `0.0.0.0` and requires `QUARRY_API_KEY`. Plugin installation is opportunistic — if the `claude` CLI exists on PATH, the plugin and marketplace are installed; if not, they're skipped with a warning.
+
+All install steps always run in both modes: CLI, model download, GPU swap, daemon registration, TLS certificates, local `quarry login localhost`. The only difference is the bind address.
+
+### Why This Design
+
+The prior four-script split (`install.sh`, `install-server.sh`, `install-client.sh`, `install-both.sh`) caused the same drift bug three times in one session: VERSION constants not bumped across all scripts (quarry-tu0w), GPU swap block deleted from split scripts (quarry-e4c2), and step numbering divergence. Every release that didn't update all four scripts created a broken install path for some users.
+
+The original `--server`/`--client` split was based on a false premise — that "server" and "client" were different install types. In practice every machine needs the full install (CLI, model, daemon, GPU swap). The only real axis is whether the daemon should be reachable from the network.
+
+### Alternatives Considered
+
+1. **Four separate scripts** — Rejected. Caused three drift bugs in one day. Shared code across four files with no enforcement mechanism.
+2. **Three modes: default, --server, --client** — Implemented first (PR #220), then simplified. `--client` skipped model download and daemon, but clients that happen to have GPUs still want local quarry operations. The mode distinction added complexity without matching real use cases.
+3. **Shared sourced fragment** (`.bin/install-gpu-swap.sh`) — Rejected. The `curl | sh` flow has no `$script_dir` to resolve sourced files. Would require a two-file download or inline the fragment via heredoc.
+4. **Environment variable instead of flag** (`QUARRY_INSTALL_MODE=network`) — Rejected. `sh -s -- --network` is POSIX and more discoverable than env vars in documentation.
+
+---
+
+## DES-023: FTS Index Rebuild After Optimize
+
+**Date:** 2026-04-11
+**Status:** SETTLED
+**Topic:** Keeping the Tantivy full-text index consistent after LanceDB compaction
+
+### Design
+
+`optimize_table()` now calls `table.create_fts_index("text", replace=True)` after `table.optimize()`. This rebuilds the Tantivy FTS index against the new fragment layout. The call also passes `cleanup_older_than=timedelta(days=7)` to prune old manifest versions during compaction.
+
+### Why This Design
+
+`table.optimize()` compacts data fragments — merging small fragments and removing deleted rows. The Tantivy FTS index stores row references by fragment ID. After compaction, those fragment IDs no longer exist. Every subsequent FTS query hit `RuntimeError: lance error: ... fragment id N but this fragment does not exist` and fell back to vector-only search via the existing exception handler at `database.py:485`.
+
+This meant the BM25 leg of hybrid search (DES-017) was dead after every `sync_all` cycle since the feature shipped. The RRF fusion that hybrid search was designed to provide — catching keyword matches that vector search misses — never worked in production. The fallback masked the failure: search returned results, but only from the vector channel.
+
+The rebuild is O(n) in table size but only runs after bulk sync operations (via `sync_all` → `optimize_table`), not on every query. On a 33GB dataset with 59K fragments, the rebuild adds seconds, not minutes.
+
+The 7-day version pruning addresses a secondary issue: 118K manifest files consuming 11GB in `_versions/`. LanceDB's `optimize()` merges fragments but doesn't prune old manifests by default.
+
+### Alternatives Considered
+
+1. **Rebuild FTS on every query** — Rejected. O(n) per query is unacceptable.
+2. **Rebuild FTS on daemon startup** — Rejected. Doesn't help when the daemon runs for days between restarts. The stale index reappears after the first sync.
+3. **Use `replace=False` and rely on LanceDB incremental FTS updates** — This is what was in place. LanceDB does not incrementally update the FTS index after `optimize()` changes fragment IDs. The index must be fully rebuilt.
+4. **Catch the RuntimeError and retry with a fresh table handle** — Rejected. Treats the symptom. The FTS index is structurally stale after compaction; retrying with the same stale index doesn't help.
+
+---
+
+## DES-024: File-Based Claude Code Plugin Check in Doctor
+
+**Date:** 2026-04-11
+**Status:** SETTLED
+**Topic:** How `quarry doctor` verifies the Claude Code MCP plugin is configured
+
+### Design
+
+`_check_claude_code_mcp()` reads `~/.claude/plugins/installed_plugins.json` directly and checks for the `quarry@punt-labs` key. It validates the install path exists and the plugin manifest contains an `mcpServers.quarry` entry. No subprocess calls. Exception handler catches `JSONDecodeError`, `OSError`, `KeyError`, `TypeError`, and `AttributeError` for graceful degradation on corrupted or changed registry formats.
+
+### Why This Design
+
+The prior implementation shelled out to `claude mcp list` with a 10-second timeout. That command spawns every configured MCP server for health checks — sequentially. With 10 plugins installed (quarry, biff, lux, vox, beadle, ethos, dungeon, z-spec, plus others), the total exceeded 15 seconds. The doctor check timed out on every run, on both Linux and macOS.
+
+The check only needs to know whether quarry is configured, not whether every MCP server is healthy. Reading the JSON registry file answers that question in <1ms with zero side effects.
+
+The Claude Desktop check (`_check_claude_desktop_mcp`) already used this file-based pattern. The Claude Code check now matches.
+
+### Alternatives Considered
+
+1. **Raise the timeout to 30s or 60s** — Rejected. Moves the goalpost. Adding more plugins would hit the new timeout. Users shouldn't wait 30 seconds for a doctor check.
+2. **Background the probe and report results asynchronously** — Rejected. Doctor checks are synchronous by design — the output is a pass/fail table. An async probe that reports "pending" defeats the purpose.
+3. **Skip the check when running under a Claude Code parent process** — Rejected. Detection is fragile (check `CLAUDE_SESSION_ID` env var?) and doesn't help when running `quarry doctor` from a plain terminal.
+4. **Read the MCP config that `claude mcp add` writes to** — Considered as an alternative data source. `_configure_claude_code()` writes via `claude mcp add`, which uses a different store than the plugin registry. In practice both stores have the quarry entry because quarry is always installed as a plugin. Noted as a known limitation in a code comment.

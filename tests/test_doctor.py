@@ -995,7 +995,7 @@ class TestCheckSyncDirectories:
 
 
 def _mock_install_deps(monkeypatch: MP) -> None:
-    """Stub out MCP config, mcp-proxy install, and check_environment."""
+    """Stub out MCP config, proxy install, service registration, check_environment."""
     import quarry.doctor as doctor_mod
 
     noop = lambda: doctor_mod.CheckResult(  # noqa: E731
@@ -1005,6 +1005,8 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     monkeypatch.setattr(doctor_mod, "_configure_claude_desktop", noop)
     monkeypatch.setattr(doctor_mod, "check_environment", lambda **_kw: 0)
     monkeypatch.setattr("quarry.proxy.install", lambda: "mocked (skipped in test)")
+    monkeypatch.setattr("quarry.service._systemd_install", lambda: None)
+    monkeypatch.setattr("quarry.service._launchd_install", lambda: None)
 
 
 class TestConfigureClaudeCode:

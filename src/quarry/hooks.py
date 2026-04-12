@@ -144,7 +144,7 @@ def _acquire_sync_lock() -> int | None:
         return None
 
 
-def _sync_in_background() -> bool:
+def _sync_in_background() -> str:
     """Fire-and-forget sync via detached subprocess.
 
     Uses ``sys.executable -m quarry`` to avoid PATH trust issues (the
@@ -158,7 +158,9 @@ def _sync_in_background() -> bool:
     ``~/.punt-labs/quarry/sync.pid``.  Uses O_CREAT|O_EXCL to prevent TOCTOU
     races between concurrent SessionStart hooks.
 
-    Returns True if the subprocess was launched, False if skipped or failed.
+    Returns ``"launched"`` if the subprocess was started, ``"running"``
+    if a sync is already in progress (or the lock is held), or
+    ``"failed"`` if the launch itself errored.
     """
     import os  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
@@ -167,13 +169,13 @@ def _sync_in_background() -> bool:
     # Fast path: if a sync is already running, skip without trying the lock.
     if _is_sync_running():
         logger.debug("session-start: sync already running, skipping")
-        return False
+        return "running"
 
     # Atomic lock acquisition — prevents TOCTOU races.
     fd = _acquire_sync_lock()
     if fd is None:
         logger.debug("session-start: could not acquire sync lock, skipping")
-        return False
+        return "running"
 
     try:
         proc = subprocess.Popen(
@@ -189,7 +191,7 @@ def _sync_in_background() -> bool:
         os.close(fd)
         with contextlib.suppress(OSError):
             _sync_lockfile().unlink()
-        return False
+        return "failed"
 
     # Write the PID to the lock file (fd is already open).
     try:
@@ -200,7 +202,7 @@ def _sync_in_background() -> bool:
         os.close(fd)
 
     logger.info("session-start: background sync launched (pid=%d)", proc.pid)
-    return True
+    return "launched"
 
 
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
@@ -246,13 +248,14 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             logger.info("session-start: registered %s as '%s'", directory, collection)
 
         # Return context immediately; sync runs in background.
-        launched = _sync_in_background()
+        sync_status = _sync_in_background()
 
-        sync_line = (
-            "Background sync in progress."
-            if launched
-            else "Background sync skipped (could not launch)."
-        )
+        if sync_status == "launched":
+            sync_line = "Background sync in progress."
+        elif sync_status == "running":
+            sync_line = "Background sync already running."
+        else:
+            sync_line = "Background sync failed to launch."
         context = (
             "Before researching a topic, check quarry first — prior research "
             "and conversations are already indexed here.\n"
