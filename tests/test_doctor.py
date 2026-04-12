@@ -750,6 +750,7 @@ class TestCheckFtsHealth:
             result = _check_fts_health(db_path)
         assert result.passed is True
         assert result.message == "healthy"
+        assert result.required is False
 
     def test_stale_fts_runtime_error(self, tmp_path: Path) -> None:
         """RuntimeError from FTS query means stale index."""
@@ -848,6 +849,7 @@ class TestCheckSyncHealth:
         assert result.passed is True
         assert "1 collections" in result.message
         assert "oldest sync" in result.message
+        assert result.required is False
 
     def test_stale_sync(self, tmp_path: Path) -> None:
         """Collection with ingested_at > 24h ago triggers warning."""
@@ -932,6 +934,31 @@ class TestCheckSyncDirectories:
         result = _check_sync_directories(registry_path)
         assert result.passed is True
         assert "1 directories OK" in result.message
+        assert result.required is False
+
+    def test_file_at_path_not_treated_as_directory(self, tmp_path: Path) -> None:
+        """A regular file at the registered path is not a valid sync directory."""
+        from datetime import UTC, datetime
+
+        from quarry.sync_registry import open_registry
+
+        registry_path = tmp_path / "registry.db"
+        conn = open_registry(registry_path)
+        fake_file = tmp_path / "not-a-dir"
+        fake_file.write_text("I am a file")
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            _INSERT_DIR,
+            (str(fake_file), "file-col", now),
+        )
+        conn.commit()
+        conn.close()
+
+        result = _check_sync_directories(registry_path)
+        assert result.passed is False
+        assert "1 missing" in result.message
+        assert "file-col" in result.message
+        assert result.required is False
 
     def test_missing_directory(self, tmp_path: Path) -> None:
         from datetime import UTC, datetime

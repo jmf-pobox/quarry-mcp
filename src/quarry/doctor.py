@@ -242,7 +242,12 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             )
         table = db.open_table(TABLE_NAME)
         table.search("health", query_type="fts").limit(1).to_list()
-        return CheckResult(name="FTS index", passed=True, message="healthy")
+        return CheckResult(
+            name="FTS index",
+            passed=True,
+            message="healthy",
+            required=False,
+        )
     except RuntimeError:
         return CheckResult(
             name="FTS index",
@@ -282,6 +287,7 @@ def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
         name="Sync",
         passed=True,
         message=f"{count} collections, oldest sync {age_str}",
+        required=False,
     )
 
 
@@ -372,7 +378,7 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
                 message="no registrations",
                 required=False,
             )
-        missing = [reg.collection for reg in regs if not Path(reg.directory).exists()]
+        missing = [reg.collection for reg in regs if not Path(reg.directory).is_dir()]
         if missing:
             names = ", ".join(missing[:3])
             return CheckResult(
@@ -385,6 +391,7 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
             name="Sync directories",
             passed=True,
             message=f"{len(regs)} directories OK",
+            required=False,
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
