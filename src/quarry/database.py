@@ -783,23 +783,24 @@ def dir_size_bytes(path: Path) -> int:
     try:
         # du -sb (Linux) gives exact bytes.
         result = subprocess.run(  # noqa: S603
-            ["du", "-sb", str(path)],  # noqa: S607
+            ["du", "-sb", "--", str(path)],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=30,
         )
         if result.returncode == 0:
             return int(result.stdout.split()[0])
-        # macOS: -sb not supported, try -sk (kilobytes).
+        # macOS: -sb not supported. -sk reports disk usage (block-aligned),
+        # not apparent file size. Acceptable for display-only size reporting.
         result = subprocess.run(  # noqa: S603
-            ["du", "-sk", str(path)],  # noqa: S607
+            ["du", "-sk", "--", str(path)],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=30,
         )
         if result.returncode == 0:
             return int(result.stdout.split()[0]) * 1024
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
         pass
     # Fallback: Python rglob (slow but always works).
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())

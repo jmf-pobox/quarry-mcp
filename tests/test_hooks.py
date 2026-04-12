@@ -356,7 +356,7 @@ class TestSyncInBackground:
             assert _sync_in_background() == "running"
 
     def test_returns_running_when_lock_held(self, tmp_path: Path) -> None:
-        """Atomic lock prevents TOCTOU race — second caller gets None."""
+        """Atomic lock prevents TOCTOU race — second caller gets 'running'."""
         from quarry.hooks import _sync_in_background
 
         lockfile = tmp_path / "sync.pid"
