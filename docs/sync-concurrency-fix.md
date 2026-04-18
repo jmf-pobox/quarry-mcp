@@ -59,19 +59,17 @@ Five changes, ordered by priority.
 
 ### Fix 1: Server-side sync lock
 
-Add an `asyncio.Lock` to the `/sync` HTTP route. Only one `sync_all()`
-runs at a time inside the serve process. Concurrent requests receive
-HTTP 409 Conflict with a JSON body:
+Use a `SyncTaskState` on `_QuarryContext` to guard the `/sync` HTTP
+route. Only one `sync_all()` runs at a time inside the serve process.
+The route checks if `ctx.sync_task.status == "running"` -- if so,
+return 409 immediately with the existing `task_id`. Concurrent requests
+receive HTTP 409 Conflict with a JSON body:
 
 ```json
-{"error": "Sync already in progress", "status": "running"}
+{"error": "Sync already in progress", "status": "running", "task_id": "sync-..."}
 ```
 
 **File**: `src/quarry/http_server.py`
-
-The lock is a module-level `asyncio.Lock` on `_QuarryContext` (or a
-module global initialized at serve startup). The route acquires it
-with `try_lock` (non-blocking) — if held, return 409 immediately.
 
 **Rejected alternative**: queue concurrent requests and serialize them.
 Queuing hides the problem — the caller should know sync is already

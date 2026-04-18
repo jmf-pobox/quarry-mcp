@@ -607,14 +607,14 @@ async def _run_sync_task(ctx: _QuarryContext, state: SyncTaskState) -> None:
             }
             for collection, res in results.items()
         }
-    except Exception as exc:
-        logger.exception("Background sync failed")
-        state.status = "failed"
-        state.error = str(exc)
     except asyncio.CancelledError:
         state.status = "failed"
         state.error = "task was cancelled"
         raise
+    except Exception as exc:
+        logger.exception("Background sync failed")
+        state.status = "failed"
+        state.error = str(exc)
     finally:
         # Belt-and-suspenders: if a future code path exits the try
         # without setting a terminal status, mark it failed.

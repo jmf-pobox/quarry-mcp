@@ -394,6 +394,9 @@ def _refresh_files(
     skipped so the old registry row stays and the next sync detects the
     mtime mismatch again.
 
+    Registry rows are written with ``commit=False`` — the caller
+    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds.
+
     Returns ``(refreshed, failed, errors)`` matching the pattern used
     by ``_ingest_files`` and ``_delete_documents``.
     """
@@ -419,7 +422,7 @@ def _refresh_files(
                     ingested_at=datetime.now(UTC).isoformat(),
                     content_hash=current_hash,
                 ),
-                commit=True,
+                commit=False,
             )
             refreshed += 1
             progress(f"[{collection}] Refreshed {document_name}")
@@ -437,7 +440,11 @@ def _delete_documents(
     conn: sqlite3.Connection,
     progress: Callable[[str], None],
 ) -> tuple[int, int, list[str]]:
-    """Delete documents from a sync plan, returning (deleted, failed, errors)."""
+    """Delete documents from a sync plan, returning (deleted, failed, errors).
+
+    Registry rows are deleted with ``commit=False`` — the caller
+    (``sync_collection``) commits after ``batch_insert_chunks`` succeeds.
+    """
     t_delete_start = time.perf_counter()
     # Pre-build lookup for O(1) path resolution during deletes
     files_by_document_name: dict[str, list[FileRecord]] = {}
@@ -451,7 +458,7 @@ def _delete_documents(
         try:
             delete_document(db, document_name, collection=collection)
             for rec in files_by_document_name.get(document_name, []):
-                delete_file(conn, rec.path, commit=True)
+                delete_file(conn, rec.path, commit=False)
             deleted += 1
             progress(f"[{collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:

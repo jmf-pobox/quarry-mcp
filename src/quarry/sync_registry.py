@@ -130,8 +130,8 @@ def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
     """Return True if *ancestor* is a strict ancestor of *descendant*.
 
     Both paths should be resolved (absolute, no symlinks).  Uses
-    ``Path.is_relative_to`` (stdlib since 3.9) for the containment
-    check and requires strict inequality (same path is not an ancestor).
+    ``Path.relative_to()`` in a try/except for the containment check
+    and requires strict inequality (same path is not an ancestor).
     """
     if ancestor == descendant:
         return False
