@@ -1479,7 +1479,7 @@ def prepare_document(
     if not pages:
         return None
 
-    source_format = suffix if suffix != ".pdf" else ".pdf"
+    source_format = suffix
     chunks = chunk_pages(
         pages,
         max_chars=settings.chunk_max_chars,
