@@ -315,6 +315,9 @@ def _ingest_files(
         # Delete existing chunks for overwrite semantics.
         delete_document(db, document_name, collection=collection)
         # Chunk + embed without writing to LanceDB.
+        # Agent memory params (agent_handle, memory_type, summary) are not
+        # passed — directory sync does not support per-document memory tagging.
+        # See DES-018 for the agent memory design.
         prepared = prepare_document(
             fp,
             settings,
@@ -358,8 +361,12 @@ def _ingest_files(
                 )
                 if prepared is not None:
                     chunk_batch.append(prepared)
-                ingested += 1
-                progress(f"[{collection}] Ingested {document_name} in {elapsed:.2f}s")
+                    ingested += 1
+                    progress(
+                        f"[{collection}] Ingested {document_name} in {elapsed:.2f}s"
+                    )
+                else:
+                    progress(f"[{collection}] No chunks from {document_name}")
             except _RECOVERABLE as exc:
                 failed += 1
                 errors.append(f"{document_name}: {exc}")

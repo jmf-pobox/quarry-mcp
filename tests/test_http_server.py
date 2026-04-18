@@ -1251,8 +1251,13 @@ class TestSync:
         assert "too large" in resp.json()["error"].lower()
 
     def test_concurrent_sync_returns_409(self, tmp_path: Path) -> None:
-        """Fix 1: Second POST while sync is running returns 409 with task_id."""
-        import time
+        """Fix 1: Second POST while sync is running returns 409 with task_id.
+
+        TestClient may cancel background asyncio tasks between requests,
+        so we set the sync_task state directly to simulate a running sync
+        rather than relying on background task survival.
+        """
+        from quarry.http_server import SyncTaskState
 
         settings = _mock_settings(tmp_path)
         ctx = _QuarryContext(settings)
@@ -1261,21 +1266,14 @@ class TestSync:
         app = build_app(ctx)
         sync_client = TestClient(app, raise_server_exceptions=False)
 
-        def slow_sync(*_args: object, **_kw: object) -> dict[str, object]:
-            time.sleep(1)
-            return {}
+        # Simulate an in-progress sync task.
+        task_id = "sync-test123"
+        ctx.sync_task = SyncTaskState(task_id=task_id, status="running")
 
-        with patch("quarry.sync.sync_all", side_effect=slow_sync):
-            # First request starts sync.
-            resp1 = sync_client.post("/sync", json={})
-            assert resp1.status_code == 202
-            task_id = resp1.json()["task_id"]
-
-            # Second request while sync is running.
-            resp2 = sync_client.post("/sync", json={})
-            assert resp2.status_code == 409
-            assert resp2.json()["task_id"] == task_id
-            assert "already in progress" in resp2.json()["error"].lower()
+        resp = sync_client.post("/sync", json={})
+        assert resp.status_code == 409
+        assert resp.json()["task_id"] == task_id
+        assert "already in progress" in resp.json()["error"].lower()
 
     def test_sync_status_not_found(self, client: TestClient) -> None:
         """GET /sync/<task_id> returns 404 for unknown task."""

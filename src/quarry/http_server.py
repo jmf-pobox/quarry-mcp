@@ -257,6 +257,7 @@ class _QuarryContext:
         self.start_time = time.monotonic()
         # Fix 1 + Fix 5: track the current sync task for concurrency control.
         self.sync_task: SyncTaskState | None = None
+        self.sync_task_ref: asyncio.Task[None] | None = None
 
     @cached_property
     def db(self) -> LanceDB:
@@ -588,6 +589,40 @@ async def _ingest_route(request: Request) -> JSONResponse:
     return JSONResponse(dict(result))
 
 
+async def _run_sync_task(ctx: _QuarryContext, state: SyncTaskState) -> None:
+    """Execute sync_all in a background thread and update *state*."""
+    from quarry.sync import sync_all  # noqa: PLC0415
+
+    try:
+        results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
+        state.status = "completed"
+        state.results = {
+            collection: {
+                "ingested": res.ingested,
+                "refreshed": res.refreshed,
+                "deleted": res.deleted,
+                "skipped": res.skipped,
+                "failed": res.failed,
+                "errors": list(res.errors),
+            }
+            for collection, res in results.items()
+        }
+    except Exception as exc:
+        logger.exception("Background sync failed")
+        state.status = "failed"
+        state.error = str(exc)
+    except asyncio.CancelledError:
+        state.status = "failed"
+        state.error = "task was cancelled"
+        raise
+    finally:
+        # Belt-and-suspenders: if a future code path exits the try
+        # without setting a terminal status, mark it failed.
+        if state.status == "running":
+            state.status = "failed"
+            state.error = "task exited without setting terminal status"
+
+
 async def _sync_route(request: Request) -> JSONResponse:
     """Accept a sync request and run ``sync_all`` as a background task.
 
@@ -634,30 +669,7 @@ async def _sync_route(request: Request) -> JSONResponse:
     task_id = f"sync-{uuid.uuid4().hex[:12]}"
     state = SyncTaskState(task_id=task_id)
     ctx.sync_task = state
-
-    async def _run_sync() -> None:
-        from quarry.sync import sync_all  # noqa: PLC0415
-
-        try:
-            results = await run_in_threadpool(sync_all, ctx.db, ctx.settings)
-            state.status = "completed"
-            state.results = {
-                collection: {
-                    "ingested": res.ingested,
-                    "refreshed": res.refreshed,
-                    "deleted": res.deleted,
-                    "skipped": res.skipped,
-                    "failed": res.failed,
-                    "errors": list(res.errors),
-                }
-                for collection, res in results.items()
-            }
-        except Exception as exc:
-            logger.exception("Background sync failed")
-            state.status = "failed"
-            state.error = str(exc)
-
-    asyncio.create_task(_run_sync())  # noqa: RUF006
+    ctx.sync_task_ref = asyncio.create_task(_run_sync_task(ctx, state))
 
     return JSONResponse(
         {"task_id": task_id, "status": "accepted"},

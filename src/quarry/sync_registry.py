@@ -75,7 +75,7 @@ def register_directory(
     # --- Subsumption check ---
     existing_regs = list_registrations(conn)
     for reg in existing_regs:
-        reg_path = Path(reg.directory)
+        reg_path = Path(reg.directory).resolve()
         if _is_ancestor_of(reg_path, resolved):
             msg = (
                 f"directory already covered by parent registration "
@@ -85,7 +85,7 @@ def register_directory(
     # Deregister children that the new parent subsumes.
     subsumed: list[str] = []
     for reg in existing_regs:
-        reg_path = Path(reg.directory)
+        reg_path = Path(reg.directory).resolve()
         if _is_ancestor_of(resolved, reg_path):
             subsumed.append(reg.collection)
     for child_collection in subsumed:
