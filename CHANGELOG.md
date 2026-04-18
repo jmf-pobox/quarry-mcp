@@ -14,6 +14,23 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **index**: compaction death spiral from unguarded concurrent sync.
+  The serve process accumulated 133K LanceDB fragments (83 GB) and
+  burned 13 CPU cores for 5 days. Five fixes: server-side sync lock
+  (409 on concurrent POST /sync), registration subsumption (parent
+  deregisters children), batched LanceDB writes (single table.add per
+  collection sync), optimize_table guard (skip above 10K fragments),
+  async sync endpoint (202 + task_id, fire-and-forget CLI).
+
+### Added
+
+- **tool**: `quarry optimize` CLI command with `--force` flag for
+  manual compaction of degraded databases.
+- **tool**: `GET /sync/{task_id}` HTTP endpoint for polling sync
+  status.
+
 ## [1.13.0] - 2026-04-12
 
 ### Added

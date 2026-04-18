@@ -521,3 +521,115 @@ The Claude Desktop check (`_check_claude_desktop_mcp`) already used this file-ba
 2. **Background the probe and report results asynchronously** — Rejected. Doctor checks are synchronous by design — the output is a pass/fail table. An async probe that reports "pending" defeats the purpose.
 3. **Skip the check when running under a Claude Code parent process** — Rejected. Detection is fragile (check `CLAUDE_SESSION_ID` env var?) and doesn't help when running `quarry doctor` from a plain terminal.
 4. **Read the MCP config that `claude mcp add` writes to** — Considered as an alternative data source. `_configure_claude_code()` writes via `claude mcp add`, which uses a different store than the plugin registry. In practice both stores have the quarry entry because quarry is always installed as a plugin. Noted as a known limitation in a code comment.
+
+---
+
+## DES-025: Agent Tool Access — disallowedTools vs tools
+
+**Date:** 2026-04-12
+**Status:** SETTLED
+**Topic:** How to grant sub-agents MCP tool access in agent definitions
+
+### Design
+
+Agent definitions in `.claude/agents/*.md` use `disallowedTools` (denylist) instead of `tools` (allowlist) when the agent needs access to MCP tools. Claude Code sub-agents inherit all tools from the main session by default, including MCP tools. The `tools` field is an allowlist — specifying it restricts the agent to exactly those tools and nothing else. Since MCP tool names are dynamic (e.g., `mcp__plugin_quarry_quarry__find`) and vary across projects and sessions, an allowlist cannot enumerate them portably.
+
+**Prior pattern (all existing agents):**
+
+```yaml
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+```
+
+This gives the agent 6 tools. All MCP tools are excluded. The agent cannot call `mcp__plugin_quarry_quarry__find`, `mcp__plugin_biff_tty__write`, or any other MCP tool.
+
+**New pattern (agents that need MCP access):**
+
+```yaml
+disallowedTools:
+  - Write
+  - Edit
+```
+
+This gives the agent everything the main session has — all internal tools plus all MCP tools — except Write and Edit. The agent can call quarry MCP tools, biff MCP tools, etc.
+
+### Why This Design
+
+The QA agent (`qae`) needs to run smoke tests that exercise quarry's MCP tools (`find`, `remember`, `ingest`, `delete`, `status`, `list`, `show`, `use`). With the `tools` allowlist, these are excluded. With `disallowedTools`, they're inherited. The QA agent is restricted from Write and Edit because smoke tests should be read-only — test data is created via CLI (`quarry remember`) and MCP tools, not by writing files.
+
+This pattern applies to any agent that needs to interact with MCP servers: QA agents testing MCP tools, agents that need to search quarry, agents that need to send biff messages, agents that need to display via lux.
+
+### When to Use Which
+
+| Pattern | When |
+|---------|------|
+| `tools: [Read, Write, Edit, Bash, Grep, Glob]` | Agent only needs file operations and shell. Most implementation agents (rmh, bwk, adb, etc.). |
+| `disallowedTools: [Write, Edit]` | Agent needs MCP tools but shouldn't modify files. QA agents, research agents. |
+| `disallowedTools: []` (or omit both fields) | Agent needs full access to everything. Use sparingly. |
+| `tools: [Read, Grep, Glob, Bash]` + specific MCP tools | Agent needs a specific subset. Fragile — MCP tool names change across projects. |
+
+### Alternatives Considered
+
+1. **Add MCP tool names to the allowlist** — Rejected. MCP tool names include plugin and server prefixes (`mcp__plugin_quarry_quarry__find`) that are project-specific. An allowlist that works in quarry won't work in biff or lux. Not portable.
+2. **Use wildcard patterns in tools** — Not supported. The `tools` field takes exact tool names only.
+3. **Give all agents full access** — Rejected. Implementation agents should not have MCP tool access by default. A sub-agent that accidentally calls `mcp__plugin_quarry_quarry__delete` during a code fix is a data loss risk. Least privilege applies.
+
+## DES-026: Sync Concurrency Control and Batch Writes
+
+**Date:** 2026-04-18
+**Status:** SETTLED
+**Topic:** Preventing LanceDB compaction death spiral from concurrent sync
+
+### Problem
+
+The quarry serve process accumulated 133K LanceDB fragments (83 GB)
+and burned 13 CPU cores sustained for 5 days. Root cause: every
+SessionStart hook spawns `quarry sync`, which routes through the
+HTTP `/sync` endpoint to run `sync_all()` inside the serve process.
+No concurrency guard existed, so multiple syncs ran simultaneously.
+Each sync creates 2 LanceDB transactions per document (delete + add),
+each creating a new fragment. Compaction (`optimize_table()`) could
+not keep up, creating a self-reinforcing death spiral.
+
+### Design
+
+Five changes:
+
+1. **Server-side sync lock** — `SyncTaskState` on `_QuarryContext`
+   tracks whether a sync is running. `POST /sync` returns 409 when
+   one is already in progress. Simpler than `asyncio.Lock` because
+   the state check is synchronous in the async handler.
+
+2. **Registration subsumption** — `register_directory()` enforces
+   that parent directories subsume children (deregisters them) and
+   child directories are rejected when a parent is already registered.
+   Prevents duplicate scanning.
+
+3. **Batch LanceDB writes** — `prepare_document()` chunks and embeds
+   without writing to LanceDB. `sync_collection()` accumulates all
+   chunks and does a single `batch_insert_chunks()` at the end.
+   Reduces N write transactions to 1 per collection sync. Deletes
+   remain per-document (required for overwrite semantics).
+
+4. **optimize_table() guard** — Skips when fragment count exceeds
+   10,000 to prevent the death spiral. `quarry optimize --force`
+   CLI command for manual recovery.
+
+5. **Async sync endpoint** — `POST /sync` returns 202 with task_id.
+   `sync_all()` runs as a background `asyncio.Task`. `GET /sync/{task_id}`
+   returns status. CLI becomes fire-and-forget.
+
+### Alternatives Considered
+
+1. **Queue concurrent sync requests** — Rejected. Queuing hides the
+   problem. The caller should know sync is already running.
+2. **Batch deletes via IN clause** — Rejected. LanceDB's delete
+   predicate may not handle large IN clauses efficiently.
+3. **Partial compaction** — LanceDB 0.30 does not support it.
+4. **WebSocket streaming of sync progress** — Over-engineered for a
+   background batch operation. Polling is sufficient.
