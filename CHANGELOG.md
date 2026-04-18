@@ -14,6 +14,33 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **tool**: `--verbose` / `-v` now streams INFO-level diagnostic logs
+  to stderr (sync plans, embedding throughput, batch timing). Was a
+  no-op previously.
+- **tool**: `--quiet` / `-q` suppresses all stderr output (progress,
+  warnings, INFO logs). Fatal errors still shown.
+- **infra**: `QUARRY_LOG_LEVEL` env var overrides the flag-derived
+  stderr level. Third-party loggers (lancedb, onnxruntime, httpx)
+  pinned at WARNING.
+- **tool**: `quarry remember` now shows a progress spinner in local
+  mode.
+- **test**: 14 JSON equivalence tests covering local/remote shape
+  divergence for all fire-and-forget commands (Class 3 pattern).
+- **test**: 57 edge-case tests for CLI flag combinations, pipe safety,
+  progress on stderr, fatal errors under --quiet.
+
+### Fixed
+
+- **tool**: Progress bar wrote to stdout, polluting pipes. Moved to
+  stderr via `err_console`.
+- **tool**: `uninstall` command wrote result to stdout via `console`
+  instead of `_emit`.
+- **tool**: `login` abort message used bare `print()` to stdout.
+- **tool**: `status` command missing `embedding_dimension` in local
+  JSON output (present in remote).
+
 ### Fixed
 
 - **infra**: Aggressive jemalloc tuning for daemon memory. MALLOC_CONF
