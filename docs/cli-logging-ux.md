@@ -53,6 +53,7 @@ The CLI uses three output mechanisms:
 ### 1.3 Module-by-Module Audit
 
 #### `__main__.py`
+
 - **Path**: `src/quarry/__main__.py`
 - **Log calls**: 2 (1 INFO in `sync_cmd`, 1 exception in `_cli_errors`)
 - **Audience**: INFO is internal (worker count decision); exception is internal
@@ -71,6 +72,7 @@ The CLI uses three output mechanisms:
     without a `--quiet` guard
 
 #### `sync.py`
+
 - **Path**: `src/quarry/sync.py`
 - **Log calls**: 18 (14 INFO, 2 WARNING, 2 exception)
 - **Audience**: All internal/diagnostic. The INFO messages are the best
@@ -81,6 +83,7 @@ The CLI uses three output mechanisms:
   that progress bar is on stdout.
 
 #### `pipeline.py`
+
 - **Path**: `src/quarry/pipeline.py`
 - **Log calls**: 12 (10 INFO, 2 WARNING via `_make_progress`)
 - **Audience**: Mixed. `_make_progress` logs at INFO and calls the
@@ -91,6 +94,7 @@ The CLI uses three output mechanisms:
   stdout Rich bar.
 
 #### `database.py`
+
 - **Path**: `src/quarry/database.py`
 - **Log calls**: 18 (10 INFO, 5 DEBUG, 3 WARNING)
 - **Audience**: All internal. INSERT/DELETE/SEARCH counts, schema
@@ -99,24 +103,28 @@ The CLI uses three output mechanisms:
   INFO and only hit stderr at WARNING+ (migration failures, FTS failures).
 
 #### `http_server.py`
+
 - **Path**: `src/quarry/http_server.py`
 - **Log calls**: 18 (10 INFO, 3 WARNING, 2 ERROR, 2 exception, 1 DEBUG)
 - **Audience**: All internal/server diagnostic.
 - **Issues**: None for CLI local mode. Server logging is separate.
 
 #### `mcp_server.py`
+
 - **Path**: `src/quarry/mcp_server.py`
 - **Log calls**: 1 (exception in `_handle_errors`)
 - **Audience**: Internal.
 - **Issues**: None.
 
 #### `sitemap.py`
+
 - **Path**: `src/quarry/sitemap.py`
 - **Log calls**: 4 (all INFO)
 - **Audience**: Internal (discovery counts, parse counts).
 - **Issues**: None.
 
 #### `embeddings.py`
+
 - **Path**: `src/quarry/embeddings.py`
 - **Log calls**: 9 (5 INFO, 3 DEBUG, 1 WARNING)
 - **Audience**: INFO (model load, embedding throughput) is diagnostic.
@@ -124,30 +132,35 @@ The CLI uses three output mechanisms:
 - **Issues**: None.
 
 #### `provider.py`
+
 - **Path**: `src/quarry/provider.py`
 - **Log calls**: 4 (3 INFO, 1 WARNING)
 - **Audience**: All internal (provider detection decisions).
 - **Issues**: None.
 
 #### `tls.py`
+
 - **Path**: `src/quarry/tls.py`
 - **Log calls**: 5 (4 INFO, 1 DEBUG)
 - **Audience**: Internal (cert generation, file writes).
 - **Issues**: None.
 
 #### `hooks.py`
+
 - **Path**: `src/quarry/hooks.py`
 - **Log calls**: 16 (5 INFO, 6 DEBUG, 3 WARNING, 2 ERROR)
 - **Audience**: Internal (hook lifecycle, background sync decisions).
 - **Issues**: None for CLI -- hooks are not user-facing.
 
 #### `_stdlib.py`
+
 - **Path**: `src/quarry/_stdlib.py`
 - **Log calls**: 2 (1 WARNING, 1 exception)
 - **Audience**: Internal.
 - **Issues**: None.
 
 #### `doctor.py`
+
 - **Path**: `src/quarry/doctor.py`
 - **Log calls**: 0 direct logger calls. Uses `print()` throughout.
 - **Audience**: User-facing (install/doctor output).
@@ -155,18 +168,21 @@ The CLI uses three output mechanisms:
   structured pass/fail output. Not affected by verbosity flags.
 
 #### `service.py`
+
 - **Path**: `src/quarry/service.py`
 - **Log calls**: 14 (10 INFO, 3 WARNING, 1 ERROR)
 - **Audience**: Internal (service registration, GPU runtime swap).
 - **Issues**: None.
 
 #### `proxy.py`
+
 - **Path**: `src/quarry/proxy.py`
 - **Log calls**: 3 (all INFO)
 - **Audience**: Internal (download progress, install path).
 - **Issues**: None.
 
 #### `ocr_local.py`
+
 - **Path**: `src/quarry/ocr_local.py`
 - **Log calls**: 3 (all INFO)
 - **Audience**: Internal (engine init, per-page OCR char counts).
@@ -174,6 +190,7 @@ The CLI uses three output mechanisms:
   and the count aids diagnosis.
 
 #### Other modules with logging
+
 - `html_processor.py`, `pdf_analyzer.py`, `presentation_processor.py`,
   `spreadsheet_processor.py`, `text_extractor.py`, `text_processor.py`,
   `code_processor.py`, `image_analyzer.py`: All declare
@@ -347,7 +364,7 @@ messages; generalize this to all commands.
 
 **Default (no flags):**
 
-```
+```text
 ⠋ [quarry] 3 to ingest, 0 to refresh, 1 to delete, 42 unchanged
 ```
 
@@ -356,7 +373,7 @@ and the task description. Each `progress_callback` call replaces the
 description in-place (the entire line redraws). The user sees a live
 status that cycles through:
 
-```
+```text
 ⠙ [quarry] Ingested src/main.py in 0.45s
 ⠹ [quarry] Ingested src/utils.py in 0.31s
 ⠸ [quarry] Ingested src/config.py in 0.28s
@@ -371,7 +388,7 @@ stdout.
 
 Same spinner, plus logger INFO lines interleaved on stderr:
 
-```
+```text
 2026-04-18 10:37:41 [INFO] quarry.sync: sync: [quarry] plan computed in 0.12s
 2026-04-18 10:37:41 [INFO] quarry.sync: [quarry] 3 to ingest, 0 to refresh, 1 to delete, 42 unchanged
 2026-04-18 10:37:42 [INFO] quarry.pipeline: pipeline: chunked 5 pages -> 12 chunks in 0.08s
@@ -395,7 +412,7 @@ No progress on stderr. Stdout has the JSON result.
 
 **Default:**
 
-```
+```text
 ⠋ Analyzing: report.pdf
 ⠙ Pages: 12 total, 10 text, 2 image
 ⠹ Extracting text from 10 pages
@@ -436,7 +453,7 @@ with complex sitemap structures.
 
 **Default:**
 
-```
+```text
 Fragment count: 247          ← stderr (err_console.print)
 Running optimization...      ← stderr (err_console.print)
 Optimization complete.       ← stdout (_emit)
@@ -532,6 +549,7 @@ embeddings.py visible on the terminal.
 with stderr output (warnings in `sync_cmd`, errors throughout) ignore it.
 
 **Fix**:
+
 1. Call `configure_logging(stderr_level="CRITICAL")` when `_quiet` is set.
 2. Extend `_progress` to yield `None` when `_quiet` is True (same
    pattern as `_json_output`).
@@ -551,6 +569,7 @@ re-entrant, but the initial call creates handlers that are then replaced.
 
 **Fix**: Move `configure_logging` into `main_callback` after flag
 parsing. Determine `stderr_level` from the flags:
+
 - `--verbose`: `"INFO"`
 - `--quiet`: `"CRITICAL"`
 - default: `"WARNING"`
@@ -691,7 +710,7 @@ plans, counts)."
 The remediations have dependency relationships. Apply them in this order
 to avoid intermediate broken states:
 
-```
+```text
 Phase 1 (foundation — atomic, apply together):
   §6.4  Move configure_logging into main_callback
   §6.1  Progress bar to stderr     ──┐
@@ -886,7 +905,7 @@ All three properties are compliant with the org logging standard.
 
 **Methodology**: Searched all logger calls for PII-adjacent terms:
 
-```
+```text
 rg -i 'logger\.\w+.*(password|token|secret|api.?key|credential|ssn|email|phone)' src/quarry/
 → 0 matches
 

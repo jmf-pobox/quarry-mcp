@@ -8,7 +8,7 @@ line numbers (as of commit `324841d`), and test cases.
 
 ## Dependency Graph
 
-```
+```text
 Phase 1a: configure_logging move (6.4)
     |
     v
@@ -212,6 +212,7 @@ def _progress(
 ```
 
 Changes:
+
 1. `if _json_output:` becomes `if _json_output or _quiet:` (6.3 quiet suppression)
 2. `Progress(console=console)` becomes `Progress(console=err_console)` (6.1 stderr)
 3. Docstring updated to reflect both suppression conditions
@@ -734,6 +735,7 @@ Asserts: the `--workers` warning is suppressed with `--quiet`.
 ```
 
 The only changes:
+
 1. Wrap `ingest_content` call in `with _progress("Remembering") as cb:`
 2. Add `progress_callback=cb` keyword argument
 
@@ -926,6 +928,7 @@ def configure_logging(*, stderr_level: str = "WARNING") -> None:
 ```
 
 Changes:
+
 1. Add `import os` to logging_config.py imports.
 2. Read `QUARRY_LOG_LEVEL` env var and validate it is a valid logging level.
 3. Override `stderr_level` with env var when present.
