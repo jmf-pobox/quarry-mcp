@@ -31,6 +31,26 @@ across `transform`, `index`, and `connector`).
   single-writer-per-table invariant across the whole roster. Watching is on by
   default (`watch_enabled=true`); `watch_use_polling` selects watchdog's
   stat-walk fallback. New core dependency: `watchdog>=4.0`.
+- **index (watch lifecycle)**: DES-045a removal lifecycle, orphan sweep, and
+  keep-data re-adopt. Registering a directory that subsumes an existing narrower
+  registration now tears down the child's watch and purges its chunks before
+  installing the parent watch; a deregister or subsume purge shed under a full
+  queue is retried by the periodic safety-scan reconcile. A durable disk-derived
+  orphan sweep (`orphan = chunks ∖ (registered ∪ retained)`, computed from real
+  DB + registry state under one read transaction each reconcile) is the backstop
+  that survives a daemon restart. A new `retained_collections` marker records the
+  directory a `--keep-data` disable was taken from, so a *different* directory
+  reusing an archived collection's leaf name (`backend`, `docs`, …) can no longer
+  silently adopt its chunks — a cross-project search-merge that was previously
+  undetectable. Re-enabling the *same* directory re-adopts its kept collection
+  and auto-freshens it: the re-adopt reconciles stored documents against disk and
+  prunes files deleted while it was disabled (pruning keys on the authoritative
+  stored path and only on definite absence, so a nested/basename-stored doc or a
+  transiently-unreadable file is never wrongly deleted). The retained set is
+  surfaced on `GET /v1/registrations` for remote/local parity. The whole removal
+  lifecycle is modeled in Z (`docs/spec/watch_lifecycle.tex`) and ProB
+  model-checked (invariants I1–I8, 85k states) — the model and adversarial review
+  caught three data-safety defects before merge; see DES-045a.
 - **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
   daemon-first split is now enforced structurally, not by convention. A new
   import-linter contract (`.importlinter`, wired into `make check` via
