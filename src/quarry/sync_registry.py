@@ -250,18 +250,18 @@ class SyncRegistry:
             "DELETE FROM directories WHERE collection = ?",
             (collection,),
         )
-        if keep_data:
-            # Retained, not purged: record the keep marker and clear any stale
-            # pending-purge mark so the orphan sweep never deletes the kept chunks.
+        # A never-registered collection has no ``directories`` row: retain/purge
+        # nothing — a keep-data retain would write an empty-origin marker that
+        # ``_guard_retained_identity`` refuses for EVERY directory (wedging the name),
+        # and a no-row capture/memory/remember collection must never be marked.
+        # With a row: keep-data retains + clears any stale pending mark (sparing kept
+        # chunks); a plain deregister marks pending so a shed purge drains on reconcile.
+        if dir_row is None:
+            pass
+        elif keep_data:
             self._markers.mark_retained(collection, original_directory)
             self._markers.clear_pending(collection)
-        elif dir_row is not None:
-            # Mark for purge ONLY when a real directory row existed, IN THE SAME
-            # transaction as its removal: the sweep purges ONLY explicitly-marked
-            # collections, so a shed immediate purge is drained on a later
-            # reconcile, surviving a restart. Gating on ``dir_row`` at the marker
-            # itself means a capture/memory/remember collection — which has no
-            # directory row — can never be marked, independent of the caller.
+        else:
             self._markers.mark_pending(collection)
         self._conn.commit()
         return document_names

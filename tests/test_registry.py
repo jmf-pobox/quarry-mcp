@@ -656,3 +656,27 @@ class TestRetainedCollections:
             assert conn.markers.list_retained() == []
         finally:
             conn.close()
+
+    def test_deregister_never_registered_keep_data_does_not_wedge(
+        self, tmp_path: Path
+    ) -> None:
+        """keep-data deregister of a never-registered name writes no retained marker.
+
+        With no ``directories`` row there is no origin to tag, so retaining would
+        write an empty-origin marker that ``_guard_retained_identity`` refuses for
+        EVERY directory — wedging the name so no directory could ever register it.
+        The guard must key on a real row: keep-data of an unregistered name is a
+        no-op, and a later register of that name from ANY directory succeeds.
+        """
+        conn = SyncRegistry(tmp_path / "r.db")
+        project = tmp_path / "svc"
+        project.mkdir()
+        try:
+            conn.deregister_directory("svc", keep_data=True)
+            assert conn.markers.list_retained() == []  # no empty-origin marker
+            assert conn.markers.pending() == set()
+            # The name is not wedged: a fresh register from any directory succeeds.
+            registration, _ = conn.register_directory(project, "svc")
+            assert registration.collection == "svc"
+        finally:
+            conn.close()
