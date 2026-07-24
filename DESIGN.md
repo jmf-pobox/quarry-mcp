@@ -1923,4 +1923,69 @@ and re-submits any bulk scan the queue shed under load, so no registered
 directory is left unindexed and no timer-based periodic sync is needed. The
 reconcile runs synchronously on the loop between intervals (no interleave with
 register/deregister) and is the single backstop for both the new-database and
-shed-scan cases.
+shed-scan cases. (The reconcile's blocking reads — the chunk-table scan and the
+registry read — are offloaded to a threadpool; only the roster enumeration and
+the teardown/drain decisions stay on the loop thread, and removal actions run
+only on a fully-successful enumeration so a partial read never tears down a live
+watch.)
+
+### DES-045a: Removal lifecycle, orphan sweep, and retained-collection identity
+
+**Status:** Accepted (2026-07-24) · **Bead:** quarry-lxrk (follow-up) · **Formal
+model:** `docs/spec/watch_lifecycle.tex` (fuzz-clean, ProB-checked, I1–I7)
+
+The watch loop's *removal* half — deregister, subsumption, and orphan cleanup —
+proved to be the concurrency-critical part and was hardened under an explicit Z
+model rather than through review iteration. The state (`registered`, `watched`,
+`pending`, `chunks`, `retained`, and a per-collection `dir` identity map) carries
+seven invariants, all model-checked across the full reachable space:
+
+- **I1** `registered ∩ pending = ∅` — a live collection carries no deferred purge.
+- **I2** `chunks ∖ (registered ∪ retained) ⊆ pending` — every orphan is tracked
+  for purge. The model-check found the original code deferred a shed purge on the
+  *subsume* path but not the symmetric *deregister* path — a reachable untracked
+  orphan. Fixed by making both paths defer (`registration_lifecycle.py`).
+- **I3** `registered ⊆ watched` · **I4** reconcile preserves I3 · **I5**
+  `watched ∩ pending = ∅` (single writer per table).
+- **I6** the disk-derived orphan sweep deletes only `chunks ∖ (registered ∪
+  retained)`. The sweep is durable (derived from real DB + registry state each
+  reconcile, surviving a restart) and is the backstop for any shed purge. It reads
+  `registered` and `retained` under **one SQLite read transaction** (`BEGIN` …
+  `commit`) so a register/deregister committing between the two SELECTs is
+  invisible to both — without it, adversarial review reproduced a data-loss race
+  that swept an operator's kept chunks. The sweep read is fail-closed
+  (`except Exception` → log + skip the cycle; `# noqa: BLE001` operator-approved
+  for backstop liveness) so a transient DB error cannot kill the reconcile loop.
+- **I7** a retained collection's chunks are re-adopted **only by the directory
+  that archived them**. `retained_collections` records the `original_directory`;
+  `register_directory` clears the marker (adopts the chunks) iff the registering
+  directory matches, else refuses before any mutation. A legacy NULL origin
+  matches no directory and is refused (never-merge on unverifiable origin). This
+  closes a cross-project data-merge bug: an unrelated directory reusing an
+  archived collection's leaf name (`backend`, `docs`, …) would otherwise silently
+  inherit the first project's chunks. Client and daemon name-pickers avoid
+  archived names, and the retained set (with `original_directory`) is surfaced on
+  the HTTP `/registrations` endpoint for remote/local parity.
+
+**keep-data re-enable semantics — re-adopt + auto-freshen (operator ruling,
+2026-07-24).** When a directory disabled with `--keep-data` is re-enabled, the
+*same* directory re-adopts its archived collection (reusing the kept index) and
+the re-adopt triggers a full reconcile that prunes chunks for files deleted while
+it was disabled — so a resumed collection reflects current directory contents with
+no stale entries. A *different* directory can never adopt (I7); it gets a fresh
+distinct collection.
+
+**Rejected alternatives (re-enable).** *Fresh collection always* — re-enabling
+makes a new collection and the kept index becomes a permanent unused archive;
+rejected because it guts keep-data's pause-and-resume value. *Re-adopt without
+freshen* — reuses the kept index but leaves stale chunks for files deleted while
+disabled, so search returns entries for files that no longer exist; rejected as a
+silent correctness gap.
+
+**Method note.** The removal lifecycle is the project's first use of the
+model-first discipline for stateful-protocol work: model in Z, model-check the
+invariants (a violation is a design bug found before any test), and adversarially
+verify the data-deleting paths. The model-check caught the I2 deferral asymmetry;
+adversarial review caught the sweep's two-SELECT read-skew and the retained
+cross-project merge — three data-safety defects that review-by-iteration had not
+surfaced.
