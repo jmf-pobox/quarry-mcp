@@ -83,12 +83,14 @@ class CollectionResolver:
         def _available(name: str) -> bool:
             return self._conn.get_registration(name) is None and name not in retained
 
-        candidate = directory.name
-        if _available(candidate):
-            return candidate
+        # A filesystem-root directory has an empty ``.name``; fall back to "root"
+        # so a collection is never registered under an empty name.
+        leaf = directory.name or "root"
+        if _available(leaf):
+            return leaf
         parent = directory.parent.name or "root"
-        candidate = f"{directory.name}-{parent}"
+        candidate = f"{leaf}-{parent}"
         if _available(candidate):
             return candidate
         suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-        return f"{directory.name}-{suffix}"
+        return f"{leaf}-{suffix}"

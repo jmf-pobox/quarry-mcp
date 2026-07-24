@@ -527,6 +527,44 @@ class TestHandleSessionStart:
         assert ctx.startswith("Quarry semantic search is active")
 
 
+class TestSessionStartReadopt:
+    """Session-start re-adopts a cwd-owned keep-data archive end-to-end."""
+
+    def test_reenable_reuses_archived_collection_name(self, tmp_path: Path) -> None:
+        # backend was enabled then keep-data-disabled: its chunks are archived
+        # under the directory it was registered from. Re-opening a session in that
+        # same directory must re-adopt the "backend" collection (reusing its kept
+        # index), NOT mint a fresh disambiguated name.
+        project = tmp_path / "backend"
+        project.mkdir()
+
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "backend")
+        conn.deregister_directory("backend", keep_data=True)  # archive it
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background"),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert "backend" in str(output["additionalContext"])
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        retained = conn.list_retained()
+        conn.close()
+        assert [r.collection for r in regs] == ["backend"]  # re-adopted, not fresh
+        assert retained == []  # marker cleared by the re-adopt
+
+
 class TestHandlePostWebFetch:
     def test_no_url_returns_empty(self) -> None:
         result = handle_post_web_fetch({})

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from quarry.collection_resolver import CollectionResolver
 from quarry.sync_registry import SyncRegistry
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class TestUniqueCollectionName:
@@ -48,6 +45,26 @@ class TestUniqueCollectionName:
         name = CollectionResolver(conn).unique_collection_name(project)
         assert name.startswith("myproject-")
         assert len(name) == len("myproject-") + 8  # 8-char hash
+        conn.close()
+
+    def test_root_dir_falls_back_to_nonempty_leaf(self, tmp_path: Path) -> None:
+        # A filesystem-root directory has an empty .name; the collection must
+        # never be registered with an empty name — the leaf falls back to "root".
+        conn = SyncRegistry(tmp_path / "r.db")
+        assert CollectionResolver(conn).unique_collection_name(Path("/")) == "root"
+        conn.close()
+
+    def test_root_dir_collision_disambiguates_off_root_leaf(
+        self, tmp_path: Path
+    ) -> None:
+        # With "root" taken, the root dir disambiguates off the "root" leaf
+        # (never off an empty string).
+        conn = SyncRegistry(tmp_path / "r.db")
+        conn.register_directory(tmp_path, "root")
+
+        name = CollectionResolver(conn).unique_collection_name(Path("/"))
+        assert name.startswith("root-")
+        assert name != "root-"
         conn.close()
 
 
