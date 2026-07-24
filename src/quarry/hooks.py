@@ -46,19 +46,26 @@ def _unique_collection_name(
     conn: SyncRegistry,
     directory: Path,
 ) -> str:
-    """Derive a collection name that doesn't collide with existing ones.
+    """Derive a collection name that collides with no live OR archived collection.
 
-    Prefers ``directory.name``.  If that's taken (another directory with the
-    same leaf name), appends the parent directory name to disambiguate:
-    ``leaf-parent``.
+    Prefers ``directory.name``.  If that's taken — by a live registration or by a
+    keep-data ``retained`` marker — appends the parent directory name to
+    disambiguate (``leaf-parent``), then a path-hash suffix.  Avoiding archived
+    names keeps an unrelated directory from silently inheriting another project's
+    kept chunks (and from tripping ``register_directory``'s identity guard).
     """
+    retained = set(conn.list_retained())
+
+    def _available(name: str) -> bool:
+        return conn.get_registration(name) is None and name not in retained
+
     candidate = directory.name
-    if conn.get_registration(candidate) is None:
+    if _available(candidate):
         return candidate
     # Disambiguate with parent directory name.
     parent = directory.parent.name or "root"
     candidate = f"{directory.name}-{parent}"
-    if conn.get_registration(candidate) is None:
+    if _available(candidate):
         return candidate
     # Last resort: use the full resolved path hash suffix.
     suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]

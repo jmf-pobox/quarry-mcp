@@ -46,9 +46,13 @@ class RegistrationRoutes(RouteGroup):
     async def _list(self, request: Request) -> JSONResponse:  # noqa: ARG002
         settings = self.ctx.settings
         if not settings.registry_path.exists():
-            return JSONResponse({"total_registrations": 0, "registrations": []})
+            return JSONResponse(
+                {"total_registrations": 0, "registrations": [], "retained": []}
+            )
 
-        regs = await run_in_threadpool(self._list_sync, settings.registry_path)
+        regs, retained = await run_in_threadpool(
+            self._list_sync, settings.registry_path
+        )
         payload = [
             {
                 "collection": reg.collection,
@@ -57,8 +61,14 @@ class RegistrationRoutes(RouteGroup):
             }
             for reg in regs
         ]
+        # ``retained`` mirrors the local list_retained() so the client-side
+        # name-picker avoids archived collection names on the remote path too.
         return JSONResponse(
-            {"total_registrations": len(payload), "registrations": payload}
+            {
+                "total_registrations": len(payload),
+                "registrations": payload,
+                "retained": retained,
+            }
         )
 
     async def _add(self, request: Request) -> JSONResponse:
@@ -165,11 +175,18 @@ class RegistrationRoutes(RouteGroup):
         )
 
     @staticmethod
-    def _list_sync(registry_path: Path) -> list[DirectoryRegistration]:
-        """Open registry, list, close — all in one thread."""
+    def _list_sync(
+        registry_path: Path,
+    ) -> tuple[list[DirectoryRegistration], list[str]]:
+        """Open registry, read live registrations + retained names, close.
+
+        Returns both so the list response carries ``retained`` alongside the live
+        registrations — the remote name-picker must avoid archived names exactly
+        as the local one does (bug-class 3: remote/local parity).
+        """
         conn = SyncRegistry(registry_path)
         try:
-            return conn.list_registrations()
+            return conn.list_registrations(), conn.list_retained()
         finally:
             conn.close()
 

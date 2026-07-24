@@ -117,3 +117,30 @@ class TestUniqueCollectionName:
 
         expected_suffix = hashlib.sha256(str(project).encode()).hexdigest()[:8]
         assert view.unique_collection_name(project) == f"myproject-{expected_suffix}"
+
+    def test_avoids_archived_retained_name(self, tmp_path: Path) -> None:
+        # No LIVE registration named "backend", but it is archived (retained) by a
+        # prior keep-data disable. A new, unrelated "backend" directory must NOT
+        # re-use the archived name (which would inherit its chunks) — it
+        # disambiguates off the parent instead.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        view = Registrations([], retained=["backend"])
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_from_list_carries_retained(self, tmp_path: Path) -> None:
+        # from_list must thread the wire response's retained names into the picker
+        # so the remote path avoids archived names exactly as a local view does.
+        from quarry.api import RegistrationList
+
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        listing = RegistrationList(
+            total_registrations=0, registrations=[], retained=["backend"]
+        )
+        view = Registrations.from_list(listing)
+
+        assert view.unique_collection_name(project) == "backend-acme"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RegisterRequest(BaseModel):
@@ -30,7 +30,15 @@ class RegistrationInfo(BaseModel):
 
 
 class RegistrationList(BaseModel):
-    """The registration-list response envelope."""
+    """The registration-list response envelope.
+
+    ``retained`` names the collections whose chunks were kept on a keep-data
+    disable (archived, no live directory).  The name-picker must avoid them so a
+    new, unrelated directory never collides with an archived collection and
+    silently inherits its chunks.  Defaulted so a response from an older daemon
+    that omits the field still parses (wire-compat at the boundary).
+    """
 
     total_registrations: int
     registrations: list[RegistrationInfo]
+    retained: list[str] = Field(default_factory=list)

@@ -615,3 +615,29 @@ class TestRetainedCollections:
             assert conn.list_retained() == []  # marker cleared on re-register
         finally:
             conn.close()
+
+    def test_different_directory_cannot_adopt_retained_collection(self, tmp_path: Path):
+        """A DIFFERENT dir must not silently inherit an archived collection's chunks.
+
+        enable dir_a as "backend" → keep-data disable (chunks archived) → enable an
+        UNRELATED dir_b whose leaf name is also "backend".  The old code let dir_b
+        register "backend" and cleared the marker, so dir_b silently inherited
+        dir_a's kept chunks (both share one LanceDB collection).  The registry now
+        rejects a different directory re-using an archived name; the marker and the
+        archived chunks survive untouched.
+        """
+        conn = SyncRegistry(tmp_path / "r.db")
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        try:
+            conn.register_directory(dir_a, "backend")
+            conn.deregister_directory("backend", keep_data=True)
+            assert conn.list_retained() == ["backend"]
+            with pytest.raises(ValueError, match="archived"):
+                conn.register_directory(dir_b, "backend")
+            assert conn.list_retained() == ["backend"]  # marker intact
+            assert conn.get_registration("backend") is None  # dir_b did NOT adopt
+        finally:
+            conn.close()

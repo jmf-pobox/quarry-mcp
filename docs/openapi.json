@@ -284,13 +284,20 @@
         "type": "object"
       },
       "RegistrationList": {
-        "description": "The registration-list response envelope.",
+        "description": "The registration-list response envelope.\n\n``retained`` names the collections whose chunks were kept on a keep-data\ndisable (archived, no live directory).  The name-picker must avoid them so a\nnew, unrelated directory never collides with an archived collection and\nsilently inherits its chunks.  Defaulted so a response from an older daemon\nthat omits the field still parses (wire-compat at the boundary).",
         "properties": {
           "registrations": {
             "items": {
               "$ref": "#/components/schemas/RegistrationInfo"
             },
             "title": "Registrations",
+            "type": "array"
+          },
+          "retained": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retained",
             "type": "array"
           },
           "total_registrations": {

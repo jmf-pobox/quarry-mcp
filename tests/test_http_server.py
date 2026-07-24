@@ -2387,6 +2387,7 @@ class TestRegistrations:
         data = resp.json()
         assert data["total_registrations"] == 0
         assert data["registrations"] == []
+        assert data["retained"] == []
 
     def test_get_lists_registrations(self, client: TestClient) -> None:
         from quarry.sync_registry import DirectoryRegistration
@@ -2406,6 +2407,7 @@ class TestRegistrations:
             ),
         ):
             mock_registry.return_value.list_registrations.return_value = regs
+            mock_registry.return_value.list_retained.return_value = ["archived"]
             data = client.get("/v1/registrations").json()
 
         assert data["total_registrations"] == 1
@@ -2413,6 +2415,32 @@ class TestRegistrations:
         assert entry["collection"] == "math"
         assert entry["directory"] == "/home/u/math"
         assert entry["registered_at"] == "2026-01-01T00:00:00"
+        # retained archived names travel on the remote path too (bug-class 3).
+        assert data["retained"] == ["archived"]
+
+    def test_list_response_matches_local_contract(self, client: TestClient) -> None:
+        """The remote list JSON is a faithful RegistrationList (bug-class 3 parity).
+
+        The response the client parses locally and the JSON the daemon emits must
+        share the same field names — including ``retained`` — so the client-side
+        name-picker sees archived names identically on both paths.  Asserting the
+        exact key set catches a field added on one side but not the other.
+        """
+        from quarry.api import RegistrationList
+
+        with (
+            patch("quarry.daemon.routes.registrations.SyncRegistry") as mock_registry,
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            mock_registry.return_value.list_registrations.return_value = []
+            mock_registry.return_value.list_retained.return_value = ["kept"]
+            resp = client.get("/v1/registrations")
+
+        data = resp.json()
+        assert set(data) == set(RegistrationList.model_fields)
+        # The JSON round-trips into the shared contract with retained intact.
+        parsed = RegistrationList.model_validate(data)
+        assert parsed.retained == ["kept"]
 
     def test_post_registers_directory_returns_202(
         self,

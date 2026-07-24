@@ -15,24 +15,38 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from quarry.api import RegistrationInfo
+    from quarry.api import RegistrationInfo, RegistrationList
 
 
 @final
 class Registrations:
     """A read-only view over the daemon's registrations for coverage queries."""
 
-    __slots__ = ("_by_dir", "_names")
+    __slots__ = ("_by_dir", "_taken")
 
     # wire boundary — the daemon's registrations keyed by their absolute directory.
     _by_dir: dict[str, RegistrationInfo]
-    _names: frozenset[str]
+    # Collection names a new registration must avoid: live names PLUS archived
+    # (retained/keep-data) names, so an unrelated directory never re-uses an
+    # archived collection and silently inherits its chunks.
+    _taken: frozenset[str]
 
-    def __new__(cls, registrations: Sequence[RegistrationInfo]) -> Self:
+    def __new__(
+        cls,
+        registrations: Sequence[RegistrationInfo],
+        retained: Sequence[str] = (),
+    ) -> Self:
         self = super().__new__(cls)
         self._by_dir = {r.directory: r for r in registrations}
-        self._names = frozenset(r.collection for r in registrations)
+        self._taken = frozenset(r.collection for r in registrations) | frozenset(
+            retained
+        )
         return self
+
+    @classmethod
+    def from_list(cls, listing: RegistrationList) -> Self:
+        """Build a view from the daemon's list response, carrying retained names."""
+        return cls(listing.registrations, listing.retained)
 
     def covering(self, directory: Path) -> RegistrationInfo | None:
         """Return the registration covering *directory* (exact or a parent), else None.
@@ -59,17 +73,19 @@ class Registrations:
     def unique_collection_name(self, directory: Path) -> str:
         """Return a collection name for *directory* not colliding with an existing one.
 
-        Prefers the leaf name; disambiguates with the parent dir name, then a
-        path-hash suffix.  A filesystem-root directory has an empty ``.name``, so
-        the leaf falls back to ``"root"`` — a collection is never registered with
-        an empty name.
+        Avoids both live and archived (retained) names: a name kept by a prior
+        keep-data disable is off-limits, so an unrelated directory never adopts an
+        archived collection's chunks.  Prefers the leaf name; disambiguates with
+        the parent dir name, then a path-hash suffix.  A filesystem-root directory
+        has an empty ``.name``, so the leaf falls back to ``"root"`` — a collection
+        is never registered with an empty name.
         """
         leaf = directory.name or "root"
-        if leaf not in self._names:
+        if leaf not in self._taken:
             return leaf
         parent = directory.parent.name or "root"
         candidate = f"{leaf}-{parent}"
-        if candidate not in self._names:
+        if candidate not in self._taken:
             return candidate
         suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
         return f"{leaf}-{suffix}"

@@ -147,7 +147,7 @@ def enable_project(
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    view = Registrations(client.list_registrations().registrations)
+    view = Registrations.from_list(client.list_registrations())
     collection, created = _resolve_or_register(
         view, client, directory, collection_override
     )
@@ -212,7 +212,7 @@ def disable_project(
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd,
     # targeting (and deregistering) the wrong path.
     directory = directory.expanduser().resolve()
-    view = Registrations(client.list_registrations().registrations)
+    view = Registrations.from_list(client.list_registrations())
     covering = view.covering(directory)
 
     # Disabling a CHILD of a registered parent is a real error — the parent covers

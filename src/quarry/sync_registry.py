@@ -122,6 +122,8 @@ class SyncRegistry:
             msg = f"Directory not found: {resolved}"
             raise FileNotFoundError(msg)
 
+        # Guard BEFORE any mutation so a rejection leaves the registry untouched.
+        self._guard_retained_identity(resolved, collection)
         subsumed = self._enforce_subsumption(resolved)
 
         now = datetime.now(UTC).isoformat()
@@ -131,8 +133,9 @@ class SyncRegistry:
                 "VALUES (?, ?, ?)",
                 (str(resolved), collection, now),
             )
-            # A re-registered collection is live again — drop any retained marker
-            # so the orphan sweep stops treating its chunks as keep-data.
+            # The guard proved any surviving marker is this same directory's, so
+            # re-registering re-adopts its kept chunks: drop the marker to make the
+            # collection live again (the orphan sweep stops sparing it as keep-data).
             self._conn.execute(
                 "DELETE FROM retained_collections WHERE collection = ?",
                 (collection,),
@@ -169,6 +172,11 @@ class SyncRegistry:
             for reg in existing_regs
             if self._is_ancestor_of(resolved, Path(reg.directory).resolve())
         ]
+        self._evict_subsumed(subsumed)
+        return subsumed
+
+    def _evict_subsumed(self, subsumed: list[str]) -> None:
+        """Delete the files and directory rows of each collection a parent subsumes."""
         for child_collection in subsumed:
             self._conn.execute(
                 "DELETE FROM files WHERE collection = ?", (child_collection,)
@@ -176,7 +184,6 @@ class SyncRegistry:
             self._conn.execute(
                 "DELETE FROM directories WHERE collection = ?", (child_collection,)
             )
-        return subsumed
 
     def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
         """Translate an INSERT IntegrityError into a precise ValueError."""
@@ -200,10 +207,20 @@ class SyncRegistry:
         """Remove a directory registration and its file records.
 
         When *keep_data* is set, record the collection as retained IN THE SAME
-        transaction as the row removal, so a crash can never leave the chunks
-        looking like an orphan the sweep would delete.  Return the document_names
-        of files that were tracked, so the caller can clean them from LanceDB.
+        transaction as the row removal, tagged with the directory it was
+        registered under, so only that same directory may later re-adopt the kept
+        chunks (a different directory re-using the name is refused at register —
+        see :meth:`_guard_retained_identity`).  Return the document_names of files
+        that were tracked, so the caller can clean them from LanceDB.
         """
+        # Capture the directory BEFORE deleting its row: the retained marker's
+        # identity tag is what lets the same directory re-adopt and blocks a
+        # different one from silently merging into the archived chunks.
+        dir_row = self._conn.execute(
+            "SELECT directory FROM directories WHERE collection = ?",
+            (collection,),
+        ).fetchone()
+        original_directory = dir_row[0] if dir_row is not None else None
         rows = self._conn.execute(
             "SELECT DISTINCT document_name FROM files WHERE collection = ? "
             "ORDER BY document_name",
@@ -218,11 +235,38 @@ class SyncRegistry:
         if keep_data:
             self._conn.execute(
                 "INSERT OR REPLACE INTO retained_collections "
-                "(collection, retained_at) VALUES (?, ?)",
-                (collection, datetime.now(UTC).isoformat()),
+                "(collection, retained_at, original_directory) VALUES (?, ?, ?)",
+                (collection, datetime.now(UTC).isoformat(), original_directory),
             )
         self._conn.commit()
         return document_names
+
+    def _guard_retained_identity(self, resolved: Path, collection: str) -> None:
+        """Refuse re-using an archived collection name from a different directory.
+
+        A keep-data deregister archives a collection's chunks under a retained
+        marker tagged with its original directory.  Only that same directory may
+        re-register the name — re-adopting its own kept chunks.  A different
+        directory re-using the name would silently merge two projects' data into
+        one collection (the opposite of keep-data's promise), so it is refused.
+
+        A legacy marker with no recorded origin (``original_directory`` NULL,
+        written before the column existed) matches no directory and is refused for
+        every directory: without a verifiable origin the safe default is to never
+        merge.  Delete the archived collection, or choose another name, to proceed.
+        """
+        row = self._conn.execute(
+            "SELECT original_directory FROM retained_collections WHERE collection = ?",
+            (collection,),
+        ).fetchone()
+        if row is None or row[0] == str(resolved):
+            return
+        origin = row[0] if row[0] is not None else "an unknown directory"
+        msg = (
+            f"collection {collection!r} holds archived (keep-data) chunks from "
+            f"{origin}; choose a different name or delete that collection first"
+        )
+        raise ValueError(msg)
 
     def list_retained(self) -> list[str]:
         """Return the collections whose chunks were deliberately kept on deregister."""

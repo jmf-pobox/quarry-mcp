@@ -91,6 +91,59 @@ class TestT4EnableCollectionOverride:
         assert client.registered[0].collection == "custom"
 
 
+class TestKeepDataArchiveNoMerge:
+    """A keep-data archive is never silently inherited by an unrelated project."""
+
+    def test_unrelated_same_leaf_gets_distinct_collection(self, tmp_path: Path) -> None:
+        """enable dir_a "backend" → keep-data disable → enable an unrelated dir_b.
+
+        dir_b's leaf name is also "backend", but "backend" is archived (retained)
+        from dir_a's keep-data disable.  The name-picker must NOT hand dir_b the
+        archived "backend" (which would merge dir_a's kept chunks into dir_b's
+        collection) — it gets a distinct name, so the two projects never share a
+        collection.
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            assert client.registered[-1].collection == "backend"
+            disable_project(dir_a, client, keep_data=True)
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "backend-other"  # distinct, disambiguated
+        assert result.collection != "backend"  # NOT the archived collection
+        assert client.registered[-1].collection == "backend-other"  # no merge
+
+    def test_collection_override_onto_archive_is_rejected(self, tmp_path: Path) -> None:
+        """An explicit override re-using another dir's archived name is refused.
+
+        The name-picker steers a normal enable clear of archived names, but an
+        explicit ``--collection`` override could still aim at one.  The daemon's
+        registry (through the client) rejects it rather than merge — the safe
+        default.  ``FakeRegistryClient`` models the archive; the real reject lives
+        in ``SyncRegistry.register_directory`` (tested in test_registry).
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "svc"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            disable_project(dir_a, client, keep_data=True)
+            # dir_b explicitly forcing the archived "backend" name gets a distinct
+            # collection from the picker; the override path cannot silently merge.
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "svc"  # dir_b keeps its own identity
+
+
 class TestT5EnableCreatesConfig:
     def test_creates_config_file(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
