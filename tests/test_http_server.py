@@ -2848,9 +2848,16 @@ class TestRunPurgeTask:
 
     def test_purge_success_sets_completed_with_count(self, tmp_path: Path) -> None:
         from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
+        # A real (non-keep) deregister marks the collection pending; the purge
+        # re-checks that mark at execution time before deleting.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending("docs")
+        reg.commit()
+        reg.close()
         state = TaskState(task_id="deregister-x", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         # DES-045: the purge is a collection-wide delete routed through the queue.
@@ -2864,9 +2871,14 @@ class TestRunPurgeTask:
 
     def test_purge_failure_sets_failed(self, tmp_path: Path) -> None:
         from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending("docs")
+        reg.commit()
+        reg.close()
         state = TaskState(task_id="deregister-y", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         with patch(
