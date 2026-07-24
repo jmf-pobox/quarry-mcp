@@ -187,7 +187,7 @@ class TestUniqueCollectionName:
         try:
             conn.register_directory(owner, "backend")
             conn.deregister_directory("backend", keep_data=True)
-            markers = conn.retained_markers()
+            markers = conn.markers.retained_markers()
         finally:
             conn.close()
 

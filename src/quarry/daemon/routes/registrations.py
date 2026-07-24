@@ -18,10 +18,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.collection_marker_store import RetainedMarker
 from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
-from quarry.sync_registry import DirectoryRegistration, RetainedMarker, SyncRegistry
+from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 # The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
@@ -193,7 +194,7 @@ class RegistrationRoutes(RouteGroup):
         """
         conn = SyncRegistry(registry_path)
         try:
-            return conn.list_registrations(), conn.retained_markers()
+            return conn.list_registrations(), conn.markers.retained_markers()
         finally:
             conn.close()
 

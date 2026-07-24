@@ -586,9 +586,9 @@ class TestRetainedCollections:
         directory.mkdir()
         try:
             conn.register_directory(directory, "docs")
-            assert conn.list_retained() == []
+            assert conn.markers.list_retained() == []
             conn.deregister_directory("docs", keep_data=True)
-            assert conn.list_retained() == ["docs"]  # kept → retained, spared
+            assert conn.markers.list_retained() == ["docs"]  # kept → retained, spared
         finally:
             conn.close()
 
@@ -599,7 +599,7 @@ class TestRetainedCollections:
         try:
             conn.register_directory(directory, "docs")
             conn.deregister_directory("docs")  # keep_data defaults False
-            assert conn.list_retained() == []  # no marker → sweep may purge
+            assert conn.markers.list_retained() == []  # no marker → sweep may purge
         finally:
             conn.close()
 
@@ -610,9 +610,9 @@ class TestRetainedCollections:
         try:
             conn.register_directory(directory, "docs")
             conn.deregister_directory("docs", keep_data=True)
-            assert conn.list_retained() == ["docs"]
+            assert conn.markers.list_retained() == ["docs"]
             conn.register_directory(directory, "docs")  # live again
-            assert conn.list_retained() == []  # marker cleared on re-register
+            assert conn.markers.list_retained() == []  # marker cleared on re-register
         finally:
             conn.close()
 
@@ -634,10 +634,10 @@ class TestRetainedCollections:
         try:
             conn.register_directory(dir_a, "backend")
             conn.deregister_directory("backend", keep_data=True)
-            assert conn.list_retained() == ["backend"]
+            assert conn.markers.list_retained() == ["backend"]
             with pytest.raises(ValueError, match="archived"):
                 conn.register_directory(dir_b, "backend")
-            assert conn.list_retained() == ["backend"]  # marker intact
+            assert conn.markers.list_retained() == ["backend"]  # marker intact
             assert conn.get_registration("backend") is None  # dir_b did NOT adopt
         finally:
             conn.close()

@@ -559,7 +559,7 @@ class TestSessionStartReadopt:
 
         conn = SyncRegistry(settings.registry_path)
         regs = conn.list_registrations()
-        retained = conn.list_retained()
+        retained = conn.markers.list_retained()
         conn.close()
         assert [r.collection for r in regs] == ["backend"]  # re-adopted, not fresh
         assert retained == []  # marker cleared by the re-adopt

@@ -2390,7 +2390,8 @@ class TestRegistrations:
         assert data["retained"] == []
 
     def test_get_lists_registrations(self, client: TestClient) -> None:
-        from quarry.sync_registry import DirectoryRegistration, RetainedMarker
+        from quarry.collection_marker_store import RetainedMarker
+        from quarry.sync_registry import DirectoryRegistration
 
         regs = [
             DirectoryRegistration(
@@ -2407,7 +2408,7 @@ class TestRegistrations:
             ),
         ):
             mock_registry.return_value.list_registrations.return_value = regs
-            mock_registry.return_value.retained_markers.return_value = [
+            mock_registry.return_value.markers.retained_markers.return_value = [
                 RetainedMarker(collection="archived", original_directory="/home/u/arch")
             ]
             data = client.get("/v1/registrations").json()
@@ -2432,14 +2433,14 @@ class TestRegistrations:
         other.
         """
         from quarry.api import RegistrationList
-        from quarry.sync_registry import RetainedMarker
+        from quarry.collection_marker_store import RetainedMarker
 
         with (
             patch("quarry.daemon.routes.registrations.SyncRegistry") as mock_registry,
             patch("pathlib.Path.exists", return_value=True),
         ):
             mock_registry.return_value.list_registrations.return_value = []
-            mock_registry.return_value.retained_markers.return_value = [
+            mock_registry.return_value.markers.retained_markers.return_value = [
                 RetainedMarker(collection="kept", original_directory="/home/u/kept")
             ]
             resp = client.get("/v1/registrations")

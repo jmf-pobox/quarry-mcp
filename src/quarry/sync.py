@@ -11,8 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.config import Settings
-from quarry.db import ChunkCatalog, ChunkStore
+from quarry.db import ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
+from quarry.sync_delete_reconciler import DeleteReconciler
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
@@ -120,56 +121,6 @@ def compute_sync_plan(
         unchanged=unchanged,
         registry_tracked=bool(known_files),
     )
-
-
-def _stale_stored_documents(db: LanceDB, collection: str) -> list[str]:
-    """Return document_names for *collection* whose file is DEFINITELY gone.
-
-    The registry ``files`` rows are the delta's memory, but a keep-data disable
-    deletes them while the chunks live on. On re-adopt the registry is blank, so
-    ``compute_sync_plan`` alone cannot prune a file deleted while disabled. This
-    reconciles the ACTUAL stored documents against disk; in steady state it
-    matches the registry-derived set, so it only ever prunes genuine orphans.
-
-    Gate on the stored absolute ``document_path``, NOT ``resolved /
-    document_name``: ``document_name`` is only resolved-relative for sync-ingested
-    docs — the pipeline default and captures store the basename, so reconstructing
-    the path would mislocate a nested doc and prune it while live. Prune ONLY on
-    definite absence (``FileNotFoundError`` / ``NotADirectoryError``); anything
-    unprovable is KEPT (fail-safe) and retried next sync — one document's error
-    never aborts the scan.
-
-    A non-absolute ``document_path`` is unprovable and kept: a NULL Arrow value
-    stringifies to ``"None"`` (not ``""``) through ``list_documents``, and a
-    relative or blank path can't be resolved against a known root here, so
-    ``os.path.isabs`` is the gate — only an absolute path can be proven absent.
-    """
-    stale: list[str] = []
-    for doc in ChunkCatalog(db).list_documents(collection):
-        path = str(doc["document_path"])
-        if not Path(path).is_absolute():  # NULL→"None", blank, or relative → keep
-            continue
-        try:
-            os.lstat(path)  # succeeds → present
-        except (FileNotFoundError, NotADirectoryError):
-            stale.append(str(doc["document_name"]))  # definite absence → prune
-        except OSError:  # unreadable / IO error → cannot prove absence → keep
-            continue
-    return stale
-
-
-def _reconcile_deletes(plan: SyncPlan, db: LanceDB, collection: str) -> list[str]:
-    """Return the documents to delete this sync, order-stable and deduped.
-
-    When the registry tracks the collection's files, its delta
-    (``plan.to_delete``) already prunes deleted files, so no per-document lstat
-    scan is needed.  Only a re-adopt (registry blank, chunks present) needs the
-    LanceDB-vs-disk reconcile to prune files deleted while disabled.
-    """
-    if plan.registry_tracked:
-        return plan.to_delete
-    stale = _stale_stored_documents(db, collection)
-    return list(dict.fromkeys([*plan.to_delete, *stale]))
 
 
 @dataclass(frozen=True)
@@ -308,7 +259,9 @@ def sync_collection(
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
-    to_delete = _reconcile_deletes(plan, db, collection)
+    to_delete = DeleteReconciler(db, collection).to_delete(
+        plan.to_delete, registry_tracked=plan.registry_tracked
+    )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_refresh)} to refresh, "

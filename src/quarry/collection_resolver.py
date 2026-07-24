@@ -63,7 +63,7 @@ class CollectionResolver:
         return next(
             (
                 m.collection
-                for m in self._conn.retained_markers()
+                for m in self._conn.markers.retained_markers()
                 if m.original_directory == target
             ),
             None,
@@ -78,7 +78,7 @@ class CollectionResolver:
         an unrelated directory from silently inheriting another project's kept
         chunks (and from tripping ``register_directory``'s identity guard).
         """
-        retained = set(self._conn.list_retained())
+        retained = set(self._conn.markers.list_retained())
 
         def _available(name: str) -> bool:
             return self._conn.get_registration(name) is None and name not in retained

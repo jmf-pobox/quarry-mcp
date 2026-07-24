@@ -22,11 +22,7 @@ from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
-from quarry.sync import (
-    _stale_stored_documents,
-    compute_sync_plan,
-    sync_collection,
-)
+from quarry.sync import compute_sync_plan, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
@@ -970,99 +966,6 @@ class TestSyncCollectionProgressive:
         assert ChunkStore(db).count(collection_filter="col") == count_before
         assert _docnames(db) == {"a.txt"}
         conn.close()
-
-
-class TestStaleStoredDocuments:
-    """The auto-freshen prune keys on the authoritative absolute document_path.
-
-    ``document_name`` is only resolved-relative for sync-ingested docs; the
-    pipeline default and captures store the BASENAME. Reconstructing a path as
-    ``resolved / document_name`` therefore mislocates a nested doc and prunes a
-    live document. The prune must gate on the stored absolute ``document_path``
-    and remove a doc ONLY on definite absence, keeping it on any lookup error.
-    """
-
-    def _seed(
-        self, db: LanceDB, settings: Settings, file_path: Path, document_name: str
-    ) -> None:
-        """Store one document whose stored document_path is *file_path*.resolve()."""
-        chunks, _ = plan_file_chunks(
-            file_path, settings, collection="col", document_name=document_name
-        )
-        ChunkStore(db).insert(chunks, np.zeros((len(chunks), 768), dtype=np.float32))
-
-    def test_basename_docname_not_pruned_while_on_disk(self, tmp_path: Path):
-        """A nested doc stored under its BASENAME is not pruned (data-loss repro).
-
-        ``resolved / "report.txt"`` is absent for a file at ``resolved/sub/
-        report.txt``, so the old resolved-relative logic pruned this live doc.
-        Keying on document_path (the real absolute location) keeps it.
-        """
-        settings = _settings(tmp_path)
-        db = get_db(settings.lancedb_path)
-        nested = tmp_path / "docs" / "sub"
-        nested.mkdir(parents=True)
-        f = nested / "report.txt"
-        f.write_text(_SENTENCE * 3)
-        self._seed(db, settings, f, "report.txt")  # BASENAME, not "sub/report.txt"
-
-        assert _stale_stored_documents(db, "col") == []  # on disk → kept
-
-    def test_unreadable_parent_not_pruned_and_no_raise(self, tmp_path: Path):
-        """A doc under a chmod-0 parent is kept, and the scan does not raise.
-
-        A lookup that cannot prove absence (PermissionError / IO error) fails
-        SAFE: the document is kept and retried next sync, never pruned or raised.
-        """
-        settings = _settings(tmp_path)
-        db = get_db(settings.lancedb_path)
-        locked = tmp_path / "docs" / "locked"
-        locked.mkdir(parents=True)
-        f = locked / "secret.txt"
-        f.write_text(_SENTENCE * 3)
-        self._seed(db, settings, f, "secret.txt")
-        locked.chmod(0)
-        try:
-            stale = _stale_stored_documents(db, "col")  # must not raise
-        finally:
-            locked.chmod(0o700)
-        assert stale == []  # cannot prove absence → kept
-
-    def test_genuinely_absent_document_is_pruned(self, tmp_path: Path):
-        """A doc whose file was deleted is pruned (definite absence)."""
-        settings = _settings(tmp_path)
-        db = get_db(settings.lancedb_path)
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        f = docs / "gone.txt"
-        f.write_text(_SENTENCE * 3)
-        self._seed(db, settings, f, "gone.txt")
-        f.unlink()
-
-        assert _stale_stored_documents(db, "col") == ["gone.txt"]
-
-    def test_unprovable_document_paths_are_kept(self, tmp_path: Path):
-        """Only a provably-absent ABSOLUTE path is pruned; unprovable paths kept.
-
-        A NULL Arrow ``document_path`` stringifies to ``"None"`` (not ``""``)
-        through ``list_documents``; that, a blank, and a relative path are all
-        non-absolute and cannot be proven absent here, so they are kept
-        (fail-safe). Only the absolute path whose file is gone is pruned.
-        """
-        db = get_db(_settings(tmp_path).lancedb_path)
-        gone = tmp_path / "gone.txt"  # absolute, absent → prune
-        here = tmp_path / "here.txt"
-        here.write_text("x")  # absolute, present → keep
-        docs = [
-            {"document_name": "null-doc", "document_path": "None"},
-            {"document_name": "blank-doc", "document_path": ""},
-            {"document_name": "rel-doc", "document_path": "sub/rel.txt"},
-            {"document_name": "here-doc", "document_path": str(here)},
-            {"document_name": "gone-doc", "document_path": str(gone)},
-        ]
-        with patch.object(ChunkCatalog, "list_documents", return_value=docs):
-            stale = _stale_stored_documents(db, "col")
-        assert stale == ["gone-doc"]
 
 
 class TestWithinFileResume:

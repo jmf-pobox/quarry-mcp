@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
+from quarry.collection_marker_store import CollectionMarkerStore
 from quarry.sync_file_store import FileStore
 from quarry.sync_schema import SyncSchema
 
@@ -19,26 +20,21 @@ class DirectoryRegistration:
     registered_at: str
 
 
-@dataclass(frozen=True, slots=True)
-class RetainedMarker:
-    """An archived (keep-data) collection and the directory it was kept from."""
-
-    collection: str
-    original_directory: str
-
-
 class SyncRegistry:
-    """Manages the SQLite registry for directory registrations and retained state.
+    """Manages the SQLite registry for directory registrations and markers.
 
     Wraps a sqlite3.Connection and exposes the directory-registration operations
     (register, deregister, list, get) plus the low-level connection interface
-    (execute, commit, close) so callers can also run ad-hoc SQL. Per-file rows
-    live in a composed :class:`FileStore`, reachable via :attr:`files` and backed
-    by this same connection so its writes share the registry's transaction.
+    (execute, commit, close). Per-file rows live in a composed :class:`FileStore`
+    (:attr:`files`); the retained + pending-purge collection markers live in a
+    composed :class:`CollectionMarkerStore` (:attr:`markers`).  Both share this
+    connection, so a marker change and the directories-row change commit in one
+    transaction — atomic together.
     """
 
     _conn: sqlite3.Connection
     _files: FileStore
+    _markers: CollectionMarkerStore
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
@@ -53,12 +49,18 @@ class SyncRegistry:
             self._conn.close()
             raise
         self._files = FileStore(self._conn)
+        self._markers = CollectionMarkerStore(self._conn)
         return self
 
     @property
     def files(self) -> FileStore:
         """Return the per-file row store sharing this registry's connection."""
         return self._files
+
+    @property
+    def markers(self) -> CollectionMarkerStore:
+        """Return the retained + pending-purge marker store on this connection."""
+        return self._markers
 
     def _ensure_schema(self) -> None:
         """Set connection pragmas, create tables, and apply migrations."""
@@ -144,15 +146,10 @@ class SyncRegistry:
             # The guard proved any surviving marker is this same directory's, so
             # re-registering re-adopts its kept chunks: drop the retained marker to
             # make the collection live again, and drop any pending-purge marker so
-            # the orphan sweep cannot delete the now-live collection's chunks.
-            self._conn.execute(
-                "DELETE FROM retained_collections WHERE collection = ?",
-                (collection,),
-            )
-            self._conn.execute(
-                "DELETE FROM pending_purge_collections WHERE collection = ?",
-                (collection,),
-            )
+            # the orphan sweep cannot delete the now-live collection's chunks. Both
+            # execute on this connection, committing with the INSERT above.
+            self._markers.clear_retained(collection)
+            self._markers.clear_pending(collection)
         except sqlite3.IntegrityError:
             self._raise_for_integrity(resolved, collection)
         except sqlite3.Error:
@@ -195,7 +192,6 @@ class SyncRegistry:
         it in the same transaction — the orphan sweep drains the delete even if
         the caller's immediate purge is shed or the daemon restarts first.
         """
-        now = datetime.now(UTC).isoformat()
         for child_collection in subsumed:
             self._conn.execute(
                 "DELETE FROM files WHERE collection = ?", (child_collection,)
@@ -203,11 +199,7 @@ class SyncRegistry:
             self._conn.execute(
                 "DELETE FROM directories WHERE collection = ?", (child_collection,)
             )
-            self._conn.execute(
-                "INSERT OR REPLACE INTO pending_purge_collections "
-                "(collection, marked_at) VALUES (?, ?)",
-                (child_collection, now),
-            )
+            self._markers.mark_pending(child_collection)
 
     def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
         """Translate an INSERT IntegrityError into a precise ValueError."""
@@ -251,7 +243,6 @@ class SyncRegistry:
             (collection,),
         ).fetchall()
         document_names = [r[0] for r in rows]
-        now = datetime.now(UTC).isoformat()
         self._conn.execute("DELETE FROM files WHERE collection = ?", (collection,))
         self._conn.execute(
             "DELETE FROM directories WHERE collection = ?",
@@ -260,25 +251,14 @@ class SyncRegistry:
         if keep_data:
             # Retained, not purged: record the keep marker and clear any stale
             # pending-purge mark so the orphan sweep never deletes the kept chunks.
-            self._conn.execute(
-                "INSERT OR REPLACE INTO retained_collections "
-                "(collection, retained_at, original_directory) VALUES (?, ?, ?)",
-                (collection, now, original_directory),
-            )
-            self._conn.execute(
-                "DELETE FROM pending_purge_collections WHERE collection = ?",
-                (collection,),
-            )
+            self._markers.mark_retained(collection, original_directory)
+            self._markers.clear_pending(collection)
         else:
             # Mark for purge IN THE SAME transaction as the row removal: the sweep
             # purges ONLY explicitly-marked collections, so a shed immediate purge
             # is drained on a later reconcile, surviving a restart (the closed-set
             # backstop that keeps captures/memories/remember targets unreachable).
-            self._conn.execute(
-                "INSERT OR REPLACE INTO pending_purge_collections "
-                "(collection, marked_at) VALUES (?, ?)",
-                (collection, now),
-            )
+            self._markers.mark_pending(collection)
         self._conn.commit()
         return document_names
 
@@ -296,61 +276,15 @@ class SyncRegistry:
         every directory: without a verifiable origin the safe default is to never
         merge.  Delete the archived collection, or choose another name, to proceed.
         """
-        row = self._conn.execute(
-            "SELECT original_directory FROM retained_collections WHERE collection = ?",
-            (collection,),
-        ).fetchone()
-        if row is None or row[0] == str(resolved):
+        marker = self._markers.retained_marker(collection)
+        if marker is None or marker.original_directory == str(resolved):
             return
-        origin = row[0] if row[0] is not None else "an unknown directory"
+        origin = marker.original_directory or "an unknown directory"
         msg = (
             f"collection {collection!r} holds archived (keep-data) chunks from "
             f"{origin}; choose a different name or delete that collection first"
         )
         raise ValueError(msg)
-
-    def list_retained(self) -> list[str]:
-        """Return the collections whose chunks were deliberately kept on deregister."""
-        rows = self._conn.execute(
-            "SELECT collection FROM retained_collections ORDER BY collection"
-        ).fetchall()
-        return [r[0] for r in rows]
-
-    def retained_markers(self) -> list[RetainedMarker]:
-        """Return each archived collection with the directory it was kept from.
-
-        A NULL ``original_directory`` (legacy marker) becomes the empty string,
-        which matches no resolved directory — so a legacy archive is avoided by
-        the name-picker but never re-adopted.
-        """
-        rows = self._conn.execute(
-            "SELECT collection, original_directory FROM retained_collections "
-            "ORDER BY collection"
-        ).fetchall()
-        return [
-            RetainedMarker(collection=r[0], original_directory=r[1] or "") for r in rows
-        ]
-
-    def pending_purge_markers(self) -> set[str]:
-        """Return the collections the registry explicitly flagged for purge.
-
-        The closed set the orphan sweep works over: only a collection marked here
-        (by a non-keep deregister or a subsume eviction) is ever purged, so
-        captures, agent memories, and remember targets — never marked — are
-        structurally unreachable by the sweep.
-        """
-        rows = self._conn.execute(
-            "SELECT collection FROM pending_purge_collections"
-        ).fetchall()
-        return {r[0] for r in rows}
-
-    def clear_pending_purge(self, collection: str) -> None:
-        """Drop *collection*'s purge mark once its chunks are gone (post-purge)."""
-        self._conn.execute(
-            "DELETE FROM pending_purge_collections WHERE collection = ?",
-            (collection,),
-        )
-        self._conn.commit()
 
     def has_registrations_under(self, directory: Path) -> bool:
         """Return whether any registration's directory lies strictly under *directory*.

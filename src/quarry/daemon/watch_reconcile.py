@@ -169,9 +169,9 @@ class WatchReconciler:
         conn = SyncRegistry(ctx.settings.registry_path)
         try:
             conn.execute("BEGIN")  # one read snapshot spans every SELECT
-            pending = conn.pending_purge_markers()
+            pending = conn.markers.pending()
             registered = {reg.collection for reg in conn.list_registrations()}
-            retained = set(conn.list_retained())
+            retained = set(conn.markers.list_retained())
             conn.commit()
         finally:
             conn.close()

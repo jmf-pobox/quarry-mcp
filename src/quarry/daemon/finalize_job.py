@@ -113,7 +113,8 @@ class CollectionPurgeJob:
         deleted = self.database.store.delete_collection(self.collection)
         conn = SyncRegistry(self.registry_path)
         try:
-            conn.clear_pending_purge(self.collection)
+            conn.markers.clear_pending(self.collection)
+            conn.commit()
         finally:
             conn.close()
         return deleted
