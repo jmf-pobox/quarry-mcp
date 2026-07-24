@@ -284,8 +284,15 @@
         "type": "object"
       },
       "RegistrationList": {
-        "description": "The registration-list response envelope.\n\n``retained`` carries the archived (keep-data) collections with the directory\neach was registered under.  The name-picker avoids their names so a new,\nunrelated directory never collides with an archive; the enable path re-adopts\nan archive whose ``original_directory`` matches the directory being enabled.\nDefaulted so a response from an older daemon that omits the field still\nparses (wire-compat at the boundary).",
+        "description": "The registration-list response envelope.\n\n``retained`` carries the archived (keep-data) collections with the directory\neach was registered under.  The name-picker avoids their names so a new,\nunrelated directory never collides with an archive; the enable path re-adopts\nan archive whose ``original_directory`` matches the directory being enabled.\n\n``chunk_collections`` carries every collection that currently holds chunks\n(the same catalog source the orphan sweep reads).  The name-picker avoids\nthese too, so a DIFFERENT directory can never be auto-assigned a name that\nalready holds another project's chunks \u2014 the auto path is structurally\nmerge-proof.  Both fields default so a response from an older daemon that\nomits them still parses (wire-compat at the boundary).",
         "properties": {
+          "chunk_collections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunk Collections",
+            "type": "array"
+          },
           "registrations": {
             "items": {
               "$ref": "#/components/schemas/RegistrationInfo"

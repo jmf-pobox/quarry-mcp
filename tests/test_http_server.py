@@ -2388,6 +2388,29 @@ class TestRegistrations:
         assert data["total_registrations"] == 0
         assert data["registrations"] == []
         assert data["retained"] == []
+        # An empty DB has no chunk-bearing collections, so the picker-avoid set is
+        # empty — but the field is always present (a faithful proxy of the local view).
+        assert data["chunk_collections"] == []
+
+    def test_get_lists_chunk_collections(self, client: TestClient) -> None:
+        """chunk_collections carries every chunk-bearing name, even with no registry.
+
+        The name-picker avoids these so a different directory can never be
+        auto-assigned a name already holding another project's chunks. Read from
+        the catalog regardless of the registry: a captures/remember collection can
+        hold chunks before any directory is registered.
+        """
+        cols = [
+            {"collection": "default-captures", "document_count": 1, "chunk_count": 3},
+            {"collection": "memory-rmh", "document_count": 1, "chunk_count": 2},
+        ]
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
+            return_value=cols,
+        ):
+            data = client.get("/v1/registrations").json()
+
+        assert data["chunk_collections"] == ["default-captures", "memory-rmh"]
 
     def test_get_lists_registrations(self, client: TestClient) -> None:
         from quarry.collection_marker_store import RetainedMarker

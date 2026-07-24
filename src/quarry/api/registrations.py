@@ -52,10 +52,16 @@ class RegistrationList(BaseModel):
     each was registered under.  The name-picker avoids their names so a new,
     unrelated directory never collides with an archive; the enable path re-adopts
     an archive whose ``original_directory`` matches the directory being enabled.
-    Defaulted so a response from an older daemon that omits the field still
-    parses (wire-compat at the boundary).
+
+    ``chunk_collections`` carries every collection that currently holds chunks
+    (the same catalog source the orphan sweep reads).  The name-picker avoids
+    these too, so a DIFFERENT directory can never be auto-assigned a name that
+    already holds another project's chunks — the auto path is structurally
+    merge-proof.  Both fields default so a response from an older daemon that
+    omits them still parses (wire-compat at the boundary).
     """
 
     total_registrations: int
     registrations: list[RegistrationInfo]
     retained: list[RetainedCollection] = Field(default_factory=list)
+    chunk_collections: list[str] = Field(default_factory=list)

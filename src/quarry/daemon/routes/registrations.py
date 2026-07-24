@@ -45,15 +45,7 @@ class RegistrationRoutes(RouteGroup):
         return await self._add(request)
 
     async def _list(self, request: Request) -> JSONResponse:  # noqa: ARG002
-        settings = self.ctx.settings
-        if not settings.registry_path.exists():
-            return JSONResponse(
-                {"total_registrations": 0, "registrations": [], "retained": []}
-            )
-
-        regs, retained = await run_in_threadpool(
-            self._list_sync, settings.registry_path
-        )
+        regs, retained, chunk_collections = await run_in_threadpool(self._read_state)
         payload = [
             {
                 "collection": reg.collection,
@@ -75,6 +67,7 @@ class RegistrationRoutes(RouteGroup):
                 "total_registrations": len(payload),
                 "registrations": payload,
                 "retained": retained_payload,
+                "chunk_collections": chunk_collections,
             }
         )
 
@@ -185,20 +178,33 @@ class RegistrationRoutes(RouteGroup):
             status_code=202,
         )
 
-    @staticmethod
-    def _list_sync(
-        registry_path: Path,
-    ) -> tuple[list[DirectoryRegistration], list[RetainedMarker]]:
-        """Open registry, read live registrations + retained markers, close.
+    def _read_state(
+        self,
+    ) -> tuple[list[DirectoryRegistration], list[RetainedMarker], list[str]]:
+        """Read live registrations, retained markers, and chunk-bearing collections.
 
-        Returns both so the list response carries ``retained`` (collection AND
-        original directory) alongside the live registrations — the remote path
-        must re-adopt and avoid archives exactly as the local one does
-        (bug-class 3: remote/local parity).
+        Returns all three so the list response is a faithful proxy of the local
+        view (bug-class 3: remote/local parity): ``retained`` (collection AND its
+        origin directory) lets the client re-adopt and avoid archives, and
+        ``chunk_collections`` — the same catalog source the orphan sweep reads —
+        lets the client-side picker avoid every chunk-bearing name so a different
+        directory can never be auto-assigned a name already holding another
+        project's chunks.  ``chunk_collections`` is read even when the registry
+        file is absent: a captures/remember collection can hold chunks before any
+        directory is ever registered.
         """
-        conn = SyncRegistry(registry_path)
+        chunk_collections = [
+            c["collection"] for c in self.ctx.database.catalog.list_collections()
+        ]
+        if not self.ctx.settings.registry_path.exists():
+            return [], [], chunk_collections
+        conn = SyncRegistry(self.ctx.settings.registry_path)
         try:
-            return conn.list_registrations(), conn.markers.retained_markers()
+            return (
+                conn.list_registrations(),
+                conn.markers.retained_markers(),
+                chunk_collections,
+            )
         finally:
             conn.close()
 
