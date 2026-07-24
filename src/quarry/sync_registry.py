@@ -19,6 +19,14 @@ class DirectoryRegistration:
     registered_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class RetainedMarker:
+    """An archived (keep-data) collection and the directory it was kept from."""
+
+    collection: str
+    original_directory: str
+
+
 class SyncRegistry:
     """Manages the SQLite registry for directory registrations and retained state.
 
@@ -274,6 +282,21 @@ class SyncRegistry:
             "SELECT collection FROM retained_collections ORDER BY collection"
         ).fetchall()
         return [r[0] for r in rows]
+
+    def retained_markers(self) -> list[RetainedMarker]:
+        """Return each archived collection with the directory it was kept from.
+
+        A NULL ``original_directory`` (legacy marker) becomes the empty string,
+        which matches no resolved directory — so a legacy archive is avoided by
+        the name-picker but never re-adopted.
+        """
+        rows = self._conn.execute(
+            "SELECT collection, original_directory FROM retained_collections "
+            "ORDER BY collection"
+        ).fetchall()
+        return [
+            RetainedMarker(collection=r[0], original_directory=r[1] or "") for r in rows
+        ]
 
     def list_registrations(self) -> list[DirectoryRegistration]:
         """Return all registered directories."""

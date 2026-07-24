@@ -298,7 +298,12 @@ def _resolve_or_register(
         )
         raise ValueError(msg)
 
-    name = collection_override or view.unique_collection_name(directory)
+    # Re-adopt: if THIS directory owns an archived (keep-data) collection, reuse
+    # its name so the daemon's register re-adopts the kept chunks and its rescan
+    # auto-freshens them. A different directory owns no archive here, so it falls
+    # through to a fresh unique name that avoids every archived name (I7).
+    archived = view.archived_collection_for(directory)
+    name = collection_override or archived or view.unique_collection_name(directory)
     # Fire-and-forget: the daemon re-guards the path on its own filesystem and
     # writes the registry row as a background task.
     client.register(RegisterRequest(directory=str(directory), collection=name))

@@ -16,6 +16,7 @@ from quarry.api import (
     RegisterRequest,
     RegistrationInfo,
     RegistrationList,
+    RetainedCollection,
     TaskAccepted,
 )
 from quarry.client import QuarryClient
@@ -137,9 +138,10 @@ class FakeRegistryClient:
     _registered: list[RegisterRequest]
     _deregistered: list[DeregisterRequest]
     _deleted: list[str]
-    # Collections archived by a keep-data deregister — mirrors the daemon's
-    # retained_collections so the name-picker sees archived names over the wire.
-    _retained: set[str]
+    # Collections archived by a keep-data deregister, keyed by the directory they
+    # were kept from — mirrors the daemon's retained_collections so the client
+    # sees archived names AND their origin (for re-adopt) over the wire.
+    _retained: dict[str, str]
     # When set, delete_collection raises it — models a rejected captures purge.
     _delete_error: Exception | None
 
@@ -161,20 +163,24 @@ class FakeRegistryClient:
         self._registered = []
         self._deregistered = []
         self._deleted = []
-        self._retained = set()
+        self._retained = {}
         self._delete_error = delete_error
         return self
 
     def list_registrations(self) -> RegistrationList:
+        retained = [
+            RetainedCollection(collection=col, original_directory=directory)
+            for col, directory in sorted(self._retained.items())
+        ]
         return RegistrationList(
             total_registrations=len(self._regs),
             registrations=list(self._regs),
-            retained=sorted(self._retained),
+            retained=retained,
         )
 
     def register(self, req: RegisterRequest) -> TaskAccepted:
         self._registered.append(req)
-        self._retained.discard(req.collection)  # re-adopting clears the archive
+        self._retained.pop(req.collection, None)  # re-adopting clears the archive
         self._regs.append(
             RegistrationInfo(
                 collection=req.collection,
@@ -186,10 +192,13 @@ class FakeRegistryClient:
 
     def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
         self._deregistered.append(req)
+        origin = next(
+            (r.directory for r in self._regs if r.collection == req.collection), ""
+        )
         before = len(self._regs)
         self._regs = [r for r in self._regs if r.collection != req.collection]
         if req.keep_data and before > len(self._regs):
-            self._retained.add(req.collection)  # kept → archived
+            self._retained[req.collection] = origin  # kept → archived, with origin
         return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
 
     def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:

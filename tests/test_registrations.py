@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from quarry.api import RegistrationInfo
+from quarry.api import RegistrationInfo, RetainedCollection
 from quarry.registrations import Registrations
 
 
@@ -20,6 +20,12 @@ def _reg(collection: str, directory: Path) -> RegistrationInfo:
         collection=collection,
         directory=str(directory.resolve()),
         registered_at="2026-01-01",
+    )
+
+
+def _retained(collection: str, directory: Path) -> RetainedCollection:
+    return RetainedCollection(
+        collection=collection, original_directory=str(directory.resolve())
     )
 
 
@@ -120,27 +126,85 @@ class TestUniqueCollectionName:
 
     def test_avoids_archived_retained_name(self, tmp_path: Path) -> None:
         # No LIVE registration named "backend", but it is archived (retained) by a
-        # prior keep-data disable. A new, unrelated "backend" directory must NOT
-        # re-use the archived name (which would inherit its chunks) — it
-        # disambiguates off the parent instead.
+        # prior keep-data disable from a DIFFERENT directory. A new, unrelated
+        # "backend" directory must NOT re-use the archived name (which would
+        # inherit its chunks) — it disambiguates off the parent instead.
         parent = tmp_path / "acme"
         project = parent / "backend"
         project.mkdir(parents=True)
-        view = Registrations([], retained=["backend"])
+        view = Registrations(
+            [], retained=[_retained("backend", tmp_path / "elsewhere")]
+        )
 
         assert view.unique_collection_name(project) == "backend-acme"
 
     def test_from_list_carries_retained(self, tmp_path: Path) -> None:
-        # from_list must thread the wire response's retained names into the picker
-        # so the remote path avoids archived names exactly as a local view does.
+        # from_list must thread the wire response's retained markers into the
+        # picker so the remote path avoids archived names as a local view does.
         from quarry.api import RegistrationList
 
         parent = tmp_path / "acme"
         project = parent / "backend"
         project.mkdir(parents=True)
         listing = RegistrationList(
-            total_registrations=0, registrations=[], retained=["backend"]
+            total_registrations=0,
+            registrations=[],
+            retained=[_retained("backend", tmp_path / "elsewhere")],
         )
         view = Registrations.from_list(listing)
 
         assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_archived_collection_for_matches_owning_directory(
+        self, tmp_path: Path
+    ) -> None:
+        # The SAME directory that owns an archive re-adopts it by name; an
+        # unrelated directory owns no archive and gets None (→ a fresh name).
+        owner = tmp_path / "acme" / "backend"
+        owner.mkdir(parents=True)
+        other = tmp_path / "other" / "backend"
+        other.mkdir(parents=True)
+        view = Registrations([], retained=[_retained("backend", owner)])
+
+        assert view.archived_collection_for(owner) == "backend"
+        assert view.archived_collection_for(other) is None
+
+    def test_remote_readopt_equals_local(self, tmp_path: Path) -> None:
+        """Re-adopt off the wire payload matches re-adopt off the local registry.
+
+        Bridges the whole parity chain: a real registry archives a collection;
+        its ``retained_markers()`` are mapped into the wire ``RetainedCollection``
+        exactly as the HTTP ``/registrations`` route does; ``Registrations.from_list``
+        over that payload re-adopts by the owning directory identically to a local
+        view built from the same markers.
+        """
+        from quarry.api import RegistrationList
+        from quarry.sync_registry import SyncRegistry
+
+        owner = tmp_path / "acme" / "backend"
+        owner.mkdir(parents=True)
+        conn = SyncRegistry(tmp_path / "r.db")
+        try:
+            conn.register_directory(owner, "backend")
+            conn.deregister_directory("backend", keep_data=True)
+            markers = conn.retained_markers()
+        finally:
+            conn.close()
+
+        # Marshal registry markers into the wire shape, exactly as the HTTP route.
+        wire = [
+            RetainedCollection(
+                collection=m.collection, original_directory=m.original_directory
+            )
+            for m in markers
+        ]
+        local = Registrations([], retained=wire)  # straight from the registry
+        remote = Registrations.from_list(  # the same markers through the envelope
+            RegistrationList(total_registrations=0, registrations=[], retained=wire)
+        )
+
+        assert local.archived_collection_for(owner) == "backend"
+        assert remote.archived_collection_for(owner) == "backend"
+        assert local.archived_collection_for(owner) == remote.archived_collection_for(
+            owner
+        )

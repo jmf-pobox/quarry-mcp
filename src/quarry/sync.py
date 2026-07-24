@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.config import Settings
-from quarry.db import ChunkStore
+from quarry.db import ChunkCatalog, ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
@@ -115,6 +115,20 @@ def compute_sync_plan(
         to_delete=to_delete,
         unchanged=unchanged,
     )
+
+
+def _stale_stored_documents(db: LanceDB, collection: str, resolved: Path) -> list[str]:
+    """Return LanceDB document_names for *collection* whose file is gone from disk.
+
+    The registry ``files`` rows are the delta's memory, but a keep-data disable
+    deletes them while the chunks live on. On re-adopt the registry is blank, so
+    ``compute_sync_plan`` alone cannot prune a file deleted while disabled. This
+    reconciles the ACTUAL stored documents against disk, so re-adopt auto-freshens
+    (deleted files are pruned, not just current files re-indexed). In steady state
+    it matches the registry-derived set, so it prunes only genuine orphans.
+    """
+    stored = {d["document_name"] for d in ChunkCatalog(db).list_documents(collection)}
+    return [name for name in sorted(stored) if not (resolved / name).exists()]
 
 
 @dataclass(frozen=True)
@@ -253,13 +267,19 @@ def sync_collection(
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
+    # Reconcile the ACTUAL stored documents against disk, not just the registry
+    # delta: a re-adopt (keep-data → re-enable) has empty registry file rows but
+    # live chunks, so this is the only source that prunes a file deleted while
+    # disabled. Union with the registry-derived deletes, order-stable + deduped.
+    stale = _stale_stored_documents(db, collection, resolved)
+    to_delete = list(dict.fromkeys([*plan.to_delete, *stale]))
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_refresh)} to refresh, "
-        f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
+        f"{len(to_delete)} to delete, {plan.unchanged} unchanged"
     )
 
-    deleted, failed, errors = _delete_documents(plan.to_delete, ctx)
+    deleted, failed, errors = _delete_documents(to_delete, ctx)
     refreshed, ref_failed, ref_errors = _refresh_files(plan.to_refresh, ctx)
     failed += ref_failed
     errors.extend(ref_errors)

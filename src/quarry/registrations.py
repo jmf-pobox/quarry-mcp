@@ -15,14 +15,14 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-    from quarry.api import RegistrationInfo, RegistrationList
+    from quarry.api import RegistrationInfo, RegistrationList, RetainedCollection
 
 
 @final
 class Registrations:
     """A read-only view over the daemon's registrations for coverage queries."""
 
-    __slots__ = ("_by_dir", "_taken")
+    __slots__ = ("_archived_by_dir", "_by_dir", "_taken")
 
     # wire boundary — the daemon's registrations keyed by their absolute directory.
     _by_dir: dict[str, RegistrationInfo]
@@ -30,23 +30,40 @@ class Registrations:
     # (retained/keep-data) names, so an unrelated directory never re-uses an
     # archived collection and silently inherits its chunks.
     _taken: frozenset[str]
+    # Archived collections keyed by the directory they were kept from, so the
+    # SAME directory re-enabling re-adopts its own kept chunks by name.
+    _archived_by_dir: dict[str, str]
 
     def __new__(
         cls,
         registrations: Sequence[RegistrationInfo],
-        retained: Sequence[str] = (),
+        retained: Sequence[RetainedCollection] = (),
     ) -> Self:
         self = super().__new__(cls)
         self._by_dir = {r.directory: r for r in registrations}
         self._taken = frozenset(r.collection for r in registrations) | frozenset(
-            retained
+            m.collection for m in retained
         )
+        # An empty original_directory (legacy marker) is dropped: it matches no
+        # resolved path, so a legacy archive is avoided by name but never adopted.
+        self._archived_by_dir = {
+            m.original_directory: m.collection for m in retained if m.original_directory
+        }
         return self
 
     @classmethod
     def from_list(cls, listing: RegistrationList) -> Self:
-        """Build a view from the daemon's list response, carrying retained names."""
+        """Build a view from the daemon's list response, carrying retained markers."""
         return cls(listing.registrations, listing.retained)
+
+    def archived_collection_for(self, directory: Path) -> str | None:
+        """Return the archived collection *directory* itself owns, or None.
+
+        Only the directory the collection was kept from re-adopts it (reusing the
+        name and its kept chunks); every other directory gets a fresh name (I7).
+        None is the documented "this directory owns no archive" contract.
+        """
+        return self._archived_by_dir.get(str(directory.resolve()))
 
     def covering(self, directory: Path) -> RegistrationInfo | None:
         """Return the registration covering *directory* (exact or a parent), else None.

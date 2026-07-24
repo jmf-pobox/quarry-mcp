@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from quarry.config import Settings
+from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.chunk_store import ChunkStore
 from quarry.db.chunk_table import ChunkTable
 from quarry.db.optimizer import TableOptimizer
@@ -791,6 +792,11 @@ def _make_collection(
     return db, conn, d
 
 
+def _docnames(db: LanceDB) -> set[str]:
+    """Return the set of document_names stored in the "col" collection."""
+    return {doc["document_name"] for doc in ChunkCatalog(db).list_documents("col")}
+
+
 def _seed_crash_state(
     tmp_path: Path,
     *,
@@ -907,6 +913,58 @@ class TestSyncCollectionProgressive:
         assert second.ingested == 0
         assert second.skipped == 1
         assert ChunkStore(db).count(collection_filter="col") == count_after_first
+        conn.close()
+
+    def test_readopt_prunes_file_deleted_while_disabled(self, tmp_path: Path):
+        """Auto-freshen: a file deleted while keep-data-disabled is pruned on re-adopt.
+
+        After a keep-data disable the registry file rows are gone but the chunks
+        live on. If a file was deleted from disk meanwhile, the registry delta
+        cannot know to remove it — the re-adopt sync must reconcile the stored
+        documents against disk and prune the vanished one, keeping the survivor.
+        """
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        (d / "b.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+            assert _docnames(db) == {"a.txt", "b.txt"}
+
+            # keep-data disable → files rows gone, chunks kept; then b.txt vanishes.
+            conn.deregister_directory("col", keep_data=True)
+            (d / "b.txt").unlink()
+            conn.register_directory(d, "col")  # same dir → re-adopt
+
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.deleted == 1  # b.txt pruned
+        assert _docnames(db) == {"a.txt"}  # survivor kept, orphan gone
+        conn.close()
+
+    def test_readopt_refreshes_unchanged_file_without_duplication(self, tmp_path: Path):
+        """Auto-freshen: an unchanged file's chunks are refreshed, never duplicated.
+
+        On re-adopt the registry has no file row for a.txt, so it is re-ingested.
+        The reconcile overwrites its stored chunks rather than appending, so the
+        chunk count is unchanged — no stale duplicate rows accumulate.
+        """
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+            count_before = ChunkStore(db).count(collection_filter="col")
+
+            conn.deregister_directory("col", keep_data=True)
+            conn.register_directory(d, "col")  # same dir → re-adopt, a.txt unchanged
+
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.ingested == 1  # re-indexed
+        assert result.deleted == 0  # nothing vanished
+        assert ChunkStore(db).count(collection_filter="col") == count_before
+        assert _docnames(db) == {"a.txt"}
         conn.close()
 
 

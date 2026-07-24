@@ -284,7 +284,7 @@
         "type": "object"
       },
       "RegistrationList": {
-        "description": "The registration-list response envelope.\n\n``retained`` names the collections whose chunks were kept on a keep-data\ndisable (archived, no live directory).  The name-picker must avoid them so a\nnew, unrelated directory never collides with an archived collection and\nsilently inherits its chunks.  Defaulted so a response from an older daemon\nthat omits the field still parses (wire-compat at the boundary).",
+        "description": "The registration-list response envelope.\n\n``retained`` carries the archived (keep-data) collections with the directory\neach was registered under.  The name-picker avoids their names so a new,\nunrelated directory never collides with an archive; the enable path re-adopts\nan archive whose ``original_directory`` matches the directory being enabled.\nDefaulted so a response from an older daemon that omits the field still\nparses (wire-compat at the boundary).",
         "properties": {
           "registrations": {
             "items": {
@@ -295,7 +295,7 @@
           },
           "retained": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/RetainedCollection"
             },
             "title": "Retained",
             "type": "array"
@@ -310,6 +310,26 @@
           "registrations"
         ],
         "title": "RegistrationList",
+        "type": "object"
+      },
+      "RetainedCollection": {
+        "additionalProperties": true,
+        "description": "A collection whose chunks were kept on a keep-data disable (archived).\n\n``original_directory`` is the directory it was registered under, so the\nclient can tell whether THIS directory owns the archive: the same directory\nre-adopts it (reuses the name + kept chunks); a different directory must not\n(it would inherit another project's chunks).  Empty when a legacy marker\nrecorded no origin \u2014 it then matches no directory and is never re-adopted.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "original_directory": {
+            "default": "",
+            "title": "Original Directory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "RetainedCollection",
         "type": "object"
       },
       "SearchHit": {

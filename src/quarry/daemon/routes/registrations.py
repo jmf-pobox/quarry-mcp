@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse
 from quarry.daemon.registration_lifecycle import RegistrationLifecycle
 from quarry.daemon.routes.base import RouteGroup
 from quarry.http_guards import RequestGuards
-from quarry.sync_registry import DirectoryRegistration, SyncRegistry
+from quarry.sync_registry import DirectoryRegistration, RetainedMarker, SyncRegistry
 
 # The registrations body carries only a small option dict.
 MAX_REGISTRATIONS_BODY_BYTES = 16 * 1024
@@ -61,13 +61,19 @@ class RegistrationRoutes(RouteGroup):
             }
             for reg in regs
         ]
-        # ``retained`` mirrors the local list_retained() so the client-side
-        # name-picker avoids archived collection names on the remote path too.
+        # ``retained`` mirrors the local retained_markers() — collection AND the
+        # directory it was archived from — so the client-side picker avoids
+        # archived names and the enable path re-adopts by directory identity, on
+        # the remote path exactly as locally.
+        retained_payload = [
+            {"collection": m.collection, "original_directory": m.original_directory}
+            for m in retained
+        ]
         return JSONResponse(
             {
                 "total_registrations": len(payload),
                 "registrations": payload,
-                "retained": retained,
+                "retained": retained_payload,
             }
         )
 
@@ -177,16 +183,17 @@ class RegistrationRoutes(RouteGroup):
     @staticmethod
     def _list_sync(
         registry_path: Path,
-    ) -> tuple[list[DirectoryRegistration], list[str]]:
-        """Open registry, read live registrations + retained names, close.
+    ) -> tuple[list[DirectoryRegistration], list[RetainedMarker]]:
+        """Open registry, read live registrations + retained markers, close.
 
-        Returns both so the list response carries ``retained`` alongside the live
-        registrations — the remote name-picker must avoid archived names exactly
-        as the local one does (bug-class 3: remote/local parity).
+        Returns both so the list response carries ``retained`` (collection AND
+        original directory) alongside the live registrations — the remote path
+        must re-adopt and avoid archives exactly as the local one does
+        (bug-class 3: remote/local parity).
         """
         conn = SyncRegistry(registry_path)
         try:
-            return conn.list_registrations(), conn.list_retained()
+            return conn.list_registrations(), conn.retained_markers()
         finally:
             conn.close()
 

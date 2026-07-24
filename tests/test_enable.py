@@ -119,6 +119,28 @@ class TestKeepDataArchiveNoMerge:
         assert result.collection != "backend"  # NOT the archived collection
         assert client.registered[-1].collection == "backend-other"  # no merge
 
+    def test_same_dir_reenable_readopts_same_collection(self, tmp_path: Path) -> None:
+        """Re-enabling the SAME dir re-adopts its archived collection name.
+
+        enable dir_a "backend" → keep-data disable (archived under original
+        directory dir_a) → re-enable dir_a.  Because dir_a owns the archive, the
+        re-enable must re-adopt the SAME "backend" collection (reusing its kept
+        chunks), not pick a disambiguated fresh name.  A different directory is
+        the ``test_unrelated_same_leaf`` case; this is the intended keep-data
+        round-trip.
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            disable_project(dir_a, client, keep_data=True)
+            result = enable_project(dir_a, client)
+
+        assert result.collection == "backend"  # re-adopt, not "backend-work"
+        assert client.registered[-1].collection == "backend"
+
     def test_collection_override_onto_archive_is_rejected(self, tmp_path: Path) -> None:
         """An explicit override re-using another dir's archived name is refused.
 
