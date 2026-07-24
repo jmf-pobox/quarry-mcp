@@ -42,6 +42,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _archived_collection_for(conn: SyncRegistry, directory: Path) -> str | None:
+    """Return the archived (keep-data) collection *directory* itself owns, else None.
+
+    The hooks-side counterpart of ``Registrations.archived_collection_for``:
+    session-start applies the same directory-identity re-adopt policy over the
+    registry's ``retained_markers`` that ``quarry enable`` applies over the wire.
+    A legacy blank-origin marker matches no resolved directory and is never
+    re-adopted.  None is the "this directory owns no archive" contract.
+    """
+    target = str(directory.resolve())
+    return next(
+        (
+            m.collection
+            for m in conn.retained_markers()
+            if m.original_directory == target
+        ),
+        None,
+    )
+
+
 def _unique_collection_name(
     conn: SyncRegistry,
     directory: Path,
@@ -260,7 +280,13 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                     },
                 }
 
-            collection = _unique_collection_name(conn, directory)
+            # Re-adopt: if this cwd owns an archived (keep-data) collection, reuse
+            # its name so the session-start auto-index re-adopts the kept chunks
+            # (and the background sync auto-freshens), exactly as `quarry enable`
+            # does. A cwd owning no archive falls through to a fresh unique name.
+            collection = _archived_collection_for(conn, directory) or (
+                _unique_collection_name(conn, directory)
+            )
             conn.register_directory(directory, collection)
             logger.info(
                 "session-start: auto-registered %s as '%s'",

@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
 from quarry.hooks import (
+    _archived_collection_for,
     _as_dir,
     _collection_for_cwd_conn,
     _unique_collection_name,
@@ -72,6 +73,37 @@ class TestUniqueCollectionName:
         name = _unique_collection_name(conn, project)
         assert name.startswith("myproject-")
         assert len(name) == len("myproject-") + 8  # 8-char hash
+        conn.close()
+
+
+class TestArchivedCollectionFor:
+    """The session-start hook re-adopts a cwd-owned archive, like `quarry enable`."""
+
+    def test_owning_directory_readopts_its_archive(self, tmp_path: Path) -> None:
+        # A keep-data disable archives "myproject" under its original directory.
+        # The SAME directory re-enabling (via the hook) reuses that name — not a
+        # fresh disambiguated one — so its kept chunks are re-adopted.
+        conn = SyncRegistry(tmp_path / "r.db")
+        project = tmp_path / "myproject"
+        project.mkdir()
+        conn.register_directory(project, "myproject")
+        conn.deregister_directory("myproject", keep_data=True)
+
+        assert _archived_collection_for(conn, project) == "myproject"
+        conn.close()
+
+    def test_unrelated_directory_owns_no_archive(self, tmp_path: Path) -> None:
+        # A DIFFERENT directory with the same leaf owns no archive → None, so it
+        # falls through to a fresh unique name (I7: no cross-project adoption).
+        conn = SyncRegistry(tmp_path / "r.db")
+        owner = tmp_path / "work" / "myproject"
+        owner.mkdir(parents=True)
+        conn.register_directory(owner, "myproject")
+        conn.deregister_directory("myproject", keep_data=True)
+
+        other = tmp_path / "other" / "myproject"
+        other.mkdir(parents=True)
+        assert _archived_collection_for(conn, other) is None
         conn.close()
 
 
