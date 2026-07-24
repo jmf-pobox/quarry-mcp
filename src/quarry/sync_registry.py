@@ -142,10 +142,15 @@ class SyncRegistry:
                 (str(resolved), collection, now),
             )
             # The guard proved any surviving marker is this same directory's, so
-            # re-registering re-adopts its kept chunks: drop the marker to make the
-            # collection live again (the orphan sweep stops sparing it as keep-data).
+            # re-registering re-adopts its kept chunks: drop the retained marker to
+            # make the collection live again, and drop any pending-purge marker so
+            # the orphan sweep cannot delete the now-live collection's chunks.
             self._conn.execute(
                 "DELETE FROM retained_collections WHERE collection = ?",
+                (collection,),
+            )
+            self._conn.execute(
+                "DELETE FROM pending_purge_collections WHERE collection = ?",
                 (collection,),
             )
         except sqlite3.IntegrityError:
@@ -184,13 +189,24 @@ class SyncRegistry:
         return subsumed
 
     def _evict_subsumed(self, subsumed: list[str]) -> None:
-        """Delete the files and directory rows of each collection a parent subsumes."""
+        """Delete files/directory rows of each subsumed child and mark it for purge.
+
+        The child's chunks are now orphaned (its directory row is gone), so mark
+        it in the same transaction — the orphan sweep drains the delete even if
+        the caller's immediate purge is shed or the daemon restarts first.
+        """
+        now = datetime.now(UTC).isoformat()
         for child_collection in subsumed:
             self._conn.execute(
                 "DELETE FROM files WHERE collection = ?", (child_collection,)
             )
             self._conn.execute(
                 "DELETE FROM directories WHERE collection = ?", (child_collection,)
+            )
+            self._conn.execute(
+                "INSERT OR REPLACE INTO pending_purge_collections "
+                "(collection, marked_at) VALUES (?, ?)",
+                (child_collection, now),
             )
 
     def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
@@ -235,16 +251,33 @@ class SyncRegistry:
             (collection,),
         ).fetchall()
         document_names = [r[0] for r in rows]
+        now = datetime.now(UTC).isoformat()
         self._conn.execute("DELETE FROM files WHERE collection = ?", (collection,))
         self._conn.execute(
             "DELETE FROM directories WHERE collection = ?",
             (collection,),
         )
         if keep_data:
+            # Retained, not purged: record the keep marker and clear any stale
+            # pending-purge mark so the orphan sweep never deletes the kept chunks.
             self._conn.execute(
                 "INSERT OR REPLACE INTO retained_collections "
                 "(collection, retained_at, original_directory) VALUES (?, ?, ?)",
-                (collection, datetime.now(UTC).isoformat(), original_directory),
+                (collection, now, original_directory),
+            )
+            self._conn.execute(
+                "DELETE FROM pending_purge_collections WHERE collection = ?",
+                (collection,),
+            )
+        else:
+            # Mark for purge IN THE SAME transaction as the row removal: the sweep
+            # purges ONLY explicitly-marked collections, so a shed immediate purge
+            # is drained on a later reconcile, surviving a restart (the closed-set
+            # backstop that keeps captures/memories/remember targets unreachable).
+            self._conn.execute(
+                "INSERT OR REPLACE INTO pending_purge_collections "
+                "(collection, marked_at) VALUES (?, ?)",
+                (collection, now),
             )
         self._conn.commit()
         return document_names
@@ -297,6 +330,40 @@ class SyncRegistry:
         return [
             RetainedMarker(collection=r[0], original_directory=r[1] or "") for r in rows
         ]
+
+    def pending_purge_markers(self) -> set[str]:
+        """Return the collections the registry explicitly flagged for purge.
+
+        The closed set the orphan sweep works over: only a collection marked here
+        (by a non-keep deregister or a subsume eviction) is ever purged, so
+        captures, agent memories, and remember targets — never marked — are
+        structurally unreachable by the sweep.
+        """
+        rows = self._conn.execute(
+            "SELECT collection FROM pending_purge_collections"
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def clear_pending_purge(self, collection: str) -> None:
+        """Drop *collection*'s purge mark once its chunks are gone (post-purge)."""
+        self._conn.execute(
+            "DELETE FROM pending_purge_collections WHERE collection = ?",
+            (collection,),
+        )
+        self._conn.commit()
+
+    def has_registrations_under(self, directory: Path) -> bool:
+        """Return whether any registration's directory lies strictly under *directory*.
+
+        Answers the auto-register subsumption guard: registering *directory* would
+        subsume those children, so the caller skips auto-register rather than
+        cause data loss.
+        """
+        resolved = directory.resolve()
+        return any(
+            self._is_ancestor_of(resolved, Path(reg.directory).resolve())
+            for reg in self.list_registrations()
+        )
 
     def list_registrations(self) -> list[DirectoryRegistration]:
         """Return all registered directories."""

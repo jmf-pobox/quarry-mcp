@@ -20,6 +20,8 @@ from quarry.daemon.index_jobs import FileIndexJob
 from quarry.daemon.route_key import RouteKey
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.db.chunk_catalog import ChunkCatalog
+from quarry.db.chunk_store import ChunkStore
+from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -154,6 +156,95 @@ def test_sweep_never_touches_registered_or_retained_collections(tmp_path: Path) 
 
         # orphan swept; registered + kept spared
         assert _live_collections(ctx) == {"reg", "keep"}
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend",
+        return_value=_FakeEmbedder(),
+    ):
+        asyncio.run(_run())
+
+
+def _seed_chunks(ctx: DaemonContext, settings: Settings, collection: str) -> None:
+    """Insert one document's chunks into *collection* — LanceDB only, no registry.
+
+    Models captures / agent-memory / remember collections: real chunks in the
+    bound database that are NOT directory registrations.
+    """
+    body = ctx.settings.lancedb_path.parent / f"{collection}.md"
+    body.write_text(f"indexable body for {collection}")
+    chunks, _ = plan_file_chunks(
+        body, settings, collection=collection, document_name=f"{collection}.md"
+    )
+    ChunkStore(ctx.database.db).insert(
+        chunks, np.zeros((len(chunks), _DIM), dtype=np.float32)
+    )
+
+
+def test_sweep_never_purges_unmarked_collections(tmp_path: Path) -> None:
+    """CATASTROPHIC-BUG REPRO: unmarked collections survive the sweep.
+
+    Captures (``default-captures``), agent memory (``memory-<handle>``), and a
+    remember target (``default``) are legitimate collections in the bound db that
+    are NOT directory registrations and were never deregistered.  The open-world
+    sweep (``chunk_cols - registered - retained``) wiped them every ~5 min; the
+    closed-set sweep purges ONLY collections the registry explicitly marked for
+    purge, so these are structurally unreachable and survive.
+    """
+    settings = _fresh_settings(tmp_path)
+    live = {"default-captures", "memory-rmh", "default"}
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        for collection in live:
+            _seed_chunks(ctx, settings, collection)
+        assert _live_collections(ctx) == live
+
+        await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
+        await ctx.aclose_ingest_queue()
+
+        assert _live_collections(ctx) == live  # nothing marked → nothing swept
+
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend",
+        return_value=_FakeEmbedder(),
+    ):
+        asyncio.run(_run())
+
+
+def test_sweep_purges_subsumed_child_marked_by_eviction(tmp_path: Path) -> None:
+    """A subsume eviction marks the evicted child, so the sweep drains its chunks.
+
+    Registering a parent directory subsumes an existing child registration; the
+    eviction marks the child for purge in the same transaction, so its orphaned
+    chunks are swept even if the immediate teardown-purge was shed.
+    """
+    settings = _fresh_settings(tmp_path)
+    child_dir = (tmp_path / "proj" / "sub").resolve()
+    parent_dir = (tmp_path / "proj").resolve()
+
+    async def _run() -> None:
+        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        child_dir.mkdir(parents=True)
+        (child_dir / "x.md").write_text("child body")
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            conn.register_directory(child_dir, "child")
+        finally:
+            conn.close()
+        await _index_and_wait(ctx, {"child": child_dir})
+        assert "child" in _live_collections(ctx)
+
+        conn = SyncRegistry(settings.registry_path)
+        try:
+            _reg, subsumed = conn.register_directory(parent_dir, "parent")
+            assert subsumed == ["child"]  # eviction marked "child" for purge
+        finally:
+            conn.close()
+
+        await WatchReconciler(_sweep_only_deps(ctx))._sweep_orphans()
+        await ctx.aclose_ingest_queue()
+
+        assert "child" not in _live_collections(ctx)  # marked → swept
 
     with patch(
         "quarry.ingestion.streaming.get_embedding_backend",

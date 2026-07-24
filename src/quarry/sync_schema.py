@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS retained_collections (
     retained_at        TEXT NOT NULL,
     original_directory TEXT
 );
+CREATE TABLE IF NOT EXISTS pending_purge_collections (
+    collection TEXT PRIMARY KEY,
+    marked_at  TEXT NOT NULL
+);
 """
 
 # Post-v1 columns per table, with their SQL type clauses. Each is applied only

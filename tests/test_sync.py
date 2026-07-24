@@ -1041,6 +1041,29 @@ class TestStaleStoredDocuments:
 
         assert _stale_stored_documents(db, "col") == ["gone.txt"]
 
+    def test_unprovable_document_paths_are_kept(self, tmp_path: Path):
+        """Only a provably-absent ABSOLUTE path is pruned; unprovable paths kept.
+
+        A NULL Arrow ``document_path`` stringifies to ``"None"`` (not ``""``)
+        through ``list_documents``; that, a blank, and a relative path are all
+        non-absolute and cannot be proven absent here, so they are kept
+        (fail-safe). Only the absolute path whose file is gone is pruned.
+        """
+        db = get_db(_settings(tmp_path).lancedb_path)
+        gone = tmp_path / "gone.txt"  # absolute, absent → prune
+        here = tmp_path / "here.txt"
+        here.write_text("x")  # absolute, present → keep
+        docs = [
+            {"document_name": "null-doc", "document_path": "None"},
+            {"document_name": "blank-doc", "document_path": ""},
+            {"document_name": "rel-doc", "document_path": "sub/rel.txt"},
+            {"document_name": "here-doc", "document_path": str(here)},
+            {"document_name": "gone-doc", "document_path": str(gone)},
+        ]
+        with patch.object(ChunkCatalog, "list_documents", return_value=docs):
+            stale = _stale_stored_documents(db, "col")
+        assert stale == ["gone-doc"]
+
 
 class TestWithinFileResume:
     def test_happy_resume_embeds_only_tail(self, tmp_path: Path):

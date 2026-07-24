@@ -47,7 +47,9 @@ class CollectionPurger:
         a failed admission — the outcome an observable cleanup depends on.
         """
         purge = self._ctx.tasks.begin(label)
-        job = CollectionPurgeJob(self._ctx.database, collection)
+        job = CollectionPurgeJob(
+            self._ctx.database, collection, self._ctx.settings.registry_path
+        )
         key = RouteKey(self._ctx.database_name, collection)
         await self._admit(key, job, purge)
         while purge.status not in _PURGE_TERMINAL:

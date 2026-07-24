@@ -26,8 +26,11 @@ from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.tasks import task_terminal
 from quarry.sync_finalize import SyncFinalizer
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import SpoolRecord
@@ -85,17 +88,32 @@ class CollectionPurgeJob:
 
     database: Database
     collection: str
+    registry_path: Path
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
         with task_terminal(state):
-            deleted = await run_in_threadpool(
-                self.database.store.delete_collection, self.collection
-            )
+            deleted = await run_in_threadpool(self._purge)
             state.status = "completed"
             state.results = {"deleted": deleted}
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a purge has no content to recover."""
         return None
+
+    def _purge(self) -> int:
+        """Delete the chunks, then clear the collection's durable purge marker.
+
+        The mark existed so the reconcile sweep would retry a shed/failed purge
+        across a restart; once the chunks are gone the mark is spent, so clearing
+        it keeps the closed set tight and prevents a future collection re-using
+        the name from being swept on a stale mark.
+        """
+        deleted = self.database.store.delete_collection(self.collection)
+        conn = SyncRegistry(self.registry_path)
+        try:
+            conn.clear_pending_purge(self.collection)
+        finally:
+            conn.close()
+        return deleted

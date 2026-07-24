@@ -205,12 +205,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             # Step 2: No coverage -- check for descendant registrations
             # before auto-registering.  A parent registration would
             # subsume existing child registrations, causing data loss.
-            registrations = conn.list_registrations()
-            has_children = any(
-                conn._is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
-                for r in registrations
-            )
-            if has_children:
+            if conn.has_registrations_under(directory):
                 logger.warning(
                     "session-start: existing child registrations found "
                     "under %s; skipping auto-register to prevent "

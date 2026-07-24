@@ -28,6 +28,10 @@ class SyncPlan:
     to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
     unchanged: int
+    # Whether the registry had any file rows for the collection. False on a
+    # re-adopt (keep-data disable cleared them) or a first sync — the only cases
+    # where the LanceDB-vs-disk prune adds anything over the registry delta.
+    registry_tracked: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +118,7 @@ def compute_sync_plan(
         to_refresh=to_refresh,
         to_delete=to_delete,
         unchanged=unchanged,
+        registry_tracked=bool(known_files),
     )
 
 
@@ -130,15 +135,19 @@ def _stale_stored_documents(db: LanceDB, collection: str) -> list[str]:
     document_name``: ``document_name`` is only resolved-relative for sync-ingested
     docs — the pipeline default and captures store the basename, so reconstructing
     the path would mislocate a nested doc and prune it while live. Prune ONLY on
-    definite absence (``FileNotFoundError`` / ``NotADirectoryError``); a blank path
-    or any other lookup error (e.g. an unreadable parent) cannot prove absence, so
-    the doc is kept and retried next sync — one document's error never aborts the
-    scan.
+    definite absence (``FileNotFoundError`` / ``NotADirectoryError``); anything
+    unprovable is KEPT (fail-safe) and retried next sync — one document's error
+    never aborts the scan.
+
+    A non-absolute ``document_path`` is unprovable and kept: a NULL Arrow value
+    stringifies to ``"None"`` (not ``""``) through ``list_documents``, and a
+    relative or blank path can't be resolved against a known root here, so
+    ``os.path.isabs`` is the gate — only an absolute path can be proven absent.
     """
     stale: list[str] = []
     for doc in ChunkCatalog(db).list_documents(collection):
         path = str(doc["document_path"])
-        if not path:  # legacy/blank: cannot prove absence → keep
+        if not Path(path).is_absolute():  # NULL→"None", blank, or relative → keep
             continue
         try:
             os.lstat(path)  # succeeds → present
@@ -147,6 +156,20 @@ def _stale_stored_documents(db: LanceDB, collection: str) -> list[str]:
         except OSError:  # unreadable / IO error → cannot prove absence → keep
             continue
     return stale
+
+
+def _reconcile_deletes(plan: SyncPlan, db: LanceDB, collection: str) -> list[str]:
+    """Return the documents to delete this sync, order-stable and deduped.
+
+    When the registry tracks the collection's files, its delta
+    (``plan.to_delete``) already prunes deleted files, so no per-document lstat
+    scan is needed.  Only a re-adopt (registry blank, chunks present) needs the
+    LanceDB-vs-disk reconcile to prune files deleted while disabled.
+    """
+    if plan.registry_tracked:
+        return plan.to_delete
+    stale = _stale_stored_documents(db, collection)
+    return list(dict.fromkeys([*plan.to_delete, *stale]))
 
 
 @dataclass(frozen=True)
@@ -285,12 +308,7 @@ def sync_collection(
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
-    # Reconcile the ACTUAL stored documents against disk, not just the registry
-    # delta: a re-adopt (keep-data → re-enable) has empty registry file rows but
-    # live chunks, so this is the only source that prunes a file deleted while
-    # disabled. Union with the registry-derived deletes, order-stable + deduped.
-    stale = _stale_stored_documents(db, collection)
-    to_delete = list(dict.fromkeys([*plan.to_delete, *stale]))
+    to_delete = _reconcile_deletes(plan, db, collection)
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_refresh)} to refresh, "

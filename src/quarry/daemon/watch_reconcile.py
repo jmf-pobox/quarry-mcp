@@ -137,47 +137,56 @@ class WatchReconciler:
         active = ctx.database_name
         for collection in orphans:
             task = ctx.tasks.begin("orphan-sweep-purge")
-            job = CollectionPurgeJob(ctx.database, collection)
+            job = CollectionPurgeJob(
+                ctx.database, collection, ctx.settings.registry_path
+            )
             key = RouteKey(active, collection)
             if not ctx.ingest_queue.try_submit(key, job, task):
                 ctx.tasks.drop(task)  # full queue → the next reconcile re-sweeps
 
     def _read_orphans(self) -> set[str]:
-        """Off-thread: collections with chunks but neither registered nor retained.
+        """Off-thread: purge-marked collections that still have chunks.
 
-        Reads ``registered`` and ``retained`` inside ONE explicit transaction so
-        both SELECTs see a single consistent snapshot.  This is load-bearing, not
-        cosmetic: Python's sqlite3 opens an implicit transaction only before DML,
-        never before a SELECT, so without the ``BEGIN`` the two reads are
-        independent point-in-time queries.  A register (retained→directories) or
-        a keep-data deregister (directories→retained) committing BETWEEN them
-        would then fall through both sets and the collection — live or
-        operator-kept — would be misclassified as an orphan and purged.  Within
-        one transaction the mid-read commit is invisible to both SELECTs, so a
-        collection is always in exactly one of directories/retained, never
-        neither, closing both mutation directions regardless of read order.
+        CLOSED SET, not open world: the swept set is
+        ``(pending & chunk_cols) - registered - retained`` -- only collections the
+        registry EXPLICITLY marked for purge (a non-keep deregister or a subsume
+        eviction) and that still have chunks.  Captures, agent memories, and
+        remember targets are never marked, so they are structurally unreachable --
+        the open-world ``chunk_cols - registered - retained`` wiped them.  The
+        ``registered``/``retained`` subtraction stays as belt-and-suspenders: a
+        collection re-registered or kept after being marked is spared even if its
+        stale mark lingers.
 
-        Pure reads through ``ctx.database`` (cross-thread-safe) and the registry —
-        NO roster access, so nothing races the loop thread's watch scheduling.
+        All four reads run inside ONE explicit transaction so they see a single
+        consistent snapshot.  This is load-bearing: Python's sqlite3 opens an
+        implicit transaction only before DML, never before a SELECT, so without
+        the ``BEGIN`` a register/keep-data-deregister committing between reads
+        could fall through the sets.  Pure reads through ``ctx.database`` and the
+        registry — NO roster access, so nothing races the loop thread.
         """
         ctx = self._deps.ctx
         chunk_cols = {c["collection"] for c in ctx.database.catalog.list_collections()}
         conn = SyncRegistry(ctx.settings.registry_path)
         try:
-            conn.execute("BEGIN")  # one read snapshot spans both SELECTs
+            conn.execute("BEGIN")  # one read snapshot spans every SELECT
+            pending = conn.pending_purge_markers()
             registered = {reg.collection for reg in conn.list_registrations()}
             retained = set(conn.list_retained())
             conn.commit()
         finally:
             conn.close()
-        return chunk_cols - registered - retained
+        return (pending & chunk_cols) - registered - retained
 
     def _sync_enumerated(self) -> tuple[set[RouteKey], set[RouteKey], bool]:
         """Add/rescan every enumerated collection; return (watched, live, complete).
 
-        ``complete`` is False when a registry read raised partway — ``current`` is
+        ``complete`` is False when enumeration raised partway — ``current`` is
         then only a partial view, so the caller must skip every removal action.
-        Never propagates: a bad read is logged.
+        Never propagates: enumeration touches the roster, the registry, and the
+        filesystem (``ensure_database``, ``registrations``, ``resolve``), which can
+        raise error types outside the stdlib hierarchy (LanceDB/pyarrow), so it
+        catches broadly and fails closed — an escaped error would kill the safety
+        loop, stranding every reconcile.  The next full reconcile self-heals.
         """
         roster, submitter = self._deps.roster, self._deps.submitter
         current: set[RouteKey] = set()
@@ -192,7 +201,8 @@ class WatchReconciler:
                         self._deps.begin(name, collection, root)
                     else:
                         submitter.submit_scan(key, root.resolve())
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
+            # error may escape and kill the safety loop; fail closed and self-heal.
             logger.warning("watch: safety-scan reconcile failed: %s", exc)
             return set(), current, False
         return watched, current, True
@@ -214,7 +224,9 @@ class WatchReconciler:
             if key in live:
                 continue
             task = ctx.tasks.begin("subsume-purge-retry")
-            job = CollectionPurgeJob(ctx.database, key.collection)
+            job = CollectionPurgeJob(
+                ctx.database, key.collection, ctx.settings.registry_path
+            )
             if not ctx.ingest_queue.try_submit(key, job, task):
                 ctx.tasks.drop(task)
                 still.add(key)
