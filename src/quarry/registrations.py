@@ -46,8 +46,13 @@ class Registrations:
         )
         # An empty original_directory (legacy marker) is dropped: it matches no
         # resolved path, so a legacy archive is avoided by name but never adopted.
+        # Iterate REVERSED so the first marker wins on a duplicate original_directory
+        # (a forward dict comprehension is last-wins) — matching the daemon
+        # resolver's next() over collection-ordered markers, so local == remote.
         self._archived_by_dir = {
-            m.original_directory: m.collection for m in retained if m.original_directory
+            m.original_directory: m.collection
+            for m in reversed(retained)
+            if m.original_directory
         }
         return self
 

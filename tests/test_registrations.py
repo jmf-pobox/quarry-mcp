@@ -169,6 +169,22 @@ class TestUniqueCollectionName:
         assert view.archived_collection_for(owner) == "backend"
         assert view.archived_collection_for(other) is None
 
+    def test_archived_collection_for_is_first_wins_on_duplicate_directory(
+        self, tmp_path: Path
+    ) -> None:
+        # Two archives can share one original_directory (the retained PK is the
+        # collection, not the directory). The client must keep the FIRST marker
+        # seen -- aligned with the daemon resolver's next() over retained_markers()
+        # -- so local and remote re-adopt pick the same archive. Last-wins (a dict
+        # comprehension) would diverge from the daemon.
+        owner = tmp_path / "shared"
+        owner.mkdir()
+        view = Registrations(
+            [], retained=[_retained("aaa", owner), _retained("bbb", owner)]
+        )
+
+        assert view.archived_collection_for(owner) == "aaa"  # first, not last
+
     def test_remote_readopt_equals_local(self, tmp_path: Path) -> None:
         """Re-adopt off the wire payload matches re-adopt off the local registry.
 
