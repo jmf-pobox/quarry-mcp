@@ -138,6 +138,68 @@ class TestUniqueCollectionName:
 
         assert view.unique_collection_name(project) == "backend-acme"
 
+    def test_avoids_chunk_bearing_captures_or_memory_name(self, tmp_path: Path) -> None:
+        # No LIVE registration and no retained archive named "default", but the
+        # collection already holds chunks (a captures/memory/remember target such
+        # as "default-captures", "memory-x", or "default").  A new, unrelated
+        # directory whose leaf is "default" must NOT be handed that chunk-bearing
+        # name (which would merge its chunks into another project's collection) —
+        # it disambiguates off the parent.  FAILS against a live-plus-retained-only
+        # picker (which returns "default"); passes once chunk_collections joins
+        # the avoid-set.
+        parent = tmp_path / "acme"
+        project = parent / "default"
+        project.mkdir(parents=True)
+        view = Registrations([], chunk_collections=["default"])
+
+        assert view.unique_collection_name(project) == "default-acme"
+
+    def test_avoids_subsumed_evicted_child_chunks(self, tmp_path: Path) -> None:
+        # A parent registration once subsumed-and-evicted a child collection
+        # ("backend"); the child's directory row is gone but its chunks remain in
+        # LanceDB (drained lazily by the orphan sweep).  A DIFFERENT directory
+        # whose leaf is "backend" must not claim that still-chunk-bearing name and
+        # merge into the evicted child's chunks — it disambiguates instead.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        view = Registrations([], chunk_collections=["backend"])
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_hash_fallback_avoids_chunk_bearing_name(self, tmp_path: Path) -> None:
+        # Leaf, leaf-parent, AND the 8-char hash candidate all already hold chunks.
+        # The fallback must be avoid-checked too (not returned unchecked), so the
+        # hash suffix lengthens until it clears every chunk-bearing name.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        digest = hashlib.sha256(str(project).encode()).hexdigest()
+        taken = ["backend", "backend-acme", f"backend-{digest[:8]}"]
+        view = Registrations([], chunk_collections=taken)
+
+        name = view.unique_collection_name(project)
+
+        assert name not in taken
+        assert name.startswith("backend-")
+
+    def test_from_list_carries_chunk_collections(self, tmp_path: Path) -> None:
+        # from_list must thread the wire response's chunk_collections into the
+        # picker so the remote path avoids chunk-bearing names as a local view does.
+        from quarry.api import RegistrationList
+
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        listing = RegistrationList(
+            total_registrations=0,
+            registrations=[],
+            chunk_collections=["backend"],
+        )
+        view = Registrations.from_list(listing)
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
     def test_from_list_carries_retained(self, tmp_path: Path) -> None:
         # from_list must thread the wire response's retained markers into the
         # picker so the remote path avoids archived names as a local view does.

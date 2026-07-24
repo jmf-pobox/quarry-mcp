@@ -8,8 +8,9 @@ authorize a mutation from a divergent local copy.
 
 from __future__ import annotations
 
-import hashlib
 from typing import TYPE_CHECKING, Self, final
+
+from quarry.collection_namer import CollectionNamer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -26,9 +27,11 @@ class Registrations:
 
     # wire boundary — the daemon's registrations keyed by their absolute directory.
     _by_dir: dict[str, RegistrationInfo]
-    # Collection names a new registration must avoid: live names PLUS archived
-    # (retained/keep-data) names, so an unrelated directory never re-uses an
-    # archived collection and silently inherits its chunks.
+    # Collection names a new registration must avoid: live names, archived
+    # (retained/keep-data) names, AND every chunk-bearing collection.  Avoiding
+    # all chunk-bearing names is necessary-and-sufficient for merge-safety: a
+    # merge requires claiming a name that already has chunks, so an unrelated
+    # directory can never re-use one and silently inherit its chunks.
     _taken: frozenset[str]
     # Archived collections keyed by the directory they were kept from, so the
     # SAME directory re-enabling re-adopts its own kept chunks by name.
@@ -38,11 +41,14 @@ class Registrations:
         cls,
         registrations: Sequence[RegistrationInfo],
         retained: Sequence[RetainedCollection] = (),
+        chunk_collections: Sequence[str] = (),
     ) -> Self:
         self = super().__new__(cls)
         self._by_dir = {r.directory: r for r in registrations}
-        self._taken = frozenset(r.collection for r in registrations) | frozenset(
-            m.collection for m in retained
+        self._taken = (
+            frozenset(r.collection for r in registrations)
+            | frozenset(m.collection for m in retained)
+            | frozenset(chunk_collections)
         )
         # An empty original_directory (legacy marker) is dropped: it matches no
         # resolved path, so a legacy archive is avoided by name but never adopted.
@@ -58,8 +64,13 @@ class Registrations:
 
     @classmethod
     def from_list(cls, listing: RegistrationList) -> Self:
-        """Build a view from the daemon's list response, carrying retained markers."""
-        return cls(listing.registrations, listing.retained)
+        """Build a view from the daemon's list response.
+
+        Carries the retained markers (for re-adopt + archive avoidance) and the
+        chunk-bearing collection names (so the picker avoids every name already
+        holding chunks — the client-side half of the merge-proof invariant).
+        """
+        return cls(listing.registrations, listing.retained, listing.chunk_collections)
 
     def archived_collection_for(self, directory: Path) -> str | None:
         """Return the archived collection *directory* itself owns, or None.
@@ -93,21 +104,12 @@ class Registrations:
             current = parent
 
     def unique_collection_name(self, directory: Path) -> str:
-        """Return a collection name for *directory* not colliding with an existing one.
+        """Return a collection name for *directory* colliding with no taken name.
 
-        Avoids both live and archived (retained) names: a name kept by a prior
-        keep-data disable is off-limits, so an unrelated directory never adopts an
-        archived collection's chunks.  Prefers the leaf name; disambiguates with
-        the parent dir name, then a path-hash suffix.  A filesystem-root directory
-        has an empty ``.name``, so the leaf falls back to ``"root"`` — a collection
-        is never registered with an empty name.
+        Delegates to :class:`~quarry.collection_namer.CollectionNamer` over
+        ``_taken`` (live + archived + chunk-bearing names), so the remote client
+        and the local hooks resolver pick identically for the same state, and the
+        hash-suffix fallback is avoid-checked too — a different directory never
+        adopts an archive's or another project's chunks.
         """
-        leaf = directory.name or "root"
-        if leaf not in self._taken:
-            return leaf
-        parent = directory.parent.name or "root"
-        candidate = f"{leaf}-{parent}"
-        if candidate not in self._taken:
-            return candidate
-        suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-        return f"{leaf}-{suffix}"
+        return CollectionNamer(directory, self._taken).unique()
