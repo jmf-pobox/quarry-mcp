@@ -117,18 +117,36 @@ def compute_sync_plan(
     )
 
 
-def _stale_stored_documents(db: LanceDB, collection: str, resolved: Path) -> list[str]:
-    """Return LanceDB document_names for *collection* whose file is gone from disk.
+def _stale_stored_documents(db: LanceDB, collection: str) -> list[str]:
+    """Return document_names for *collection* whose file is DEFINITELY gone.
 
     The registry ``files`` rows are the delta's memory, but a keep-data disable
     deletes them while the chunks live on. On re-adopt the registry is blank, so
     ``compute_sync_plan`` alone cannot prune a file deleted while disabled. This
-    reconciles the ACTUAL stored documents against disk, so re-adopt auto-freshens
-    (deleted files are pruned, not just current files re-indexed). In steady state
-    it matches the registry-derived set, so it prunes only genuine orphans.
+    reconciles the ACTUAL stored documents against disk; in steady state it
+    matches the registry-derived set, so it only ever prunes genuine orphans.
+
+    Gate on the stored absolute ``document_path``, NOT ``resolved /
+    document_name``: ``document_name`` is only resolved-relative for sync-ingested
+    docs — the pipeline default and captures store the basename, so reconstructing
+    the path would mislocate a nested doc and prune it while live. Prune ONLY on
+    definite absence (``FileNotFoundError`` / ``NotADirectoryError``); a blank path
+    or any other lookup error (e.g. an unreadable parent) cannot prove absence, so
+    the doc is kept and retried next sync — one document's error never aborts the
+    scan.
     """
-    stored = {d["document_name"] for d in ChunkCatalog(db).list_documents(collection)}
-    return [name for name in sorted(stored) if not (resolved / name).exists()]
+    stale: list[str] = []
+    for doc in ChunkCatalog(db).list_documents(collection):
+        path = str(doc["document_path"])
+        if not path:  # legacy/blank: cannot prove absence → keep
+            continue
+        try:
+            os.lstat(path)  # succeeds → present
+        except (FileNotFoundError, NotADirectoryError):
+            stale.append(str(doc["document_name"]))  # definite absence → prune
+        except OSError:  # unreadable / IO error → cannot prove absence → keep
+            continue
+    return stale
 
 
 @dataclass(frozen=True)
@@ -271,7 +289,7 @@ def sync_collection(
     # delta: a re-adopt (keep-data → re-enable) has empty registry file rows but
     # live chunks, so this is the only source that prunes a file deleted while
     # disabled. Union with the registry-derived deletes, order-stable + deduped.
-    stale = _stale_stored_documents(db, collection, resolved)
+    stale = _stale_stored_documents(db, collection)
     to_delete = list(dict.fromkeys([*plan.to_delete, *stale]))
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
