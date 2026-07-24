@@ -12,21 +12,19 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.claudemd_block import ClaudeMdBlock
 from quarry.enable import (
-    _CLAUDEMD_BEGIN,
-    _CLAUDEMD_BLOCK,
-    _CLAUDEMD_END,
     _CONFIG_TEMPLATE,
     DisableResult,
     EnableResult,
-    _append_claudemd_block,
     _bootstrap_ethos_memory,
-    _remove_claudemd_block,
     _write_project_config,
     disable_project,
     enable_project,
 )
 from tests.conftest import FakeRegistryClient
+
+_BLOCK = ClaudeMdBlock()
 
 _NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
 
@@ -651,8 +649,8 @@ class TestEnableAppendsClaudemdBlock:
         claudemd = project / "CLAUDE.md"
         assert claudemd.exists()
         content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN in content
-        assert _CLAUDEMD_END in content
+        assert _BLOCK.begin in content
+        assert _BLOCK.end in content
         assert "Local semantic search is available via quarry." in content
 
 
@@ -669,7 +667,7 @@ class TestEnableClaudemdIdempotent:
         assert result1.claudemd_appended is True
         assert result2.claudemd_appended is False
         content = (project / "CLAUDE.md").read_text()
-        assert content.count(_CLAUDEMD_BEGIN) == 1
+        assert content.count(_BLOCK.begin) == 1
 
 
 class TestEnableAppendsToExistingClaudemd:
@@ -686,8 +684,8 @@ class TestEnableAppendsToExistingClaudemd:
         assert result.claudemd_appended is True
         content = claudemd.read_text()
         assert content.startswith("# My Project\n\nExisting content.\n")
-        assert _CLAUDEMD_BEGIN in content
-        assert _CLAUDEMD_END in content
+        assert _BLOCK.begin in content
+        assert _BLOCK.end in content
 
 
 class TestDisableRemovesClaudemdBlock:
@@ -704,8 +702,8 @@ class TestDisableRemovesClaudemdBlock:
         claudemd = project / "CLAUDE.md"
         assert claudemd.exists()
         content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN not in content
-        assert _CLAUDEMD_END not in content
+        assert _BLOCK.begin not in content
+        assert _BLOCK.end not in content
 
 
 class TestDisablePreservesOtherClaudemdContent:
@@ -724,51 +722,4 @@ class TestDisablePreservesOtherClaudemdContent:
         content = claudemd.read_text()
         assert "# My Project" in content
         assert "Keep this." in content
-        assert _CLAUDEMD_BEGIN not in content
-
-
-class TestDisableNoopWhenNoMarkers:
-    def test_no_markers_no_change(self, tmp_path: Path) -> None:
-        project = tmp_path / "myproject"
-        project.mkdir()
-        claudemd = project / "CLAUDE.md"
-        original = "# Untouched\n"
-        claudemd.write_text(original)
-
-        removed = _remove_claudemd_block(project)
-
-        assert removed is False
-        assert claudemd.read_text() == original
-
-
-class TestDisableNoopWhenNoClaudemd:
-    def test_missing_file_no_error(self, tmp_path: Path) -> None:
-        project = tmp_path / "myproject"
-        project.mkdir()
-
-        removed = _remove_claudemd_block(project)
-
-        assert removed is False
-
-
-class TestAppendClaudemdBlockDirect:
-    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
-        appended = _append_claudemd_block(tmp_path)
-
-        assert appended is True
-        claudemd = tmp_path / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert content == _CLAUDEMD_BLOCK
-
-    def test_appends_newline_to_file_without_trailing_newline(
-        self, tmp_path: Path
-    ) -> None:
-        claudemd = tmp_path / "CLAUDE.md"
-        claudemd.write_text("no trailing newline")
-
-        appended = _append_claudemd_block(tmp_path)
-
-        assert appended is True
-        content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN in content
+        assert _BLOCK.begin not in content

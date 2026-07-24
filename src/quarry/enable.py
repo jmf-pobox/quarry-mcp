@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -37,35 +36,6 @@ class RegistryClient(Protocol):
     def register(self, req: RegisterRequest) -> TaskAccepted: ...
     def deregister(self, req: DeregisterRequest) -> DeregisterAccepted: ...
     def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted: ...
-
-
-_CLAUDEMD_BEGIN = "<!-- quarry:begin -->"
-_CLAUDEMD_END = "<!-- quarry:end -->"
-
-_CLAUDEMD_BLOCK = """\
-<!-- quarry:begin -->
-## Quarry
-
-Local semantic search is available via quarry. Use it to search indexed
-documents by meaning, ingest new content, and recall knowledge across sessions.
-
-- Before using WebSearch or WebFetch for research, run `/find` with the query
-  first. Quarry indexes this codebase, design docs, prior session transcripts,
-  and web pages from previous research. If quarry returns relevant results,
-  use them — do not re-research what has already been found.
-- Use grep for symbol lookups and value lookups; use quarry for "why", "how",
-  and "what did we decide about X" questions.
-- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
-  `/quarry`
-- **Research agent**: `researcher` — combines quarry local search with web
-  research. Use for deep investigation across local docs and the web.
-- **Auto-behaviors**: working directory is auto-indexed at session start;
-  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
-  context compaction.
-- **Search tip**: natural language queries work best ("What were Q3 margins?"
-  outperforms "Q3 margins").
-<!-- quarry:end -->
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +108,7 @@ def enable_project(
     a local ``SyncRegistry``.  The project files (config.md, CLAUDE.md, ethos ext)
     are the client's and are written locally.
     """
+    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
@@ -165,7 +136,7 @@ def enable_project(
     memory_collections = [f"memory-{h}" for h in created_handles]
 
     config_path = _write_project_config(directory)
-    claudemd_appended = _append_claudemd_block(directory)
+    claudemd_appended = ClaudeMdBlock().append_to(directory)
     if claudemd_appended:
         logger.info("Appended quarry instructions to CLAUDE.md")
 
@@ -206,6 +177,7 @@ def disable_project(
     or CLAUDE.md claiming enabled.
     """
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
+    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
     from quarry.client.errors import QuarryError  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
@@ -243,7 +215,7 @@ def disable_project(
     if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
         quarry_dir.rmdir()
 
-    claudemd_removed = _remove_claudemd_block(directory)
+    claudemd_removed = ClaudeMdBlock().remove_from(directory)
     if claudemd_removed:
         logger.info("Removed quarry instructions from CLAUDE.md")
 
@@ -381,46 +353,3 @@ def _write_project_config(directory: Path) -> str:
     except FileExistsError:
         pass
     return str(config_path)
-
-
-def _append_claudemd_block(directory: Path) -> bool:
-    """Append quarry instruction block to CLAUDE.md. Idempotent.
-
-    Creates the file if it does not exist. Returns True if the block
-    was appended, False if it was already present.
-    """
-    claudemd = directory / "CLAUDE.md"
-    if claudemd.exists():
-        content = claudemd.read_text(encoding="utf-8")
-        if _CLAUDEMD_BEGIN in content:
-            return False
-        if content and not content.endswith("\n"):
-            content += "\n"
-        content += "\n" + _CLAUDEMD_BLOCK
-    else:
-        content = _CLAUDEMD_BLOCK
-    claudemd.write_text(content, encoding="utf-8")
-    return True
-
-
-def _remove_claudemd_block(directory: Path) -> bool:
-    """Remove quarry instruction block from CLAUDE.md.
-
-    Removes everything from ``<!-- quarry:begin -->`` through
-    ``<!-- quarry:end -->`` inclusive. Both markers must be present.
-    Cleans up extra trailing blank lines left by removal. Returns
-    True if a block was removed, False otherwise.
-    """
-    claudemd = directory / "CLAUDE.md"
-    if not claudemd.exists():
-        return False
-    content = claudemd.read_text(encoding="utf-8")
-    if _CLAUDEMD_BEGIN not in content or _CLAUDEMD_END not in content:
-        return False
-    pattern = (
-        r"\n?" + re.escape(_CLAUDEMD_BEGIN) + r".*?" + re.escape(_CLAUDEMD_END) + r"\n?"
-    )
-    cleaned = re.sub(pattern, "", content, flags=re.DOTALL)
-    cleaned = cleaned.rstrip() + "\n"
-    claudemd.write_text(cleaned, encoding="utf-8")
-    return True

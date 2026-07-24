@@ -18,7 +18,6 @@ Hook events:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import os
 import subprocess
@@ -37,59 +36,8 @@ if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
     from quarry.client import QuarryClient
     from quarry.config import Settings
-    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-
-def _archived_collection_for(conn: SyncRegistry, directory: Path) -> str | None:
-    """Return the archived (keep-data) collection *directory* itself owns, else None.
-
-    The hooks-side counterpart of ``Registrations.archived_collection_for``:
-    session-start applies the same directory-identity re-adopt policy over the
-    registry's ``retained_markers`` that ``quarry enable`` applies over the wire.
-    A legacy blank-origin marker matches no resolved directory and is never
-    re-adopted.  None is the "this directory owns no archive" contract.
-    """
-    target = str(directory.resolve())
-    return next(
-        (
-            m.collection
-            for m in conn.retained_markers()
-            if m.original_directory == target
-        ),
-        None,
-    )
-
-
-def _unique_collection_name(
-    conn: SyncRegistry,
-    directory: Path,
-) -> str:
-    """Derive a collection name that collides with no live OR archived collection.
-
-    Prefers ``directory.name``.  If that's taken — by a live registration or by a
-    keep-data ``retained`` marker — appends the parent directory name to
-    disambiguate (``leaf-parent``), then a path-hash suffix.  Avoiding archived
-    names keeps an unrelated directory from silently inheriting another project's
-    kept chunks (and from tripping ``register_directory``'s identity guard).
-    """
-    retained = set(conn.list_retained())
-
-    def _available(name: str) -> bool:
-        return conn.get_registration(name) is None and name not in retained
-
-    candidate = directory.name
-    if _available(candidate):
-        return candidate
-    # Disambiguate with parent directory name.
-    parent = directory.parent.name or "root"
-    candidate = f"{directory.name}-{parent}"
-    if _available(candidate):
-        return candidate
-    # Last resort: use the full resolved path hash suffix.
-    suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-    return f"{directory.name}-{suffix}"
 
 
 def _resolve_settings() -> Settings:
@@ -228,6 +176,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     only fires when no coverage exists.  If cwd is a parent of existing
     child registrations, auto-register is skipped to prevent subsumption.
     """
+    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
     from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     cwd = _as_dir(payload.get("cwd"))
@@ -247,9 +196,10 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
 
     settings = _resolve_settings()
     conn = SyncRegistry(settings.registry_path)
+    resolver = CollectionResolver(conn)
     try:
         # Step 1: Walk up from cwd to find covering registration.
-        collection = _collection_for_cwd_conn(conn, str(directory))
+        collection = resolver.covering_collection(str(directory))
 
         if collection is None:
             # Step 2: No coverage -- check for descendant registrations
@@ -284,8 +234,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             # its name so the session-start auto-index re-adopts the kept chunks
             # (and the background sync auto-freshens), exactly as `quarry enable`
             # does. A cwd owning no archive falls through to a fresh unique name.
-            collection = _archived_collection_for(conn, directory) or (
-                _unique_collection_name(conn, directory)
+            collection = resolver.archived_collection_for(directory) or (
+                resolver.unique_collection_name(directory)
             )
             conn.register_directory(directory, collection)
             logger.info(
@@ -322,31 +272,6 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         }
     finally:
         conn.close()
-
-
-def _collection_for_cwd_conn(
-    conn: SyncRegistry,
-    cwd: str,
-) -> str | None:
-    """Resolve the registered collection for cwd using an open connection.
-
-    Walk up from cwd to find a registered parent or exact match.
-    """
-    registrations = conn.list_registrations()
-    if not registrations:
-        return None
-
-    reg_map = {r.directory: r.collection for r in registrations}
-    current = Path(cwd).resolve()
-    while True:
-        key = str(current)
-        if key in reg_map:
-            return reg_map[key]
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return None
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
