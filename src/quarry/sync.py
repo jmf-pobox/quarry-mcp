@@ -23,7 +23,7 @@ from quarry.types import LanceDB
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncPlan:
     to_ingest: list[Path]
     to_refresh: list[tuple[Path, str]]
@@ -123,7 +123,7 @@ def compute_sync_plan(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncResult:
     collection: str
     ingested: int

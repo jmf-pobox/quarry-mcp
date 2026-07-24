@@ -641,3 +641,18 @@ class TestRetainedCollections:
             assert conn.get_registration("backend") is None  # dir_b did NOT adopt
         finally:
             conn.close()
+
+    def test_deregister_never_registered_marks_nothing(self, tmp_path: Path):
+        """Deregistering a collection with no directory row marks nothing pending.
+
+        The mark-pending guard keys on a real ``directories`` row, so a
+        capture/memory/remember collection — which has none — can never be flagged
+        for the orphan sweep, independent of any caller-side gate.
+        """
+        conn = SyncRegistry(tmp_path / "r.db")
+        try:
+            conn.deregister_directory("never-registered-collection")
+            assert conn.markers.pending() == set()
+            assert conn.markers.list_retained() == []
+        finally:
+            conn.close()

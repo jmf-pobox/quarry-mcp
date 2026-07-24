@@ -40,15 +40,19 @@ class CollectionPurger:
         self._ctx = ctx
         return self
 
-    async def purge(self, collection: str, label: str) -> TaskState:
+    async def purge(
+        self, collection: str, label: str, *, force: bool = False
+    ) -> TaskState:
         """Purge *collection*'s chunks through its FIFO worker; poll to completion.
 
         Return the queued purge task so the caller can read ``deleted`` or detect
         a failed admission — the outcome an observable cleanup depends on.
+        ``force`` skips the job's execution-time re-check (self-subsume clean
+        slate only — see :meth:`CollectionPurgeJob._purge`).
         """
         purge = self._ctx.tasks.begin(label)
         job = CollectionPurgeJob(
-            self._ctx.database, collection, self._ctx.settings.registry_path
+            self._ctx.database, collection, self._ctx.settings.registry_path, force
         )
         key = RouteKey(self._ctx.database_name, collection)
         await self._admit(key, job, purge)

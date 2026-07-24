@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self
+from typing import NoReturn, Self
 
 from quarry.collection_marker_store import CollectionMarkerStore
 from quarry.sync_file_store import FileStore
@@ -132,28 +132,30 @@ class SyncRegistry:
             msg = f"Directory not found: {resolved}"
             raise FileNotFoundError(msg)
 
-        # Guard BEFORE any mutation so a rejection leaves the registry untouched.
-        self._guard_retained_identity(resolved, collection)
-        subsumed = self._enforce_subsumption(resolved)
-
         now = datetime.now(UTC).isoformat()
+        # BEGIN IMMEDIATE holds the write lock across the subsumption READ and the
+        # INSERT + marker writes as ONE atomic unit; otherwise a concurrent
+        # overlapping register slips between them and parent + child coexist
+        # (duplicate indexing). A concurrent register serializes on the lock
+        # (busy_timeout=5000). Guard + subsumption run under it so a rejection is
+        # consistent with what the INSERT would see.
         try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._guard_retained_identity(resolved, collection)
+            subsumed = self._enforce_subsumption(resolved)
             self._conn.execute(
                 "INSERT INTO directories (directory, collection, registered_at) "
                 "VALUES (?, ?, ?)",
                 (str(resolved), collection, now),
             )
-            # The guard proved any surviving marker is this same directory's, so
-            # re-registering re-adopts its kept chunks: drop the retained marker to
-            # make the collection live again, and drop any pending-purge marker so
-            # the orphan sweep cannot delete the now-live collection's chunks. Both
-            # execute on this connection, committing with the INSERT above.
+            # Same directory re-adopting: drop its retained marker (collection live
+            # again) and any pending-purge marker (sweep must not delete it).
             self._markers.clear_retained(collection)
             self._markers.clear_pending(collection)
         except sqlite3.IntegrityError:
-            self._raise_for_integrity(resolved, collection)
-        except sqlite3.Error:
-            self._conn.rollback()
+            self._raise_for_integrity(resolved, collection)  # rolls back + raises
+        except (ValueError, sqlite3.Error):
+            self._conn.rollback()  # release the lock; registry untouched
             raise
         self._conn.commit()
         registration = DirectoryRegistration(
@@ -201,7 +203,7 @@ class SyncRegistry:
             )
             self._markers.mark_pending(child_collection)
 
-    def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
+    def _raise_for_integrity(self, resolved: Path, collection: str) -> NoReturn:
         """Translate an INSERT IntegrityError into a precise ValueError."""
         self._conn.rollback()
         existing = self._conn.execute(
@@ -253,11 +255,13 @@ class SyncRegistry:
             # pending-purge mark so the orphan sweep never deletes the kept chunks.
             self._markers.mark_retained(collection, original_directory)
             self._markers.clear_pending(collection)
-        else:
-            # Mark for purge IN THE SAME transaction as the row removal: the sweep
-            # purges ONLY explicitly-marked collections, so a shed immediate purge
-            # is drained on a later reconcile, surviving a restart (the closed-set
-            # backstop that keeps captures/memories/remember targets unreachable).
+        elif dir_row is not None:
+            # Mark for purge ONLY when a real directory row existed, IN THE SAME
+            # transaction as its removal: the sweep purges ONLY explicitly-marked
+            # collections, so a shed immediate purge is drained on a later
+            # reconcile, surviving a restart. Gating on ``dir_row`` at the marker
+            # itself means a capture/memory/remember collection — which has no
+            # directory row — can never be marked, independent of the caller.
             self._markers.mark_pending(collection)
         self._conn.commit()
         return document_names

@@ -109,13 +109,17 @@ class RegistrationRoutes(RouteGroup):
 
     @staticmethod
     def _required_field(body: Mapping[str, object], field: str) -> str | JSONResponse:
-        """Return the non-empty string *field* from *body*, or a 400 response."""
+        """Return the non-empty, stripped string *field* from *body*, or a 400.
+
+        Returns the STRIPPED value: validating ``value.strip()`` but returning the
+        raw value would let ``" /path "`` / ``"col "`` pass and be used verbatim.
+        """
         value = body.get(field)
         if not isinstance(value, str) or not value.strip():
             return JSONResponse(
                 {"error": f"Missing required field: {field}"}, status_code=400
             )
-        return value
+        return value.strip()
 
     async def _delete(self, request: Request) -> JSONResponse:
         """Deregister synchronously (existence + registry row); purge chunks async."""

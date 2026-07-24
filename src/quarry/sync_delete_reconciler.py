@@ -42,7 +42,7 @@ class DeleteReconciler:
         reconcile to prune files deleted while disabled.
         """
         if registry_tracked:
-            return registry_deletes
+            return list(dict.fromkeys(registry_deletes))
         return list(dict.fromkeys([*registry_deletes, *self._stale_documents()]))
 
     def _stale_documents(self) -> list[str]:

@@ -138,9 +138,10 @@ class FakeRegistryClient:
     _registered: list[RegisterRequest]
     _deregistered: list[DeregisterRequest]
     _deleted: list[str]
-    # Collections archived by a keep-data deregister, keyed by the directory they
-    # were kept from — mirrors the daemon's retained_collections so the client
-    # sees archived names AND their origin (for re-adopt) over the wire.
+    # Collections archived by a keep-data deregister: {collection: original_dir},
+    # keyed by collection name with its origin directory as the value — mirroring
+    # the real retained_collections (PK ``collection``, ``original_directory``
+    # column) so the client sees archived names AND their origin (for re-adopt).
     _retained: dict[str, str]
     # When set, delete_collection raises it — models a rejected captures purge.
     _delete_error: Exception | None

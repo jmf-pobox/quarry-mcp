@@ -89,6 +89,10 @@ class CollectionPurgeJob:
     database: Database
     collection: str
     registry_path: Path
+    # Skip the execution-time re-check and delete unconditionally. Set ONLY for
+    # the self-subsume clean-slate purge (see _purge), never the sweep/deregister
+    # purges, which stay marker-gated.
+    force: bool = False
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
@@ -118,14 +122,19 @@ class CollectionPurgeJob:
         still marked and neither registered nor retained. Once the chunks are
         gone the mark is spent, so clearing it keeps the closed set tight and
         stops a future collection re-using the name from being swept on it.
+
+        The re-check is skipped when ``force`` is set: the self-subsume
+        clean-slate purge MUST delete the widened parent's now-registered
+        collection's OLD narrower-root chunks — the re-check would see it
+        registered and wrongly skip, leaving duplicates. Forcing is safe there
+        because run_register awaits the purge strictly before start_watching, and
+        directories.collection is UNIQUE, so no concurrent same-name register can
+        race it (unlike the sweep/deregister purges, which keep the re-check).
         """
         conn = SyncRegistry(self.registry_path)
         try:
             conn.execute("BEGIN")
-            still_pending = self.collection in conn.markers.pending()
-            registered = conn.get_registration(self.collection) is not None
-            retained = self.collection in conn.markers.list_retained()
-            if not still_pending or registered or retained:
+            if not self.force and self._superseded(conn):
                 conn.commit()  # re-registered / kept / already cleared → do NOT delete
                 return 0
             deleted = self.database.store.delete_collection(self.collection)
@@ -134,3 +143,15 @@ class CollectionPurgeJob:
         finally:
             conn.close()
         return deleted
+
+    def _superseded(self, conn: SyncRegistry) -> bool:
+        """Return whether the collection is no longer due for purge.
+
+        Read under the caller's open transaction so the three checks share one
+        snapshot: a purge is superseded once the collection is re-registered,
+        kept (retained), or its mark already cleared.
+        """
+        still_pending = self.collection in conn.markers.pending()
+        registered = conn.get_registration(self.collection) is not None
+        retained = self.collection in conn.markers.list_retained()
+        return not still_pending or registered or retained

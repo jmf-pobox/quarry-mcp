@@ -127,7 +127,14 @@ class RegistrationLifecycle:
         purges — so an unpurged child is never swallowed into a clean success.
         """
         self._ctx.watch_loop.stop_watching(collection)
-        purge = await CollectionPurger(self._ctx).purge(collection, "subsume-purge")
+        # force=True: this is the self-subsume clean-slate purge, awaited strictly
+        # before start_watching and safe from a same-name race (directories PK).
+        # It MUST delete the widened parent's old narrower-root chunks even though
+        # the parent has re-registered the same collection name, which the
+        # execution-time re-check would otherwise treat as "registered → skip".
+        purge = await CollectionPurger(self._ctx).purge(
+            collection, "subsume-purge", force=True
+        )
         if purge.status == "failed":
             logger.warning(
                 "subsume purge failed for collection %s: %s",
