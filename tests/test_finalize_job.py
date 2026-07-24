@@ -175,3 +175,35 @@ def test_force_bypasses_the_registered_recheck(tmp_path: Path) -> None:
     )._purge()
     assert forced > 0  # force bypasses the re-check
     assert _docnames(db) == set()
+
+
+def test_force_never_deletes_retained_collection(tmp_path: Path) -> None:
+    """force NEVER bypasses the retained guard — keep-data chunks are absolute.
+
+    A run_register self-subsume force purge is a 202 background task; while it is
+    queued, a concurrent keep-data deregister of the same collection can mark it
+    retained (an independent commit, no FIFO slot). The force purge must then
+    honor that retained marker and delete nothing — retained is the one invariant
+    force cannot cross, or keep-data's promise breaks.
+    """
+    settings = _settings(tmp_path)
+    db = get_db(settings.lancedb_path)
+    database = Database(db)
+    dir_x = tmp_path / "x"
+    dir_x.mkdir()
+
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        conn.register_directory(dir_x, "x")
+        _seed(database, settings, dir_x, "orig.md")
+        conn.deregister_directory("x", keep_data=True)  # retained, chunks kept
+        assert conn.markers.list_retained() == ["x"]
+    finally:
+        conn.close()
+
+    deleted = CollectionPurgeJob(
+        database, "x", settings.registry_path, force=True
+    )._purge()
+
+    assert deleted == 0  # retained → force still refuses to delete
+    assert _docnames(db)  # kept chunks survive

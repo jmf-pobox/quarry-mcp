@@ -123,19 +123,21 @@ class CollectionPurgeJob:
         gone the mark is spent, so clearing it keeps the closed set tight and
         stops a future collection re-using the name from being swept on it.
 
-        The re-check is skipped when ``force`` is set: the self-subsume
-        clean-slate purge MUST delete the widened parent's now-registered
-        collection's OLD narrower-root chunks — the re-check would see it
-        registered and wrongly skip, leaving duplicates. Forcing is safe there
-        because run_register awaits the purge strictly before start_watching, and
-        directories.collection is UNIQUE, so no concurrent same-name register can
-        race it (unlike the sweep/deregister purges, which keep the re-check).
+        ``force`` bypasses the still-pending/registered checks (the self-subsume
+        clean-slate purge MUST delete the widened parent's OLD narrower-root
+        chunks even though it re-registered the same name), but it NEVER bypasses
+        the retained guard: retained is an absolute invariant. A concurrent
+        keep-data deregister can mark the collection retained (an independent
+        commit, no FIFO slot) while a force purge is queued; deleting then would
+        wipe the chunks keep-data was asked to preserve. So retained is checked
+        standalone and always honored, force or not.
         """
         conn = SyncRegistry(self.registry_path)
         try:
             conn.execute("BEGIN")
-            if not self.force and self._superseded(conn):
-                conn.commit()  # re-registered / kept / already cleared → do NOT delete
+            retained = self.collection in conn.markers.list_retained()
+            if retained or (not self.force and self._superseded(conn)):
+                conn.commit()  # retained / re-registered / cleared → do NOT delete
                 return 0
             deleted = self.database.store.delete_collection(self.collection)
             conn.markers.clear_pending(self.collection)
