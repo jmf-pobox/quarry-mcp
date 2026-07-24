@@ -35,10 +35,17 @@ across `transform`, `index`, and `connector`).
   keep-data re-adopt. Registering a directory that subsumes an existing narrower
   registration now tears down the child's watch and purges its chunks before
   installing the parent watch; a deregister or subsume purge shed under a full
-  queue is retried by the periodic safety-scan reconcile. A durable disk-derived
-  orphan sweep (`orphan = chunks ∖ (registered ∪ retained)`, computed from real
-  DB + registry state under one read transaction each reconcile) is the backstop
-  that survives a daemon restart. A new `retained_collections` marker records the
+  queue is retried by the periodic safety-scan reconcile. A durable
+  orphan sweep purges only collections the registry has **explicitly marked for
+  purge** (the `pending_purge_collections` table — marked on a non-keep-data
+  deregister or a subsume eviction, in the same transaction as the directory-row
+  delete), never an open-world "everything not currently registered"; so captures,
+  agent memories, and `remember` targets — collections that legitimately have no
+  directory registration — are structurally never swept. The marker survives a
+  daemon restart (a shed purge is drained by the next sweep), and
+  `CollectionPurgeJob` re-checks the mark at execution time so a disable→re-enable
+  toggle can't race the sweep into deleting live chunks. A new
+  `retained_collections` marker records the
   directory a `--keep-data` disable was taken from, so a *different* directory
   reusing an archived collection's leaf name (`backend`, `docs`, …) can no longer
   silently adopt its chunks — a cross-project search-merge that was previously
@@ -49,8 +56,10 @@ across `transform`, `index`, and `connector`).
   transiently-unreadable file is never wrongly deleted). The retained set is
   surfaced on `GET /v1/registrations` for remote/local parity. The whole removal
   lifecycle is modeled in Z (`docs/spec/watch_lifecycle.tex`) and ProB
-  model-checked (invariants I1–I8, 85k states) — the model and adversarial review
-  caught three data-safety defects before merge; see DES-045a.
+  model-checked (invariants I1–I9, incl. non-directory collections; 170k states) —
+  the model and adversarial review caught five data-safety defects before merge,
+  one of which (an open-world sweep that would have wiped all captures and agent
+  memories on a 5-minute default timer) was catastrophic; see DES-045a.
 - **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
   daemon-first split is now enforced structurally, not by convention. A new
   import-linter contract (`.importlinter`, wired into `make check` via

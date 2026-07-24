@@ -21,12 +21,33 @@ database and every invariant of interest is stated per route key.  The
 directory tree and its ancestor relation --- the layer that
 \textit{SyncRegistry} enforces --- are abstracted away: their only effect on the
 daemon state is the set of collections a register call \textit{subsumes}, which
-enters the model as the input $subsumed?$.  Three collections suffice to exhibit
-a parent, a distinct child, and a same-name self-subsume.
+enters the model as the input $subsumed?$.
+
+The database holds collections of two classes, and conflating them was a fatal
+error in an earlier draft of this model.  Class (i) is a \textit{directory}
+collection: it has a $directories$ row, and its lifecycle is register / watch /
+deregister.  Class (ii) is a \textit{non-directory} collection --- a capture
+(\texttt{default-captures}, \texttt{<repo>-captures}), an agent memory
+(\texttt{memory-<handle>}), the \texttt{default} remember target, a URL-host
+collection --- that bears chunks but is \textit{never} directory-registered.  The
+earlier model had only class (i), which made the open-world set $chunks \setminus
+(registered \cup retained)$ look like ``the orphans''; in truth it also contains
+every class-(ii) collection, so a sweep of that set wipes captures and memories.
+Two directory collections exhibit a parent, a same-name self-subsume, and the
+directory identity I7 needs; one non-directory collection exhibits class (ii).
 
 \begin{zed}
-  COLL ::= ca | cb | cc
+  COLL ::= ca | cb | cap
 \end{zed}
+
+$dircoll$ names the directory-registrable collections; the rest are class (ii).
+Registration, watch, retention, and purge markers apply only to $dircoll$.
+
+\begin{axdef}
+  dircoll : \power COLL
+\where
+  dircoll = \{ ca, cb \}
+\end{axdef}
 
 One further fact of the directory layer must be kept, because I7 depends on it:
 the \textit{directory} a collection is registered under.  A $keep\_data$
@@ -81,10 +102,17 @@ because no invariant of interest spans both and coupling them would only enlarge
 the state.  The set $stale$ is a second \textit{auxiliary} observer, the
 document analogue of $moved$: it records any collection a re-adopt leaves holding
 a document absent from disk (a stale survivor).  A correct freshen keeps $stale$
-empty.  Beyond the $dir$ coupling the schema carries typing only: no safety
-predicate is baked in, so every operation is feasible into any type-correct
-after-state and a safety violation, if one is reachable, is actually reached
-rather than silently pruned by the schema of the primed state.
+empty.  The last two components, $sweptUnmarked$ and $sweptProtected$, are the
+\textit{auxiliary} observers for the sweep: the first records a collection the
+sweep deletes though it was never marked (the class-(ii) data loss, I9), the
+second one it deletes though it is registered or retained (I6).  Both stay empty
+under the closed-set sweep.  The schema asserts two structural facts: the $dir$
+domain coupling, and that registration, watch, retention, and the purge marker
+$pending$ apply only to directory collections --- $registered$, $watched$,
+$pending$, $retained$ all lie within $dircoll$, so a class-(ii) collection is
+never registered, watched, retained, or marked.  Otherwise it carries typing
+only: no safety predicate is baked in, so a violation, if reachable, is reached
+rather than pruned by the schema of the primed state.
 
 \begin{schema}{Watch}
   registered : \power COLL \\
@@ -95,13 +123,16 @@ rather than silently pruned by the schema of the primed state.
   dir : COLL \pfun DIR \\
   moved : \power COLL \\
   stored : COLL \fun \power DOC \\
-  stale : \power COLL
+  stale : \power COLL \\
+  sweptUnmarked : \power COLL \\
+  sweptProtected : \power COLL
   \where
-  \dom dir = registered \cup retained
+  \dom dir = registered \cup retained \\
+  registered \cup watched \cup pending \cup retained \subseteq dircoll
 \end{schema}
 
 Initially nothing is registered, watched, pending, chunked, retained, backed by
-a directory, moved, stored, or stale.
+a directory, moved, stored, stale, or swept.
 
 \begin{schema}{Init}
   Watch \\
@@ -114,7 +145,9 @@ a directory, moved, stored, or stale.
   dir = \emptyset \\
   moved = \emptyset \\
   stored = \{ c : COLL @ c \mapsto \emptyset \} \\
-  stale = \emptyset
+  stale = \emptyset \\
+  sweptUnmarked = \emptyset \\
+  sweptProtected = \emptyset
 \end{schema}
 
 \section{The safety invariant}
@@ -127,33 +160,35 @@ the model checker searches for as a reachable state.
   Watch \\
   \where
   registered \cap pending = \emptyset \\
-  chunks \setminus (registered \cup retained) \subseteq pending \\
+  ((chunks \cap dircoll) \setminus (registered \cup retained)) \subseteq pending \\
   registered \subseteq watched \\
   watched \cap pending = \emptyset \\
   moved = \emptyset \\
-  stale = \emptyset
+  stale = \emptyset \\
+  sweptProtected = \emptyset \\
+  sweptUnmarked = \emptyset
 \end{schema}
 
-The six conjuncts are, in order, I1, I2, I3, I5, I7 and I8.  I1: a registered
-collection never carries a deferred purge.  I2: a collection whose chunks exist
-while it is neither registered nor deliberately retained is tracked for purging.
-I3: a registered collection is watched (a null observer handle is still a
-watched key; the reconcile disk-scan is its correctness backstop).  I5: a
-watched collection --- one whose observer feeds inserts --- never simultaneously
-carries a deferred purge, so the single writer per route key is never split
-between an inserting watch and a deleting purge.  I7: no archived collection's
-chunks are ever adopted by a directory other than the one that archived them ---
-stated as $moved = \emptyset$ over the auxiliary observer, and discharged by the
-identity guard on the $Register$ transition (see below).  I4 (reconcile never
-tears down a live watch) is a property of the $Reconcile$ transitions rather than
-of a single state, and is discharged below by observing that each preserves I3.
-I6 (the disk-derived sweep deletes only true orphans --- never a registered or
-retained collection) is likewise a property of the $Sweep$ transition, discharged
-by its delete set $chunks \setminus (registered \cup retained)$, which excludes
-$registered \cup retained$ by construction.  I8: after a re-adopt, the re-adopted
-collection holds no document absent from disk --- stated as $stale = \emptyset$
-over the second observer, and discharged by the freshen half of the $ReAdoptFreshen$
-transition, which sets the collection's stored documents to the on-disk set.
+The eight conjuncts are, in order, I1, I2, I3, I5, I7, I8, I6 and I9.  I1: a
+registered collection never carries a deferred purge.  I2 (revised): a
+\textit{directory} collection whose chunks exist while it is neither registered
+nor deliberately retained is marked for purging.  The restriction to $dircoll$ is
+the correction --- the earlier I2 said this of \textit{every} chunk-bearing
+collection, which is exactly the closed-world falsehood a class-(ii) capture
+(chunks, never registered, never retained, never marked) violates.  I3: a
+registered collection is watched (a null observer handle is still a watched key;
+the reconcile disk-scan is its correctness backstop).  I5: a watched collection
+--- one whose observer feeds inserts --- never simultaneously carries a deferred
+purge, so the single writer per route key is never split between an inserting
+watch and a deleting purge.  I7: no archived collection's chunks are ever adopted
+by a directory other than the one that archived them, stated as $moved =
+\emptyset$.  I8: after a re-adopt, the collection holds no document absent from
+disk, stated as $stale = \emptyset$.  I6 (revised): the sweep never deletes a
+registered or retained collection, stated as $sweptProtected = \emptyset$.  I9:
+the sweep never deletes an \textit{unmarked} collection --- in particular a
+class-(ii) capture or memory --- stated as $sweptUnmarked = \emptyset$.  I4
+(reconcile never tears down a live watch) is a property of the $Reconcile$
+transitions and is discharged below by observing that each preserves I3.
 
 \section{Producing chunks}
 
@@ -174,7 +209,33 @@ registered collection.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \oplus \{ c? \mapsto disk? \} \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
+\end{schema}
+
+A capture write or an agent-memory ingest produces chunks for a
+\textit{non-directory} collection --- one outside $dircoll$, never registered,
+watched, marked, or retained.  This is class (ii), and it is the whole reason the
+sweep must be a closed set: these chunks exist with no directory backing and must
+survive every sweep.
+
+\begin{schema}{CaptureProduce}
+  \Delta Watch \\
+  c? : COLL \\
+  \where
+  c? \notin dircoll \\
+  chunks' = chunks \cup \{ c? \} \\
+  registered' = registered \\
+  watched' = watched \\
+  pending' = pending \\
+  retained' = retained \\
+  dir' = dir \\
+  moved' = moved \\
+  stored' = stored \\
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Register}
@@ -204,18 +265,21 @@ and $moved$ is untouched; a fresh registration takes any directory $d?$.
   subsumed? : \power COLL \\
   shed? : \power COLL \\
   \where
+  c? \in dircoll \\
   c? \notin retained \\
   subsumed? \subseteq registered \cup \{ c? \} \\
   shed? \subseteq subsumed? \\
   registered' = (registered \setminus subsumed?) \cup \{ c? \} \\
   watched' = (watched \setminus subsumed?) \cup \{ c? \} \\
   chunks' = chunks \setminus (subsumed? \setminus shed?) \\
-  pending' = (pending \cup shed?) \setminus \{ c? \} \\
+  pending' = (pending \cup subsumed?) \setminus \{ c? \} \\
   retained' = retained \setminus (\{ c? \} \cup subsumed?) \\
   dir' = ((\{ c? \} \cup subsumed?) \ndres dir) \cup \{ c? \mapsto d? \} \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 The purge of a non-shed child clears its chunks; a shed child keeps its chunks
@@ -266,7 +330,9 @@ grows.
   dir' = dir \oplus \{ c? \mapsto d? \} \\
   moved' = moved \cup \{ x : COLL | x = c? \land (c? \mapsto d?) \notin dir \} \\
   stored' = stored \oplus \{ c? \mapsto disk? \} \\
-  stale' = stale \cup \{ x : COLL | x = c? \land \lnot (stored'~c? \subseteq disk?) \}
+  stale' = stale \cup \{ x : COLL | x = c? \land \lnot (stored'~c? \subseteq disk?) \} \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Deregister}
@@ -287,12 +353,14 @@ The purge is admitted and drains the chunks.
   registered' = registered \setminus \{ c? \} \\
   watched' = watched \setminus \{ c? \} \\
   chunks' = chunks \setminus \{ c? \} \\
-  pending' = pending \setminus \{ c? \} \\
+  pending' = pending \cup \{ c? \} \\
   retained' = retained \setminus \{ c? \} \\
   dir' = \{ c? \} \ndres dir \\
   moved' = moved \setminus \{ c? \} \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 The queue stays saturated past the admission deadline, so the purge is never
@@ -313,7 +381,9 @@ stays tracked until a later sweep admits the delete.
   dir' = \{ c? \} \ndres dir \\
   moved' = moved \setminus \{ c? \} \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 With $keep\_data$ the chunks are kept on purpose; the collection joins
@@ -336,7 +406,9 @@ side without disturbing the mapping.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Begin collection}
@@ -357,7 +429,9 @@ deferred purge standing against it.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Purge retry}
@@ -383,7 +457,9 @@ The target is still absent: the purge is re-submitted and drains the chunks.
   dir' = dir \\
   moved' = moved \setminus \{ c? \} \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 The target was re-registered: it is dropped from $pending$ without a purge.
@@ -402,39 +478,57 @@ The target was re-registered: it is dropped from $pending$ without a purge.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Disk-derived sweep}
 
-The durable backstop derives orphans from actual state on every reconcile: it
-deletes the chunks of every collection that is neither registered nor retained.
-Unlike the pending drain it needs no in-process record, so it survives a restart
-and cleans up any shed purge --- deregister or subsume --- whose chunks were left
-behind.  Its delete set is exactly $chunks \setminus (registered \cup retained)$;
-a registered or deliberately-retained collection is therefore never swept, which
-is I6.  The blocking chunk scan and the retained read run off the event loop; the
-delete decision uses the live roster snapshot for $registered$ and the durable
-$keep\_data$ marker for $retained$.
+The durable backstop cleans up a shed purge --- deregister or subsume --- whose
+chunks were left behind, and it survives a restart because its evidence is the
+durable $pending$ marker set, not an in-process record.  Its delete set is a
+\textit{closed} set: exactly the collections the registry explicitly marked for
+purge that still have chunks, less any spared by a later re-register or
+keep-data, i.e.\ $(pending \cap chunks) \setminus (registered \cup retained)$.
+This is the correction of a fatal earlier error.  The old model swept the
+\textit{open-world complement} $chunks \setminus (registered \cup retained)$ ---
+every chunk-bearing collection that was not a live directory registration.  That
+assumed a closed world in which every collection is a directory registration; in
+the real database it is false, because captures, agent memories, the remember
+target, and URL-host collections all bear chunks and are never registered, so the
+open-world rule wiped them.  The closed set touches only explicitly-marked
+collections; an unmarked collection --- every non-directory collection among them
+--- is structurally unreachable by the sweep.  The blocking chunk scan and the
+marker reads run off the event loop in one registry transaction.
+
+The two auxiliary observers record the two ways a sweep could misbehave.
+$sweptUnmarked$ gathers any collection the sweep deletes though it was never
+marked ($chunks \setminus chunks'$ outside $pending$) --- the class-(ii) data
+loss.  $sweptProtected$ gathers any registered or retained collection the sweep
+deletes.  The closed delete set empties both by construction.
 
 \begin{schema}{Sweep}
   \Delta Watch \\
   \where
-  chunks' = chunks \cap (registered \cup retained) \\
+  chunks' = chunks \setminus (pending \setminus (registered \cup retained)) \\
+  pending' = pending \setminus (chunks \setminus chunks') \\
   registered' = registered \\
   watched' = watched \\
-  pending' = pending \\
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \cup ((chunks \setminus chunks') \setminus pending) \\
+  sweptProtected' = sweptProtected \cup ((chunks \setminus chunks') \cap (registered \cup retained))
 \end{schema}
 
-The swept set $chunks \setminus chunks'$ equals $chunks \setminus (registered
-\cup retained)$, so the sweep preserves I2 (it purges exactly the orphans I2
-requires to be tracked) and cannot delete a registered or retained collection's
-chunks.
+The swept set $chunks \setminus chunks'$ equals $(pending \cap chunks) \setminus
+(registered \cup retained)$, a subset of $pending$ that excludes $registered \cup
+retained$.  So the sweep deletes only marked collections (I9 --- never an
+unmarked capture or memory) and never a registered or retained one (I6, revised),
+and it clears the marks of what it purged.
 
 \section{Reconcile}
 
@@ -460,7 +554,9 @@ collection is dropped --- so $pending$ empties.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 If the drain's re-submission sheds, the absent deferred purges stay pending and
@@ -477,7 +573,9 @@ their chunks remain; the live ones are still dropped.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 The enumeration raised partway: only a prefix $seen?$ of the roster was visited.
@@ -498,7 +596,9 @@ partial roster would make a live collection look absent.
   dir' = dir \\
   moved' = moved \\
   stored' = stored \\
-  stale' = stale
+  stale' = stale \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
 \end{schema}
 
 \section{Retained-collection identity (I7)}
@@ -553,5 +653,39 @@ that keeps survivors but never prunes --- and a collection that stored a
 document, was keep-data disabled, and lost that file from disk while disabled
 re-adopts with the vanished document still present: $stale$ acquires it and I8
 fails.  The reconcile-against-disk is thus the whole of what discharges I8.
+
+\section{Closed-set sweep (I6 revised, I9), and an erratum}
+
+\textbf{Erratum.}  An earlier version of this model (the one that carried the
+original I6, ``the sweep deletes only $chunks \setminus (registered \cup
+retained)$'') was wrong, and not in a way the type-checker could catch.  It
+encoded a closed-world assumption --- that every chunk-bearing collection is a
+directory registration --- so its ``orphan'' set $chunks \setminus (registered
+\cup retained)$ looked safe.  The real database also holds class-(ii)
+collections (captures, agent memories, the remember target, URL hosts) that bear
+chunks and are never registered; the open-world set contains all of them, so the
+sweep it validated would purge a user's captures and memories.  The corrected
+statements follow in full; the old I6 is withdrawn.
+
+I6 (revised) and I9 are both properties of the $Sweep$ transition, discharged by
+its delete set and mechanised through the two sweep observers.  The delete set is
+$(pending \cap chunks) \setminus (registered \cup retained)$ --- a subset of the
+explicitly-marked collections.  A collection is marked ($\in pending$) only by a
+$DeregisterPurge$/$DeregisterPurgeShed$ (a non-keep deregister) or a $Register$
+subsume-eviction, each of which acts on a $dircoll$ member; and it is unmarked by
+re-register, keep-data, or the completed purge.  Because the delete set is a
+subset of $pending$, and $pending \subseteq dircoll$, no unmarked collection ---
+and in particular no class-(ii) capture or memory, which can never be marked ---
+is ever in it: that is I9, $sweptUnmarked = \emptyset$.  Because the delete set
+excludes $registered \cup retained$ by construction, no live or archived
+collection is in it: that is I6, $sweptProtected = \emptyset$.
+
+Both observers are non-vacuous, and the negative control is exactly the original
+bug.  Restore the old open-world rule $chunks' = chunks \cap (registered \cup
+retained)$ in $Sweep$: now a class-(ii) collection with chunks (produce one with
+$CaptureProduce$) is deleted though it was never marked, so $sweptUnmarked$
+acquires it and I9 fails --- the concrete capture/memory data loss.  The
+closed-set delete is the whole of what discharges I9; restricting the sweep to
+the marked set is what makes a non-directory collection structurally unreachable.
 
 \end{document}

@@ -1938,24 +1938,48 @@ The watch loop's *removal* half — deregister, subsumption, and orphan cleanup 
 proved to be the concurrency-critical part and was hardened under an explicit Z
 model rather than through review iteration. The state (`registered`, `watched`,
 `pending`, `chunks`, `retained`, and a per-collection `dir` identity map) carries
-seven invariants, all model-checked across the full reachable space:
+nine invariants (I1–I9), all model-checked across the full reachable space. The
+ProB model includes **non-directory collections** — captures, agent memories,
+`remember` targets, URL-host collections — as a first-class class (`dircoll` is
+the directory-registration subset); the earlier *absence* of that class is the
+abstraction error that produced the I6 erratum below.
 
 - **I1** `registered ∩ pending = ∅` — a live collection carries no deferred purge.
-- **I2** `chunks ∖ (registered ∪ retained) ⊆ pending` — every orphan is tracked
-  for purge. The model-check found the original code deferred a shed purge on the
-  *subsume* path but not the symmetric *deregister* path — a reachable untracked
-  orphan. Fixed by making both paths defer (`registration_lifecycle.py`).
+- **I2** `(chunks ∩ dircoll) ∖ (registered ∪ retained) ⊆ pending` — every
+  *directory-collection* orphan is tracked for purge. (The unrestricted
+  `chunks ∖ (registered ∪ retained)` was the closed-world falsehood — see the I6
+  erratum: a capture/memory has chunks yet is never registered/retained/marked, so
+  it violated the unrestricted form.) The model-check found the code deferred a
+  shed purge on the *subsume* path but not the symmetric *deregister* path — a
+  reachable untracked orphan; fixed by making both paths defer
+  (`registration_lifecycle.py`).
 - **I3** `registered ⊆ watched` · **I4** reconcile preserves I3 · **I5**
   `watched ∩ pending = ∅` (single writer per table).
-- **I6** the disk-derived orphan sweep deletes only `chunks ∖ (registered ∪
-  retained)`. The sweep is durable (derived from real DB + registry state each
-  reconcile, surviving a restart) and is the backstop for any shed purge. It reads
-  `registered` and `retained` under **one SQLite read transaction** (`BEGIN` …
-  `commit`) so a register/deregister committing between the two SELECTs is
-  invisible to both — without it, adversarial review reproduced a data-loss race
-  that swept an operator's kept chunks. The sweep read is fail-closed
-  (`except Exception` → log + skip the cycle; `# noqa: BLE001` operator-approved
-  for backstop liveness) so a transient DB error cannot kill the reconcile loop.
+- **I6** the orphan sweep deletes only `(pending ∩ chunks) ∖ (registered ∪
+  retained)` — a **closed set** of collections the registry has *explicitly marked
+  for purge* (the durable `pending_purge_collections` table), never the open-world
+  complement. **Erratum — the catastrophic miss.** An earlier revision of this ADR,
+  and the Z model it was checked against, defined the sweep as the *open-world*
+  `chunks ∖ (registered ∪ retained)` and the model validated it — because the model
+  wrongly assumed every collection is a directory registration. In the real system
+  captures (`*-captures`), agent memories (`memory-*`), the `default` `remember`
+  target, and URL-host collections have chunks but are never directory-registered,
+  so the open-world sweep would have purged **all captures and all agent memories
+  ~5 minutes after every daemon start** (`watch_safety_scan_s` default 300).
+  Cursor/Copilot caught it; djb confirmed it default-on catastrophic. **Fix:** a
+  collection is marked in `pending_purge_collections` (in the same transaction as
+  the `directories` delete) *only* on a non-keep-data deregister or a subsume
+  eviction; the sweep purges only marked collections still holding chunks, so
+  non-directory collections are **structurally unreachable** (I9). A crash between
+  mark and purge leaves the marker → next sweep drains it (the cross-restart
+  durability the sweep exists for). `pending`/`registered`/`retained` are read
+  under **one `BEGIN … commit` snapshot**, and `CollectionPurgeJob` re-checks the
+  same three under its own transaction at execution time — skipping the delete if
+  the collection was re-registered/kept/cleared after the sweep's snapshot, which
+  closes a live-collection race on a disable→re-enable toggle. The sweep read is
+  fail-closed (`except Exception` → skip the cycle; `# noqa: BLE001`
+  operator-approved for backstop liveness) so a transient DB error cannot kill the
+  reconcile loop.
 - **I7** a retained collection's chunks are re-adopted **only by the directory
   that archived them**. `retained_collections` records the `original_directory`;
   `register_directory` clears the marker (adopts the chunks) iff the registering
@@ -1966,6 +1990,16 @@ seven invariants, all model-checked across the full reachable space:
   inherit the first project's chunks. Client and daemon name-pickers avoid
   archived names, and the retained set (with `original_directory`) is surfaced on
   the HTTP `/registrations` endpoint for remote/local parity.
+- **I8** a re-adopt (same-directory re-enable) leaves no stale document — the
+  re-adopt reconciles the collection's stored documents against disk and prunes
+  those whose file is gone, keying on the authoritative absolute `document_path`
+  and pruning only on *definite* absence, so a nested/basename-stored or
+  transiently-unreadable file is never wrongly deleted.
+- **I9** the sweep never deletes a collection that was never marked for purge —
+  in particular a non-directory collection (capture, memory, `remember` target,
+  URL host) is structurally unreachable by the sweep. This is the invariant whose
+  absence (an unmodeled collection class) produced the I6 erratum; its negative
+  control reproduces exactly that capture/memory data loss.
 
 **keep-data re-enable semantics — re-adopt + auto-freshen (operator ruling,
 2026-07-24).** When a directory disabled with `--keep-data` is re-enabled, the
@@ -1985,7 +2019,13 @@ silent correctness gap.
 **Method note.** The removal lifecycle is the project's first use of the
 model-first discipline for stateful-protocol work: model in Z, model-check the
 invariants (a violation is a design bug found before any test), and adversarially
-verify the data-deleting paths. The model-check caught the I2 deferral asymmetry;
-adversarial review caught the sweep's two-SELECT read-skew and the retained
-cross-project merge — three data-safety defects that review-by-iteration had not
-surfaced.
+verify the data-deleting paths. **Five** data-safety defects were caught before
+merge that review-by-iteration had not: the I2 deferral asymmetry (model-check);
+the sweep's two-SELECT read-skew and the retained cross-project merge (adversarial
+review); the pending re-register purge race (adversarial review); and — most
+seriously — the **open-world sweep that would have wiped all captures and agent
+memories** on a 5-minute default timer (Cursor/Copilot, djb-confirmed). The last
+is the method's sharpest lesson, and a caution against false confidence: the
+original model *proved the sweep safe by omitting the non-directory collection
+class entirely* — a model is only as sound as its abstraction. The corrected model
+adds that class, and I9 (with a negative control) now pins it.
