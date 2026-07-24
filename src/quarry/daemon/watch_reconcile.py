@@ -1,12 +1,12 @@
 """The periodic disk-vs-registry reconcile and the durable orphan-purge backstop.
 
 Extracted from :class:`~quarry.daemon.watch_loop.WatchLoop`: the loop owns
-lifecycle, watch scheduling, and observer-thread marshaling, while this owns the
-safety-scan reconcile (re-scan every registered collection; tear down a watch
-whose registration vanished) and the purge backstop — deferred subsume/deregister
-purges retried until the queue admits them, plus (once wired) a disk-derived
-sweep that deletes chunks of any collection that is neither registered nor
-retained.
+lifecycle, watch scheduling, and observer marshaling; this owns the safety-scan
+reconcile (re-scan registered collections; tear down a vanished watch) and the
+CLOSED-SET purge backstop -- it purges only collections the registry marked in
+``pending_purge_collections`` (non-keep-data deregister or subsume eviction) that
+still hold chunks, so captures/memories/remember targets are never swept.  Reads
+run under one BEGIN snapshot; each queued purge re-checks (``_superseded``).
 """
 
 from __future__ import annotations

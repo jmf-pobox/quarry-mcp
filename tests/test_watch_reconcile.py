@@ -1,9 +1,12 @@
-"""Tests for WatchReconciler's durable orphan sweep (the A data-safety cases).
+"""Tests for WatchReconciler's durable, closed-set orphan sweep.
 
-The sweep deletes chunks of any collection that is neither registered nor
-retained.  The non-negotiable invariant (I6): a registered or operator-kept
-(keep-data) collection is NEVER swept.  These tests exercise a real LanceDB +
-registry so the DB-derived orphan computation is genuine, not mocked.
+The sweep purges ONLY collections the registry explicitly marked for purge
+(``pending_purge_collections``, marked on a non-keep-data deregister or a subsume
+eviction) that still hold chunks -- ``(pending & chunk_cols) - registered -
+retained``.  The non-negotiable invariant: a registered, operator-kept
+(keep-data), or never-marked collection (captures, memories, remember targets)
+is NEVER swept.  These tests exercise a real LanceDB + registry so the sweep's
+marked-set computation is genuine, not mocked.
 """
 
 from __future__ import annotations

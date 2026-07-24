@@ -29,9 +29,9 @@ class SyncPlan:
     to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
     unchanged: int
-    # Whether the registry had any file rows for the collection. False on a
-    # re-adopt (keep-data disable cleared them) or a first sync — the only cases
-    # where the LanceDB-vs-disk prune adds anything over the registry delta.
+    # True iff the registry held any file row for the collection (bool(known_files));
+    # False when it holds none -- a re-adopt (keep-data disable deleted them) or a
+    # never-indexed first sync -- so DeleteReconciler runs the LanceDB-vs-disk prune.
     registry_tracked: bool
 
 
