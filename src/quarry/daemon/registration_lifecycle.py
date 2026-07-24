@@ -68,7 +68,9 @@ class RegistrationLifecycle:
             # orphans, and never a torn-down parent watch.  A purge the saturated
             # queue defeats leaves orphans behind, so surface the failed children.
             failed = [
-                child for child in subsumed if not await self._teardown_subsumed(child)
+                child
+                for child in subsumed
+                if not await self._teardown_subsumed(child, parent=collection)
             ]
             if failed:
                 results["subsume_purge_failed"] = failed
@@ -114,7 +116,7 @@ class RegistrationLifecycle:
             else:
                 state.status = "completed"
 
-    async def _teardown_subsumed(self, collection: str) -> bool:
+    async def _teardown_subsumed(self, collection: str, *, parent: str) -> bool:
         """Stop watching a subsumed child and purge its now-orphaned chunks.
 
         The child's ``directories`` row was deleted by the parent registration,
@@ -127,13 +129,16 @@ class RegistrationLifecycle:
         purges — so an unpurged child is never swallowed into a clean success.
         """
         self._ctx.watch_loop.stop_watching(collection)
-        # force=True: this is the self-subsume clean-slate purge, awaited strictly
-        # before start_watching and safe from a same-name race (directories PK).
-        # It MUST delete the widened parent's old narrower-root chunks even though
-        # the parent has re-registered the same collection name, which the
-        # execution-time re-check would otherwise treat as "registered → skip".
+        # force ONLY the same-name self-subsume child (child collection == the
+        # parent's own collection): widening /root over /root/sub "docs" re-registers
+        # "docs", and its clean-slate purge MUST delete the old narrower-root chunks
+        # the re-check would otherwise skip as "registered". It is safe — awaited
+        # before start_watching, directories.collection UNIQUE, no same-name race.
+        # A DIFFERENTLY-named subsumed child keeps force=False so the _superseded
+        # re-check protects it: if a different directory re-registered that freed
+        # name after this teardown snapshot, the purge no-ops instead of wiping it.
         purge = await CollectionPurger(self._ctx).purge(
-            collection, "subsume-purge", force=True
+            collection, "subsume-purge", force=collection == parent
         )
         if purge.status == "failed":
             logger.warning(

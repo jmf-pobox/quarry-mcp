@@ -2890,6 +2890,103 @@ class TestRunPurgeTask:
         assert "purge boom" in state.error
 
 
+class TestSubsumeTeardownForceScoping:
+    """The self-subsume teardown forces the purge ONLY for the same-name child."""
+
+    def _ctx(self, tmp_path: Path) -> DaemonContext:
+        """Build a daemon context on a REAL Settings (real chunking) + mock embedder."""
+        from quarry.config import Settings
+
+        settings = Settings(
+            lancedb_path=tmp_path / "lancedb", registry_path=tmp_path / "registry.db"
+        )
+        settings.lancedb_path.mkdir(parents=True)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        return ctx
+
+    def _seed_pending(
+        self, ctx: DaemonContext, tmp_path: Path, collection: str
+    ) -> Path:
+        """Seed one doc into *collection* and mark it pending; return its dir."""
+        from quarry.ingestion.pipeline import plan_file_chunks
+        from quarry.sync_registry import SyncRegistry
+
+        directory = tmp_path / "leaf" / collection
+        directory.mkdir(parents=True)
+        (directory / "x.md").write_text("indexable body " * 20)
+        chunks, _ = plan_file_chunks(
+            directory / "x.md",
+            ctx.settings,
+            collection=collection,
+            document_name="x.md",
+        )
+        ctx.database.store.insert(
+            chunks, np.zeros((len(chunks), 768), dtype=np.float32)
+        )
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending(collection)
+        reg.commit()
+        reg.close()
+        return directory
+
+    def _docnames(self, ctx: DaemonContext, collection: str) -> set[str]:
+        from quarry.db import ChunkCatalog
+
+        return {
+            d["document_name"]
+            for d in ChunkCatalog(ctx.database.db).list_documents(collection)
+        }
+
+    def test_differently_named_child_reregistered_survives(
+        self, tmp_path: Path
+    ) -> None:
+        """A differently-named subsumed child re-registered before teardown survives.
+
+        force=False for a child whose name != the parent's, so the purge's
+        execution-time re-check sees it re-registered and no-ops — a different
+        directory that reused the freed name keeps its freshly-ingested chunks.
+        """
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
+
+        ctx = self._ctx(tmp_path)
+        child_dir = self._seed_pending(ctx, tmp_path, "childcol")
+        # A different directory re-registers the freed name and re-scans, racing
+        # ahead of the stale teardown purge.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.register_directory(child_dir, "childcol")
+        reg.close()
+
+        lifecycle = RegistrationLifecycle(ctx)
+        asyncio.run(lifecycle._teardown_subsumed("childcol", parent="parentcol"))
+
+        assert self._docnames(ctx, "childcol") == {"x.md"}  # re-check no-op → survives
+
+    def test_same_name_child_force_purges_clean_slate(self, tmp_path: Path) -> None:
+        """The same-name self-subsume child is force-purged even though registered.
+
+        force=True for the child whose name == the parent's (the widen-to-same-name
+        case), so the clean-slate purge deletes the old narrower-root chunks the
+        re-check would otherwise skip as "registered".
+        """
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
+
+        ctx = self._ctx(tmp_path)
+        parent_dir = self._seed_pending(ctx, tmp_path, "docs")
+        # The widened parent re-registers the same name; its old chunks must go.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.register_directory(parent_dir, "docs")
+        reg.close()
+
+        asyncio.run(
+            RegistrationLifecycle(ctx)._teardown_subsumed("docs", parent="docs")
+        )
+
+        assert self._docnames(ctx, "docs") == set()  # forced clean slate
+
+
 class TestDatabasesMissingTable:
     """Fresh databases (no chunks table) must still respond to /databases."""
 

@@ -808,10 +808,10 @@
   "src/quarry/daemon/registration_lifecycle.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.0,
+    "avg_params": 2.2,
     "max_complexity": 8.0,
     "avg_complexity": 3.2,
-    "module_size": 142.0,
+    "module_size": 147.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
