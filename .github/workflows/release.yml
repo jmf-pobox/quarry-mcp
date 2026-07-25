@@ -129,8 +129,11 @@ jobs:
         with:
           python-version: "3.13"
       # Node is preinstalled on ubuntu-latest; no setup-node action needed.
+      # Pin mcpb to an exact version — this job holds contents: write, so a
+      # floating/compromised mcpb release must not run with the ability to
+      # create and upload the release asset. Bump deliberately.
       - name: Install mcpb
-        run: npm install -g @anthropic-ai/mcpb
+        run: npm install -g @anthropic-ai/mcpb@2.1.2
       - name: Build .mcpb bundle
         run: ./scripts/build-mcpb.sh
       - name: Attach .mcpb to the release
@@ -147,7 +150,17 @@ jobs:
             sleep 10
           done
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --generate-notes --title "$TAG"
+            # A concurrent punt-kit create can win the race between the check
+            # above and this create, making `gh release create` error even
+            # though the release now exists. On create failure, re-check and
+            # proceed if it is present rather than failing the workflow.
+            if ! gh release create "$TAG" --generate-notes --title "$TAG"; then
+              if ! gh release view "$TAG" >/dev/null 2>&1; then
+                echo "::error::failed to create release $TAG and it does not exist"
+                exit 1
+              fi
+              echo "release $TAG was created concurrently — proceeding to upload"
+            fi
           fi
           gh release upload "$TAG" \
             "dist/punt-quarry.mcpb" \
