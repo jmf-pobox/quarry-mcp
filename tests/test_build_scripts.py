@@ -185,35 +185,47 @@ def _run_git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _make_fixture_repo(repo: Path, install_text: str) -> str:
-    """Init a git repo with install.sh committed; return the commit's short SHA.
+def _make_fixture_repo(
+    repo: Path, install_text: str, install_name: str = "install.sh"
+) -> str:
+    """Commit *install_name* into a fresh git repo; return its short SHA.
 
     Hermetic: the fixture never contains a3c10f9 / 6f90f11, so these tests do not
     depend on the live repo's history or clone depth — the CI shallow-clone that
     made a pinned SHA absent from the object DB and broke the previous, non-
-    hermetic version of these tests.
+    hermetic version of these tests. *install_name* lets a test point both sides
+    of the check at a non-default installer path.
     """
     repo.mkdir(parents=True, exist_ok=True)
     _run_git(repo, "init", "-q")
-    (repo / "install.sh").write_text(install_text)
-    _run_git(repo, "add", "install.sh")
-    _run_git(repo, "commit", "-q", "-m", "add install.sh")
+    (repo / install_name).write_text(install_text)
+    _run_git(repo, "add", install_name)
+    _run_git(repo, "commit", "-q", "-m", f"add {install_name}")
     return _run_git(repo, "rev-parse", "--short", "HEAD")
 
 
-def _run_check(repo: Path) -> subprocess.CompletedProcess[str]:
-    """Invoke the check against fixture *repo* via the REPO_DIR override."""
+def _run_check(
+    repo: Path, install_path: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Invoke the check against fixture *repo* via the REPO_DIR override.
+
+    When *install_path* is given it is passed as INSTALL_PATH, so the test can
+    confirm the override drives BOTH the git-show read and the working-tree read.
+    """
+    env = {**os.environ, "REPO_DIR": str(repo)}
+    if install_path is not None:
+        env["INSTALL_PATH"] = install_path
     return subprocess.run(
         ["bash", str(README_SHA_CHECK)],
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "REPO_DIR": str(repo)},
+        env=env,
     )
 
 
-def _pin(sha: str) -> str:
-    url = f"https://raw.githubusercontent.com/punt-labs/quarry/{sha}/install.sh"
+def _pin(sha: str, path: str = "install.sh") -> str:
+    url = f"https://raw.githubusercontent.com/punt-labs/quarry/{sha}/{path}"
     return f"curl -fsSL {url} | sh\n"
 
 
@@ -253,3 +265,38 @@ def test_readme_install_sha_check_reports_absent_sha(tmp_path: Path) -> None:
     result = _run_check(repo)
     assert result.returncode != 0, "an absent pinned SHA must fail"
     assert "not present in the local" in result.stderr.lower()
+
+
+def test_readme_install_sha_check_reports_no_install_url(tmp_path: Path) -> None:
+    """A README with no pinned install URL hits the empty-check, not a crash.
+
+    Under `set -o pipefail` the extraction pipeline's final `grep` exits non-zero
+    on no match; without the `|| true` guard the script would abort there and
+    skip the intended "no install-URL SHA found" message. Assert the clean
+    empty-check path, not a pipefail termination.
+    """
+    repo = tmp_path / "repo"
+    _make_fixture_repo(repo, "#!/bin/sh\necho install v1\n")
+    (repo / "README.md").write_text("# Quarry\n\nNo install URL here.\n")
+    result = _run_check(repo)
+    assert result.returncode != 0, "a README with no install URL must fail"
+    assert "no install-url sha found" in result.stderr.lower()
+
+
+def test_readme_install_sha_check_honors_install_path_on_both_sides(
+    tmp_path: Path,
+) -> None:
+    """INSTALL_PATH drives both the git-show read and the working-tree read.
+
+    Commit a NON-default installer name and run with INSTALL_PATH set to it. If
+    the git-show side still hard-coded install.sh, `git show <sha>:install.sh`
+    would fail (no such path in the commit); passing proves both reads use the
+    same resolved path.
+    """
+    repo = tmp_path / "repo"
+    sha = _make_fixture_repo(
+        repo, "#!/bin/sh\necho install v1\n", install_name="installer.sh"
+    )
+    (repo / "README.md").write_text(_pin(sha, path="installer.sh"))
+    result = _run_check(repo, install_path="installer.sh")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

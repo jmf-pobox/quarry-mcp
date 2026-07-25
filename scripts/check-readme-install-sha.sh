@@ -37,11 +37,16 @@ install_sh="${INSTALL_PATH:-install.sh}"
 # Extract every SHA a README install URL pins, de-duplicated. Uses a plain
 # command substitution + `while read` rather than `mapfile`/`readarray`, which
 # do not exist in Bash 3.2 (macOS's default /bin/bash) — a local-contributor
-# portability trap.
+# portability trap. The trailing `|| true` is load-bearing under `set -o
+# pipefail`: `grep` exits non-zero when it matches nothing, which would abort
+# the script before the `[ -z "$shas" ]` check below and skip the intended
+# "no install-URL SHA found" message. `|| true` lets a no-match fall through to
+# that empty-check branch.
 shas=$(
     grep -oE 'raw\.githubusercontent\.com/punt-labs/quarry/[0-9a-f]{7,40}/' "$readme" \
         | grep -oE '[0-9a-f]{7,40}' \
-        | sort -u
+        | sort -u \
+        || true
 )
 
 if [ -z "$shas" ]; then
@@ -77,8 +82,11 @@ if ! git rev-parse --verify --quiet "${readme_sha}^{commit}" >/dev/null; then
     exit 1
 fi
 
-# The pinned installer must match the current one byte-for-byte.
-if ! git show "${readme_sha}:install.sh" | diff -q - "$install_sh" >/dev/null; then
+# The pinned installer must match the current one byte-for-byte. Both sides use
+# the same resolved $install_sh path — the committed blob (git show <sha>:<path>)
+# and the working-tree file — so INSTALL_PATH varies both reads together and a
+# fixture can point the check at a differently-named installer.
+if ! git show "${readme_sha}:${install_sh}" | diff -q - "$install_sh" >/dev/null; then
     echo "ERROR: install.sh at README SHA $readme_sha differs from $install_sh." >&2
     echo "       The README install-URL SHA is stale — bump it to a commit whose" >&2
     echo "       install.sh matches the current one." >&2
