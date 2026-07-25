@@ -82,3 +82,7 @@ uv.toml
 .envrc.local
 # Capture files — pending scrub review before committing
 .punt-labs/quarry/captures/
+
+# DES-058 machine-local live zone — never track. Session audit/lock files are
+# live-rewritten per session and deadlock git if tracked; ethos enable seeds this.
+.punt-labs/**/local/**
