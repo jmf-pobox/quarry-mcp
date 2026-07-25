@@ -16,6 +16,18 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **infra (install.sh)**: `--no-plugin` flag and `QUARRY_NO_PLUGIN=1` env var to
+  install the harness-neutral CLI while skipping the Claude Code
+  marketplace-register + plugin-install steps (per punt-kit `install-cli-only.md`).
+  For non-Claude harnesses (Codex, Cursor, a plain terminal) and enterprise-policy
+  Claude users whose org blocks marketplace installs — `claude` is present so the
+  capability auto-skip never fired, and a piped `curl … | sh` had nowhere to put a
+  flag. Both `sh -s -- --no-plugin` and `QUARRY_NO_PLUGIN=1 sh` work over a pipe;
+  the env var is honored only when exactly `1`. The skip is scoped to the plugin
+  steps — binary, PATH, model, TLS, per-repo login, and the health check all still
+  run — and the success message states the CLI works without printing the
+  "Restart Claude Code" line. Unknown flags now exit 2 with a usage string so a
+  misspelled `--no-plguin` is not silently ignored over a pipe.
 - **tool (mcpb)**: on-top Claude Desktop / CoWork access to the same local index.
   The `.mcpb` bundle registers the thin `quarry mcp` stdio client, which connects
   to the same resident `quarryd` daemon that backs the CLI and Claude Code — so
