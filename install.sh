@@ -3,10 +3,18 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/<SHA>/install.sh | sh
+#   curl -fsSL ... | sh -s -- --no-plugin  # install the CLI only, skip the plugin
 #   curl -fsSL ... | sh -s -- --network    # bind daemon to 0.0.0.0 (serve remote clients)
 #
 # Default (no flags): full install — daemon on localhost, TLS, plugin (if claude CLI found),
 # local quarry login.  This is what most users want.
+#
+# --no-plugin: install the harness-neutral CLI (binary, PATH, model, TLS, per-repo
+# enable, health check) but skip the Claude Code marketplace-register + plugin-install
+# steps.  For non-Claude harnesses (Codex, Cursor, a plain terminal) and for
+# enterprise-policy Claude users whose org blocks marketplace installs.  Honor
+# QUARRY_NO_PLUGIN=1 identically, for argument-hostile contexts (a templated
+# `curl … | sh`).  See punt-kit/standards/install-cli-only.md.
 #
 # --network: same as default, but binds daemon to 0.0.0.0 instead of localhost.
 # Requires QUARRY_API_KEY.  Prints CA fingerprint and remote-login instructions.
@@ -15,19 +23,35 @@ set -eu
 # --- Argument parsing ---
 
 usage() {
-  printf 'Usage: install.sh [--network | --help]\n\n'
-  printf '  (default)    Install quarry with local daemon on localhost\n'
-  printf '  --network    Install quarry with daemon on 0.0.0.0 (serves remote clients)\n'
-  printf '               Requires QUARRY_API_KEY to be set.\n'
-  printf '  --help, -h   Show this help\n'
+  printf '%s\n' \
+    'install.sh — install the quarry CLI and (by default) the Claude Code plugin' \
+    '' \
+    'Usage: curl -fsSL .../install.sh | sh                    # CLI + plugin (local daemon)' \
+    '       curl -fsSL .../install.sh | sh -s -- --no-plugin  # CLI only, skip the plugin' \
+    '       curl -fsSL .../install.sh | sh -s -- --network    # bind daemon to 0.0.0.0' \
+    '' \
+    'Options:' \
+    '  --network     Bind the daemon to 0.0.0.0 (serves remote clients).' \
+    '                Requires QUARRY_API_KEY to be set.' \
+    '  --no-plugin   Install the CLI only; skip the Claude Code marketplace + plugin.' \
+    '  -h, --help    Print this help and exit.' \
+    '' \
+    'Environment:' \
+    '  QUARRY_NO_PLUGIN=1  Same as --no-plugin, for argument-hostile contexts:' \
+    '                      curl -fsSL .../install.sh | QUARRY_NO_PLUGIN=1 sh'
 }
 
+# Parse before any work.  A misspelled flag (--no-plguin) must not be silently
+# ignored — a piped `curl … | sh` would then install the plugin the user asked
+# to skip — so an unknown option is a usage error (exit 2).
 NETWORK=0
+NO_PLUGIN_REQUESTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --network) NETWORK=1; shift ;;
-    --help|-h) usage; exit 0 ;;
-    *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+    --network)   NETWORK=1; shift ;;
+    --no-plugin) NO_PLUGIN_REQUESTED=1; shift ;;
+    --help|-h)   usage; exit 0 ;;
+    *) printf 'install.sh: unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
@@ -54,20 +78,44 @@ BINARY="quarry"
 
 info "Checking prerequisites..."
 
-# claude CLI is optional.  If present, install plugin + marketplace.
-# If absent, skip with a note.
-HAS_CLAUDE=0
-if command -v claude >/dev/null 2>&1; then
-  ok "claude CLI found"
-  HAS_CLAUDE=1
-else
-  warn "Claude Code not found -- skipping plugin install. Re-run install.sh after installing Claude Code."
+# The Claude Code plugin is a default-on feature of this installer.  A single
+# boolean, SKIP_PLUGIN, gates the marketplace-register + plugin-install steps
+# (7/8/9) and their success messaging.  Every other step -- binary download,
+# PATH, tool dirs, embedding model, TLS, per-repo enable, health check -- runs
+# regardless.  SKIP_PLUGIN is the OR of an explicit request (--no-plugin /
+# QUARRY_NO_PLUGIN=1) and capability-absence (claude or git missing).  git is
+# needed only to clone the plugin, so its absence skips the plugin rather than
+# failing the CLI install.  There is no counter-flag to force the plugin on:
+# request and capability-absence both drive the boolean the same direction, and
+# you cannot install a plugin without claude.  SKIP_REASON records the cause so
+# the final message names the right remedy -- an auto-skip user never passed
+# --no-plugin, so "re-run without it" would be the wrong instruction.
+SKIP_PLUGIN=0
+SKIP_REASON=""
+if [ "$NO_PLUGIN_REQUESTED" = "1" ] || [ "${QUARRY_NO_PLUGIN:-}" = "1" ]; then
+  ok "plugin install skipped by request (--no-plugin / QUARRY_NO_PLUGIN=1)"
+  SKIP_PLUGIN=1
+  SKIP_REASON="requested"
 fi
 
+if [ "$SKIP_PLUGIN" = "0" ]; then
+  if command -v claude >/dev/null 2>&1; then
+    ok "claude CLI found"
+  else
+    warn "Claude Code not found -- skipping plugin install"
+    SKIP_PLUGIN=1
+    SKIP_REASON="no-claude"
+  fi
+fi
+
+# git is required only to clone the plugin.  Absent + plugin still wanted =>
+# auto-skip; absent + already skipping => no message needed.
 if command -v git >/dev/null 2>&1; then
   ok "git found"
-else
-  fail "'git' not found. Install git first: https://git-scm.com/downloads"
+elif [ "$SKIP_PLUGIN" = "0" ]; then
+  warn "git not found -- skipping plugin install (required to clone the plugin)"
+  SKIP_PLUGIN=1
+  SKIP_REASON="no-git"
 fi
 
 # --- Step 2: uv ---
@@ -252,9 +300,10 @@ else
 fi
 
 # --- Step 7: Marketplace registration ---
-# Runs only when claude CLI is available.
+# Runs only when the plugin is not skipped (claude present, git present, and no
+# --no-plugin / QUARRY_NO_PLUGIN=1 request).
 
-if [ "$HAS_CLAUDE" = "1" ]; then
+if [ "$SKIP_PLUGIN" = "0" ]; then
   info "Registering Punt Labs marketplace..."
 
   if claude plugin marketplace list < /dev/null 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
@@ -267,7 +316,7 @@ if [ "$HAS_CLAUDE" = "1" ]; then
 fi
 
 # --- Step 8: SSH fallback for plugin install ---
-# Runs only when claude CLI is available.
+# Runs only when the plugin is not skipped.
 
 NEED_HTTPS_REWRITE=0
 cleanup_https_rewrite() {
@@ -277,7 +326,7 @@ cleanup_https_rewrite() {
   fi
 }
 
-if [ "$HAS_CLAUDE" = "1" ]; then
+if [ "$SKIP_PLUGIN" = "0" ]; then
   trap cleanup_https_rewrite EXIT INT TERM
 
   if ! ssh -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
@@ -288,9 +337,9 @@ if [ "$HAS_CLAUDE" = "1" ]; then
 fi
 
 # --- Step 9: Install plugin ---
-# Runs only when claude CLI is available.
+# Runs only when the plugin is not skipped.
 
-if [ "$HAS_CLAUDE" = "1" ]; then
+if [ "$SKIP_PLUGIN" = "0" ]; then
   info "Installing $PLUGIN_NAME plugin..."
 
   UNINSTALL_ERR=$(claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" < /dev/null 2>&1) || {
@@ -347,15 +396,40 @@ if [ "$NETWORK" = "1" ]; then
   printf 'The CA fingerprint is shown above -- clients will see it during login.\n'
 else
   printf '%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$PLUGIN_NAME" "$NC"
-  if [ "$HAS_CLAUDE" = "1" ]; then
+  # The messaging is gated on SKIP_PLUGIN, not on why we skipped: when no plugin
+  # was installed, the "Restart Claude Code to activate the plugin" line is never
+  # printed (it would be a lie).  The capability-absent auto-skip and the explicit
+  # --no-plugin skip print the same CLI-only block; only the remedy branches on
+  # SKIP_REASON so an auto-skip user is told to install the missing tool, not to
+  # "re-run without --no-plugin" (which they never passed).
+  if [ "$SKIP_PLUGIN" = "0" ]; then
     printf 'Restart Claude Code to activate the plugin.\n\n'
   else
-    printf 'Claude Code was not found. Re-run install.sh after installing Claude Code.\n\n'
+    printf 'The quarry CLI is installed and works via the command line and MCP\n'
+    printf '(quarry mcp / quarry serve).  The Claude Code plugin was skipped.\n\n'
+    case "$SKIP_REASON" in
+      no-claude)
+        printf 'The plugin was skipped because Claude Code was not found.  Install it\n'
+        printf '(https://docs.anthropic.com/en/docs/claude-code), then re-run install.sh\n'
+        printf 'to add the plugin.\n\n'
+        ;;
+      no-git)
+        printf 'The plugin was skipped because git was not found (required to clone the\n'
+        printf 'plugin).  Install git, then re-run install.sh to add the plugin.\n\n'
+        ;;
+      *)
+        printf 'To add the plugin later, re-run install.sh without --no-plugin and with\n'
+        printf 'QUARRY_NO_PLUGIN unset.\n\n'
+        ;;
+    esac
   fi
   printf 'Quick start:\n'
-  printf '  /find <query>                     # semantic search\n'
-  printf '  /ingest <url>                     # index a webpage\n'
-  printf '  quarry ingest notes.md            # index a file from CLI\n\n'
+  if [ "$SKIP_PLUGIN" = "0" ]; then
+    printf '  /find <query>                     # semantic search (in Claude Code)\n'
+    printf '  /ingest <url>                     # index a webpage (in Claude Code)\n'
+  fi
+  printf '  quarry find "<query>"             # semantic search from the CLI\n'
+  printf '  quarry ingest notes.md            # index a file from the CLI\n\n'
   printf 'To serve remote clients from this machine:\n'
   # shellcheck disable=SC2016
   printf '  export QUARRY_API_KEY=$(openssl rand -hex 32)\n'
