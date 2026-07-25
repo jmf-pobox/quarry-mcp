@@ -16,6 +16,7 @@ from quarry.api import (
     RegisterRequest,
     RegistrationInfo,
     RegistrationList,
+    RetainedCollection,
     TaskAccepted,
 )
 from quarry.client import QuarryClient
@@ -124,12 +125,28 @@ class FakeRegistryClient:
     seed a covering ``RegistrationList``.
     """
 
-    __slots__ = ("_delete_error", "_deleted", "_deregistered", "_registered", "_regs")
+    __slots__ = (
+        "_chunk_collections",
+        "_delete_error",
+        "_deleted",
+        "_deregistered",
+        "_registered",
+        "_regs",
+        "_retained",
+    )
 
     _regs: list[RegistrationInfo]
     _registered: list[RegisterRequest]
     _deregistered: list[DeregisterRequest]
     _deleted: list[str]
+    # Collections archived by a keep-data deregister: {collection: original_dir},
+    # keyed by collection name with its origin directory as the value — mirroring
+    # the real retained_collections (PK ``collection``, ``original_directory``
+    # column) so the client sees archived names AND their origin (for re-adopt).
+    _retained: dict[str, str]
+    # Chunk-bearing collection names the daemon reports on the wire, so the
+    # client-side picker avoids a name that already holds another project's chunks.
+    _chunk_collections: list[str]
     # When set, delete_collection raises it — models a rejected captures purge.
     _delete_error: Exception | None
 
@@ -138,6 +155,7 @@ class FakeRegistryClient:
         registrations: Iterable[tuple[str, Path]] = (),
         *,
         delete_error: Exception | None = None,
+        chunk_collections: Iterable[str] = (),
     ) -> Self:
         self = super().__new__(cls)
         self._regs = [
@@ -151,16 +169,26 @@ class FakeRegistryClient:
         self._registered = []
         self._deregistered = []
         self._deleted = []
+        self._retained = {}
+        self._chunk_collections = list(chunk_collections)
         self._delete_error = delete_error
         return self
 
     def list_registrations(self) -> RegistrationList:
+        retained = [
+            RetainedCollection(collection=col, original_directory=directory)
+            for col, directory in sorted(self._retained.items())
+        ]
         return RegistrationList(
-            total_registrations=len(self._regs), registrations=list(self._regs)
+            total_registrations=len(self._regs),
+            registrations=list(self._regs),
+            retained=retained,
+            chunk_collections=list(self._chunk_collections),
         )
 
     def register(self, req: RegisterRequest) -> TaskAccepted:
         self._registered.append(req)
+        self._retained.pop(req.collection, None)  # re-adopting clears the archive
         self._regs.append(
             RegistrationInfo(
                 collection=req.collection,
@@ -172,8 +200,13 @@ class FakeRegistryClient:
 
     def deregister(self, req: DeregisterRequest) -> DeregisterAccepted:
         self._deregistered.append(req)
+        origin = next(
+            (r.directory for r in self._regs if r.collection == req.collection), ""
+        )
         before = len(self._regs)
         self._regs = [r for r in self._regs if r.collection != req.collection]
+        if req.keep_data and before > len(self._regs):
+            self._retained[req.collection] = origin  # kept → archived, with origin
         return DeregisterAccepted(task_id="t", removed=before - len(self._regs))
 
     def delete_collection(self, req: DeleteCollectionRequest) -> TaskAccepted:

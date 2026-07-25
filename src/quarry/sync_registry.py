@@ -6,8 +6,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Self, cast
+from typing import NoReturn, Self
 
+from quarry.collection_marker_store import CollectionMarkerStore
+from quarry.sync_file_store import FileStore
 from quarry.sync_schema import SyncSchema
 
 
@@ -18,49 +20,21 @@ class DirectoryRegistration:
     registered_at: str
 
 
-@dataclass(frozen=True, slots=True)
-class FileRecord:
-    path: str
-    collection: str
-    document_name: str
-    mtime: float
-    size: int
-    ingested_at: str
-    content_hash: str | None = None
-    # Within-file resume watermark (DES-034). ``chunks_committed`` counts the
-    # contiguous chunks ``[0, chunks_committed)`` durable in LanceDB and reflected
-    # here; ``partial_hash`` is the content hash the watermark was computed against
-    # and, when non-NULL, marks the row incomplete so the next sync resumes within
-    # the file. Both reset (0 / NULL) on completion.
-    chunks_committed: int = 0
-    partial_hash: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.chunks_committed < 0:
-            msg = f"chunks_committed must be >= 0, got {self.chunks_committed}"
-            raise ValueError(msg)
-        # A mid-file (partial) row must have made progress; a complete row leaves
-        # partial_hash NULL. This rejects the incoherent "partial at watermark 0".
-        if self.partial_hash is not None and self.chunks_committed <= 0:
-            msg = "a partial resume row must have chunks_committed > 0"
-            raise ValueError(msg)
-
-    @property
-    def is_partial(self) -> bool:
-        """Return True when the row is a mid-file resume watermark, not complete."""
-        return self.partial_hash is not None
-
-
 class SyncRegistry:
-    """Manages the SQLite registry for directory registrations and file state.
+    """Manages the SQLite registry for directory registrations and markers.
 
-    Wraps a sqlite3.Connection and exposes both the high-level registry
-    operations (register, deregister, list, get, upsert, delete) and
-    the low-level connection interface (execute, commit, close) so that
-    callers holding a SyncRegistry can also run ad-hoc SQL.
+    Wraps a sqlite3.Connection and exposes the directory-registration operations
+    (register, deregister, list, get) plus the low-level connection interface
+    (execute, commit, close). Per-file rows live in a composed :class:`FileStore`
+    (:attr:`files`); the retained + pending-purge collection markers live in a
+    composed :class:`CollectionMarkerStore` (:attr:`markers`).  Both share this
+    connection, so a marker change and the directories-row change commit in one
+    transaction — atomic together.
     """
 
     _conn: sqlite3.Connection
+    _files: FileStore
+    _markers: CollectionMarkerStore
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
@@ -74,7 +48,19 @@ class SyncRegistry:
         except Exception:
             self._conn.close()
             raise
+        self._files = FileStore(self._conn)
+        self._markers = CollectionMarkerStore(self._conn)
         return self
+
+    @property
+    def files(self) -> FileStore:
+        """Return the per-file row store sharing this registry's connection."""
+        return self._files
+
+    @property
+    def markers(self) -> CollectionMarkerStore:
+        """Return the retained + pending-purge marker store on this connection."""
+        return self._markers
 
     def _ensure_schema(self) -> None:
         """Set connection pragmas, create tables, and apply migrations."""
@@ -120,7 +106,7 @@ class SyncRegistry:
         self,
         directory: Path,
         collection: str,
-    ) -> DirectoryRegistration:
+    ) -> tuple[DirectoryRegistration, list[str]]:
         """Register a directory for incremental sync.
 
         Subsumption rules:
@@ -129,6 +115,11 @@ class SyncRegistry:
           are deregistered (the parent subsumes them).
         - If an existing registration is an ancestor of *directory*, the
           registration is rejected — the child is already covered.
+
+        Return the new registration and the collections it subsumed, so the
+        caller can tear down each subsumed child's watch and purge its chunks
+        (whose ``directories`` row this call just deleted).  The list is empty
+        unless *directory* was a parent of existing registrations.
 
         Raises:
             FileNotFoundError: If *directory* does not exist.
@@ -141,33 +132,45 @@ class SyncRegistry:
             msg = f"Directory not found: {resolved}"
             raise FileNotFoundError(msg)
 
-        self._enforce_subsumption(resolved)
-
         now = datetime.now(UTC).isoformat()
+        # BEGIN IMMEDIATE holds the write lock across the subsumption READ and the
+        # INSERT + marker writes as ONE atomic unit; otherwise a concurrent
+        # overlapping register slips between them and parent + child coexist
+        # (duplicate indexing). A concurrent register serializes on the lock
+        # (busy_timeout=5000). Guard + subsumption run under it so a rejection is
+        # consistent with what the INSERT would see.
         try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._guard_retained_identity(resolved, collection)
+            subsumed = self._enforce_subsumption(resolved)
             self._conn.execute(
                 "INSERT INTO directories (directory, collection, registered_at) "
                 "VALUES (?, ?, ?)",
                 (str(resolved), collection, now),
             )
+            # Same directory re-adopting: drop its retained marker (collection live
+            # again) and any pending-purge marker (sweep must not delete it).
+            self._markers.clear_retained(collection)
+            self._markers.clear_pending(collection)
         except sqlite3.IntegrityError:
-            self._raise_for_integrity(resolved, collection)
-        except sqlite3.Error:
-            self._conn.rollback()
+            self._raise_for_integrity(resolved, collection)  # rolls back + raises
+        except (ValueError, sqlite3.Error):
+            self._conn.rollback()  # release the lock; registry untouched
             raise
         self._conn.commit()
-        return DirectoryRegistration(
+        registration = DirectoryRegistration(
             directory=str(resolved),
             collection=collection,
             registered_at=now,
         )
+        return registration, subsumed
 
-    def _enforce_subsumption(self, resolved: Path) -> None:
-        """Reject child-of-parent, evict children of new parent."""
+    def _enforce_subsumption(self, resolved: Path) -> list[str]:
+        """Reject child-of-parent, evict children of new parent, return them."""
         existing_regs = self.list_registrations()
         for reg in existing_regs:
             reg_path = Path(reg.directory).resolve()
-            if _is_ancestor_of(reg_path, resolved):
+            if self._is_ancestor_of(reg_path, resolved):
                 msg = (
                     f"directory already covered by parent registration "
                     f"'{reg.collection}' ({reg.directory})"
@@ -179,8 +182,18 @@ class SyncRegistry:
         subsumed = [
             reg.collection
             for reg in existing_regs
-            if _is_ancestor_of(resolved, Path(reg.directory).resolve())
+            if self._is_ancestor_of(resolved, Path(reg.directory).resolve())
         ]
+        self._evict_subsumed(subsumed)
+        return subsumed
+
+    def _evict_subsumed(self, subsumed: list[str]) -> None:
+        """Delete files/directory rows of each subsumed child and mark it for purge.
+
+        The child's chunks are now orphaned (its directory row is gone), so mark
+        it in the same transaction — the orphan sweep drains the delete even if
+        the caller's immediate purge is shed or the daemon restarts first.
+        """
         for child_collection in subsumed:
             self._conn.execute(
                 "DELETE FROM files WHERE collection = ?", (child_collection,)
@@ -188,8 +201,9 @@ class SyncRegistry:
             self._conn.execute(
                 "DELETE FROM directories WHERE collection = ?", (child_collection,)
             )
+            self._markers.mark_pending(child_collection)
 
-    def _raise_for_integrity(self, resolved: Path, collection: str) -> None:
+    def _raise_for_integrity(self, resolved: Path, collection: str) -> NoReturn:
         """Translate an INSERT IntegrityError into a precise ValueError."""
         self._conn.rollback()
         existing = self._conn.execute(
@@ -205,12 +219,26 @@ class SyncRegistry:
             msg = f"Collection name already in use: '{collection}'"
         raise ValueError(msg) from None
 
-    def deregister_directory(self, collection: str) -> list[str]:
+    def deregister_directory(
+        self, collection: str, *, keep_data: bool = False
+    ) -> list[str]:
         """Remove a directory registration and its file records.
 
-        Return document_names of files that were tracked, so the
-        caller can clean them from LanceDB.
+        When *keep_data* is set, record the collection as retained IN THE SAME
+        transaction as the row removal, tagged with the directory it was
+        registered under, so only that same directory may later re-adopt the kept
+        chunks (a different directory re-using the name is refused at register —
+        see :meth:`_guard_retained_identity`).  Return the document_names of files
+        that were tracked, so the caller can clean them from LanceDB.
         """
+        # Capture the directory BEFORE deleting its row: the retained marker's
+        # identity tag is what lets the same directory re-adopt and blocks a
+        # different one from silently merging into the archived chunks.
+        dir_row = self._conn.execute(
+            "SELECT directory FROM directories WHERE collection = ?",
+            (collection,),
+        ).fetchone()
+        original_directory = dir_row[0] if dir_row is not None else None
         rows = self._conn.execute(
             "SELECT DISTINCT document_name FROM files WHERE collection = ? "
             "ORDER BY document_name",
@@ -222,8 +250,58 @@ class SyncRegistry:
             "DELETE FROM directories WHERE collection = ?",
             (collection,),
         )
+        # A never-registered collection has no ``directories`` row: retain/purge
+        # nothing — a keep-data retain would write an empty-origin marker that
+        # ``_guard_retained_identity`` refuses for EVERY directory (wedging the name),
+        # and a no-row capture/memory/remember collection must never be marked.
+        # With a row: keep-data retains + clears any stale pending mark (sparing kept
+        # chunks); a plain deregister marks pending so a shed purge drains on reconcile.
+        if dir_row is None:
+            pass
+        elif keep_data:
+            self._markers.mark_retained(collection, original_directory)
+            self._markers.clear_pending(collection)
+        else:
+            self._markers.mark_pending(collection)
         self._conn.commit()
         return document_names
+
+    def _guard_retained_identity(self, resolved: Path, collection: str) -> None:
+        """Refuse re-using an archived collection name from a different directory.
+
+        A keep-data deregister archives a collection's chunks under a retained
+        marker tagged with its original directory.  Only that same directory may
+        re-register the name — re-adopting its own kept chunks.  A different
+        directory re-using the name would silently merge two projects' data into
+        one collection (the opposite of keep-data's promise), so it is refused.
+
+        A legacy marker with no recorded origin (``original_directory`` NULL,
+        written before the column existed) matches no directory and is refused for
+        every directory: without a verifiable origin the safe default is to never
+        merge.  Delete the archived collection, or choose another name, to proceed.
+        """
+        marker = self._markers.retained_marker(collection)
+        if marker is None or marker.original_directory == str(resolved):
+            return
+        origin = marker.original_directory or "an unknown directory"
+        msg = (
+            f"collection {collection!r} holds archived (keep-data) chunks from "
+            f"{origin}; choose a different name or delete that collection first"
+        )
+        raise ValueError(msg)
+
+    def has_registrations_under(self, directory: Path) -> bool:
+        """Return whether any registration's directory lies strictly under *directory*.
+
+        Answers the auto-register subsumption guard: registering *directory* would
+        subsume those children, so the caller skips auto-register rather than
+        cause data loss.
+        """
+        resolved = directory.resolve()
+        return any(
+            self._is_ancestor_of(resolved, Path(reg.directory).resolve())
+            for reg in self.list_registrations()
+        )
 
     def list_registrations(self) -> list[DirectoryRegistration]:
         """Return all registered directories."""
@@ -249,82 +327,11 @@ class SyncRegistry:
             directory=row[0], collection=row[1], registered_at=row[2]
         )
 
-    def get_file(self, path: str) -> FileRecord | None:
-        """Look up a file record by absolute path."""
-        row = self._conn.execute(
-            "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash FROM files WHERE path = ?",
-            (path,),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_record(row)
-
-    def upsert_file(self, record: FileRecord, *, commit: bool = True) -> None:
-        """Insert or replace a file record, including its resume watermark."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO files "
-            "(path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                record.path,
-                record.collection,
-                record.document_name,
-                record.mtime,
-                record.size,
-                record.ingested_at,
-                record.content_hash,
-                record.chunks_committed,
-                record.partial_hash,
-            ),
-        )
-        if commit:
-            self._conn.commit()
-
-    def list_files(self, collection: str) -> list[FileRecord]:
-        """Return all file records for a collection."""
-        rows = self._conn.execute(
-            "SELECT path, collection, document_name, mtime, size, ingested_at, "
-            "content_hash, chunks_committed, partial_hash FROM files "
-            "WHERE collection = ? ORDER BY path",
-            (collection,),
-        ).fetchall()
-        return [self._row_to_record(r) for r in rows]
-
-    def delete_file(self, path: str, *, commit: bool = True) -> None:
-        """Delete a single file record by path."""
-        self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
-        if commit:
-            self._conn.commit()
-
     @staticmethod
-    def _row_to_record(row: tuple[object, ...]) -> FileRecord:
-        """Build a FileRecord from a row in ``_SELECT_COLUMNS`` order."""
-        return FileRecord(
-            path=cast("str", row[0]),
-            collection=cast("str", row[1]),
-            document_name=cast("str", row[2]),
-            mtime=cast("float", row[3]),
-            size=cast("int", row[4]),
-            ingested_at=cast("str", row[5]),
-            content_hash=cast("str | None", row[6]),
-            chunks_committed=cast("int", row[7]),
-            partial_hash=cast("str | None", row[8]),
-        )
+    def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
+        """Return True if *ancestor* is a strict ancestor of *descendant*.
 
-
-def _is_ancestor_of(ancestor: Path, descendant: Path) -> bool:
-    """Return True if *ancestor* is a strict ancestor of *descendant*.
-
-    Both paths should be resolved (absolute, no symlinks).  Uses
-    ``Path.relative_to()`` in a try/except for the containment check
-    and requires strict inequality (same path is not an ancestor).
-    """
-    if ancestor == descendant:
-        return False
-    try:
-        descendant.relative_to(ancestor)
-    except ValueError:
-        return False
-    return True
+        Both paths should be resolved (absolute, no symlinks); strict inequality
+        means a path is not its own ancestor.
+        """
+        return ancestor != descendant and descendant.is_relative_to(ancestor)

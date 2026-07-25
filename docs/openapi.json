@@ -284,13 +284,27 @@
         "type": "object"
       },
       "RegistrationList": {
-        "description": "The registration-list response envelope.",
+        "description": "The registration-list response envelope.\n\n``retained`` carries the archived (keep-data) collections with the directory\neach was registered under.  The name-picker avoids their names so a new,\nunrelated directory never collides with an archive; the enable path re-adopts\nan archive whose ``original_directory`` matches the directory being enabled.\n\n``chunk_collections`` carries every collection that currently holds chunks\n(the same catalog source the orphan sweep reads).  The name-picker avoids\nthese too, so a DIFFERENT directory can never be auto-assigned a name that\nalready holds another project's chunks \u2014 the auto path is structurally\nmerge-proof.  Both fields default so a response from an older daemon that\nomits them still parses (wire-compat at the boundary).",
         "properties": {
+          "chunk_collections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunk Collections",
+            "type": "array"
+          },
           "registrations": {
             "items": {
               "$ref": "#/components/schemas/RegistrationInfo"
             },
             "title": "Registrations",
+            "type": "array"
+          },
+          "retained": {
+            "items": {
+              "$ref": "#/components/schemas/RetainedCollection"
+            },
+            "title": "Retained",
             "type": "array"
           },
           "total_registrations": {
@@ -303,6 +317,26 @@
           "registrations"
         ],
         "title": "RegistrationList",
+        "type": "object"
+      },
+      "RetainedCollection": {
+        "additionalProperties": true,
+        "description": "A collection whose chunks were kept on a keep-data disable (archived).\n\n``original_directory`` is the directory it was registered under, so the\nclient can tell whether THIS directory owns the archive: the same directory\nre-adopts it (reuses the name + kept chunks); a different directory must not\n(it would inherit another project's chunks).  Empty when a legacy marker\nrecorded no origin \u2014 it then matches no directory and is never re-adopted.",
+        "properties": {
+          "collection": {
+            "title": "Collection",
+            "type": "string"
+          },
+          "original_directory": {
+            "default": "",
+            "title": "Original Directory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection"
+        ],
+        "title": "RetainedCollection",
         "type": "object"
       },
       "SearchHit": {

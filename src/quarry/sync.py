@@ -13,20 +13,26 @@ from pathlib import Path
 from quarry.config import Settings
 from quarry.db import ChunkStore
 from quarry.ingestion.pipeline import SUPPORTED_EXTENSIONS
+from quarry.sync_delete_reconciler import DeleteReconciler
 from quarry.sync_discovery import FileDiscovery
+from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
-from quarry.sync_registry import FileRecord, SyncRegistry
+from quarry.sync_registry import SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncPlan:
     to_ingest: list[Path]
     to_refresh: list[tuple[Path, str]]
     to_delete: list[str]
     unchanged: int
+    # True iff the registry held any file row for the collection (bool(known_files));
+    # False when it holds none -- a re-adopt (keep-data disable deleted them) or a
+    # never-indexed first sync -- so DeleteReconciler runs the LanceDB-vs-disk prune.
+    registry_tracked: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +90,7 @@ def compute_sync_plan(
     discovery = FileDiscovery(directory)
     disk_files = discovery.discover(extensions)
     disk_paths = {str(p) for p in disk_files}
-    known_files = {r.path: r for r in conn.list_files(collection)}
+    known_files = {r.path: r for r in conn.files.list_files(collection)}
 
     to_ingest: list[Path] = []
     to_refresh: list[tuple[Path, str]] = []
@@ -113,10 +119,11 @@ def compute_sync_plan(
         to_refresh=to_refresh,
         to_delete=to_delete,
         unchanged=unchanged,
+        registry_tracked=bool(known_files),
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SyncResult:
     collection: str
     ingested: int
@@ -152,7 +159,7 @@ def _refresh_files(
                 logger.info("File changed since plan, skipping refresh: %s", fp)
                 continue
             document_name = str(fp.relative_to(ctx.resolved))
-            ctx.conn.upsert_file(
+            ctx.conn.files.upsert_file(
                 FileRecord(
                     path=str(fp),
                     collection=ctx.collection,
@@ -185,7 +192,7 @@ def _delete_documents(
     """
     t_delete_start = time.perf_counter()
     files_by_document_name: dict[str, list[FileRecord]] = {}
-    for rec in ctx.conn.list_files(ctx.collection):
+    for rec in ctx.conn.files.list_files(ctx.collection):
         files_by_document_name.setdefault(rec.document_name, []).append(rec)
 
     deleted = 0
@@ -197,7 +204,7 @@ def _delete_documents(
                 document_name, collection=ctx.collection, count=False
             )
             for rec in files_by_document_name.get(document_name, []):
-                ctx.conn.delete_file(rec.path, commit=False)
+                ctx.conn.files.delete_file(rec.path, commit=False)
             deleted += 1
             ctx.progress(f"[{ctx.collection}] Deleted {document_name}")
         except _RECOVERABLE as exc:
@@ -252,13 +259,16 @@ def sync_collection(
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
+    to_delete = DeleteReconciler(db, collection).to_delete(
+        plan.to_delete, registry_tracked=plan.registry_tracked
+    )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
         f"{len(plan.to_refresh)} to refresh, "
-        f"{len(plan.to_delete)} to delete, {plan.unchanged} unchanged"
+        f"{len(to_delete)} to delete, {plan.unchanged} unchanged"
     )
 
-    deleted, failed, errors = _delete_documents(plan.to_delete, ctx)
+    deleted, failed, errors = _delete_documents(to_delete, ctx)
     refreshed, ref_failed, ref_errors = _refresh_files(plan.to_refresh, ctx)
     failed += ref_failed
     errors.extend(ref_errors)

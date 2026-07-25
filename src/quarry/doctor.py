@@ -209,12 +209,12 @@ def _check_storage() -> CheckResult:
     )
 
 
-def _human_size(nbytes: int) -> str:
-    """Format byte count as human-readable string."""
+def _human_size(nbytes: float) -> str:
+    """Format byte count as human-readable string (float: /=1024 stays in-type)."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if nbytes < 1024 or unit == "TB":
             return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
-        nbytes /= 1024  # type: ignore[assignment]
+        nbytes /= 1024
     return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
 
 
@@ -400,18 +400,12 @@ def _check_sync_directories(registry_path: Path) -> CheckResult:
 
 def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
     """Check if the cwd has quarry enabled."""
-    from quarry.hooks import (  # noqa: PLC0415
-        _collection_for_cwd_conn,  # pyright: ignore[reportPrivateUsage]
-    )
+    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
     from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     conn = SyncRegistry(registry_path)
     try:
-        collection = (
-            _collection_for_cwd_conn(conn, cwd)  # pyright: ignore[reportPrivateUsage]
-            if cwd
-            else None
-        )
+        collection = CollectionResolver(conn).covering_collection(cwd) if cwd else None
     finally:
         conn.close()
     if collection is None:

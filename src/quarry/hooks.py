@@ -18,7 +18,6 @@ Hook events:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import os
 import subprocess
@@ -37,32 +36,8 @@ if TYPE_CHECKING:
     from quarry.artifacts import SessionArtifacts
     from quarry.client import QuarryClient
     from quarry.config import Settings
-    from quarry.sync_registry import SyncRegistry
 
 logger = logging.getLogger(__name__)
-
-
-def _unique_collection_name(
-    conn: SyncRegistry,
-    directory: Path,
-) -> str:
-    """Derive a collection name that doesn't collide with existing ones.
-
-    Prefers ``directory.name``.  If that's taken (another directory with the
-    same leaf name), appends the parent directory name to disambiguate:
-    ``leaf-parent``.
-    """
-    candidate = directory.name
-    if conn.get_registration(candidate) is None:
-        return candidate
-    # Disambiguate with parent directory name.
-    parent = directory.parent.name or "root"
-    candidate = f"{directory.name}-{parent}"
-    if conn.get_registration(candidate) is None:
-        return candidate
-    # Last resort: use the full resolved path hash suffix.
-    suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-    return f"{directory.name}-{suffix}"
 
 
 def _resolve_settings() -> Settings:
@@ -188,6 +163,41 @@ def _sync_in_background() -> str:
     return "launched"
 
 
+def _daemon_chunk_collections() -> frozenset[str]:
+    """Return the daemon's chunk-bearing collection names.
+
+    Raise ``ConnectionError`` when the daemon is unreachable or the client is
+    misconfigured: a down daemon yields no listing, and an empty set from a down
+    daemon is indistinguishable from a genuinely empty catalog.  Translating the
+    client-specific errors into one boundary-neutral exception here lets the
+    caller fail CLOSED without importing quarry.client's exception hierarchy — a
+    fresh name picked against an unverifiable (empty) chunk set would arm a latent
+    cross-project chunk merge.
+    """
+    from quarry.client import (  # noqa: PLC0415
+        ClientConfigError,
+        QuarryError,
+        TargetResolver,
+    )
+
+    try:
+        listing = TargetResolver.connect().list_registrations()
+    except (ClientConfigError, QuarryError) as exc:
+        msg = "quarryd unreachable; chunk-collection set unverifiable"
+        raise ConnectionError(msg) from exc
+    return frozenset(listing.chunk_collections)
+
+
+def _session_start_output(context: str) -> dict[str, object]:
+    """Wrap *context* in the SessionStart hook-response envelope."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        },
+    }
+
+
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     """Handle SessionStart hook.
 
@@ -201,10 +211,8 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     only fires when no coverage exists.  If cwd is a parent of existing
     child registrations, auto-register is skipped to prevent subsumption.
     """
-    from quarry.sync_registry import (  # noqa: PLC0415
-        SyncRegistry,
-        _is_ancestor_of,  # pyright: ignore[reportPrivateUsage]
-    )
+    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
+    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
     cwd = _as_dir(payload.get("cwd"))
     if not cwd:
@@ -223,20 +231,16 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
 
     settings = _resolve_settings()
     conn = SyncRegistry(settings.registry_path)
+    resolver = CollectionResolver(conn)
     try:
         # Step 1: Walk up from cwd to find covering registration.
-        collection = _collection_for_cwd_conn(conn, str(directory))
+        collection = resolver.covering_collection(str(directory))
 
         if collection is None:
             # Step 2: No coverage -- check for descendant registrations
             # before auto-registering.  A parent registration would
             # subsume existing child registrations, causing data loss.
-            registrations = conn.list_registrations()
-            has_children = any(
-                _is_ancestor_of(directory, Path(r.directory))  # pyright: ignore[reportPrivateUsage]
-                for r in registrations
-            )
-            if has_children:
+            if conn.has_registrations_under(directory):
                 logger.warning(
                     "session-start: existing child registrations found "
                     "under %s; skipping auto-register to prevent "
@@ -245,18 +249,40 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                     directory,
                     directory,
                 )
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": (
-                            f"Quarry: child registrations exist under {directory}. "
-                            "Auto-register skipped to prevent subsumption. "
-                            f"Run 'quarry enable {directory}' to register the parent."
-                        ),
-                    },
-                }
+                return _session_start_output(
+                    f"Quarry: child registrations exist under {directory}. "
+                    "Auto-register skipped to prevent subsumption. "
+                    f"Run 'quarry enable {directory}' to register the parent."
+                )
 
-            collection = _unique_collection_name(conn, directory)
+            # Re-adopt this cwd's own keep-data archive if it owns one (checked
+            # first, over LOCAL retained markers, so a same-dir re-adopt works even
+            # with the daemon down).  Only a cwd owning NO archive needs a fresh
+            # name — and a merge-safe fresh name requires the daemon's chunk set.
+            collection = resolver.archived_collection_for(directory)
+            if collection is None:
+                try:
+                    chunk_collections = _daemon_chunk_collections()
+                except ConnectionError:
+                    # Fail closed: the daemon is unreachable, so the chunk set is
+                    # unverifiable.  Writing a registration now would clear the
+                    # orphan sweep's pending mark and arm a latent cross-project
+                    # merge when the daemon returns.  No indexing runs while the
+                    # daemon is down, so deferring has zero functional cost.
+                    logger.warning(
+                        "session-start: quarryd unreachable; deferring "
+                        "auto-registration of %s to avoid a cross-project merge",
+                        directory,
+                    )
+                    return _session_start_output(
+                        f"Quarry: quarryd is unreachable, so auto-registration of "
+                        f"{directory} is deferred to avoid merging chunks across "
+                        "projects. Start quarryd and re-open the session to enable "
+                        "semantic search here."
+                    )
+                collection = resolver.unique_collection_name(
+                    directory, chunk_collections
+                )
             conn.register_directory(directory, collection)
             logger.info(
                 "session-start: auto-registered %s as '%s'",
@@ -284,39 +310,9 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             "For deep research across local docs and the web, use the "
             "researcher agent."
         )
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": context,
-            },
-        }
+        return _session_start_output(context)
     finally:
         conn.close()
-
-
-def _collection_for_cwd_conn(
-    conn: SyncRegistry,
-    cwd: str,
-) -> str | None:
-    """Resolve the registered collection for cwd using an open connection.
-
-    Walk up from cwd to find a registered parent or exact match.
-    """
-    registrations = conn.list_registrations()
-    if not registrations:
-        return None
-
-    reg_map = {r.directory: r.collection for r in registrations}
-    current = Path(cwd).resolve()
-    while True:
-        key = str(current)
-        if key in reg_map:
-            return reg_map[key]
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return None
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:

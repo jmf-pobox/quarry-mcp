@@ -2387,8 +2387,33 @@ class TestRegistrations:
         data = resp.json()
         assert data["total_registrations"] == 0
         assert data["registrations"] == []
+        assert data["retained"] == []
+        # An empty DB has no chunk-bearing collections, so the picker-avoid set is
+        # empty — but the field is always present (a faithful proxy of the local view).
+        assert data["chunk_collections"] == []
+
+    def test_get_lists_chunk_collections(self, client: TestClient) -> None:
+        """chunk_collections carries every chunk-bearing name, even with no registry.
+
+        The name-picker avoids these so a different directory can never be
+        auto-assigned a name already holding another project's chunks. Read from
+        the catalog regardless of the registry: a captures/remember collection can
+        hold chunks before any directory is registered.
+        """
+        cols = [
+            {"collection": "default-captures", "document_count": 1, "chunk_count": 3},
+            {"collection": "memory-rmh", "document_count": 1, "chunk_count": 2},
+        ]
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.list_collections",
+            return_value=cols,
+        ):
+            data = client.get("/v1/registrations").json()
+
+        assert data["chunk_collections"] == ["default-captures", "memory-rmh"]
 
     def test_get_lists_registrations(self, client: TestClient) -> None:
+        from quarry.collection_marker_store import RetainedMarker
         from quarry.sync_registry import DirectoryRegistration
 
         regs = [
@@ -2406,6 +2431,9 @@ class TestRegistrations:
             ),
         ):
             mock_registry.return_value.list_registrations.return_value = regs
+            mock_registry.return_value.markers.retained_markers.return_value = [
+                RetainedMarker(collection="archived", original_directory="/home/u/arch")
+            ]
             data = client.get("/v1/registrations").json()
 
         assert data["total_registrations"] == 1
@@ -2413,6 +2441,39 @@ class TestRegistrations:
         assert entry["collection"] == "math"
         assert entry["directory"] == "/home/u/math"
         assert entry["registered_at"] == "2026-01-01T00:00:00"
+        # retained markers (name + origin) travel on the remote path (bug-class 3).
+        assert data["retained"] == [
+            {"collection": "archived", "original_directory": "/home/u/arch"}
+        ]
+
+    def test_list_response_matches_local_contract(self, client: TestClient) -> None:
+        """The remote list JSON is a faithful RegistrationList (bug-class 3 parity).
+
+        The response the client parses locally and the JSON the daemon emits must
+        share the same field names — including ``retained`` — so the client-side
+        name-picker and re-adopt see archived markers identically on both paths.
+        Asserting the exact key set catches a field added on one side but not the
+        other.
+        """
+        from quarry.api import RegistrationList
+        from quarry.collection_marker_store import RetainedMarker
+
+        with (
+            patch("quarry.daemon.routes.registrations.SyncRegistry") as mock_registry,
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            mock_registry.return_value.list_registrations.return_value = []
+            mock_registry.return_value.markers.retained_markers.return_value = [
+                RetainedMarker(collection="kept", original_directory="/home/u/kept")
+            ]
+            resp = client.get("/v1/registrations")
+
+        data = resp.json()
+        assert set(data) == set(RegistrationList.model_fields)
+        # The JSON round-trips into the shared contract with retained intact.
+        parsed = RegistrationList.model_validate(data)
+        assert parsed.retained[0].collection == "kept"
+        assert parsed.retained[0].original_directory == "/home/u/kept"
 
     def test_post_registers_directory_returns_202(
         self,
@@ -2809,35 +2870,144 @@ class TestRunPurgeTask:
     """Direct coroutine tests for the async chunk-purge task."""
 
     def test_purge_success_sets_completed_with_count(self, tmp_path: Path) -> None:
-        from quarry.daemon.routes.registrations import RegistrationRoutes
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
+        # A real (non-keep) deregister marks the collection pending; the purge
+        # re-checks that mark at execution time before deleting.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending("docs")
+        reg.commit()
+        reg.close()
         state = TaskState(task_id="deregister-x", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         # DES-045: the purge is a collection-wide delete routed through the queue.
         with patch(
             "quarry.db.chunk_store.ChunkStore.delete_collection", return_value=3
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
+            asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "completed"
         assert state.results["deleted_chunks"] == 3
         assert state.results["removed"] == 1
 
     def test_purge_failure_sets_failed(self, tmp_path: Path) -> None:
-        from quarry.daemon.routes.registrations import RegistrationRoutes
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
 
         ctx = DaemonContext(_mock_settings(tmp_path))
         _inject_mocks(ctx)
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending("docs")
+        reg.commit()
+        reg.close()
         state = TaskState(task_id="deregister-y", kind="deregister")
         state.results = {"collection": "docs", "removed": 1, "deleted_chunks": 0}
         with patch(
             "quarry.db.chunk_store.ChunkStore.delete_collection",
             side_effect=RuntimeError("purge boom"),
         ):
-            asyncio.run(RegistrationRoutes(ctx)._run_purge(state, "docs"))
+            asyncio.run(RegistrationLifecycle(ctx).run_purge(state, "docs"))
         assert state.status == "failed"
         assert "purge boom" in state.error
+
+
+class TestSubsumeTeardownForceScoping:
+    """The self-subsume teardown forces the purge ONLY for the same-name child."""
+
+    def _ctx(self, tmp_path: Path) -> DaemonContext:
+        """Build a daemon context on a REAL Settings (real chunking) + mock embedder."""
+        from quarry.config import Settings
+
+        settings = Settings(
+            lancedb_path=tmp_path / "lancedb", registry_path=tmp_path / "registry.db"
+        )
+        settings.lancedb_path.mkdir(parents=True)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        return ctx
+
+    def _seed_pending(
+        self, ctx: DaemonContext, tmp_path: Path, collection: str
+    ) -> Path:
+        """Seed one doc into *collection* and mark it pending; return its dir."""
+        from quarry.ingestion.pipeline import plan_file_chunks
+        from quarry.sync_registry import SyncRegistry
+
+        directory = tmp_path / "leaf" / collection
+        directory.mkdir(parents=True)
+        (directory / "x.md").write_text("indexable body " * 20)
+        chunks, _ = plan_file_chunks(
+            directory / "x.md",
+            ctx.settings,
+            collection=collection,
+            document_name="x.md",
+        )
+        ctx.database.store.insert(
+            chunks, np.zeros((len(chunks), 768), dtype=np.float32)
+        )
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.markers.mark_pending(collection)
+        reg.commit()
+        reg.close()
+        return directory
+
+    def _docnames(self, ctx: DaemonContext, collection: str) -> set[str]:
+        from quarry.db import ChunkCatalog
+
+        return {
+            d["document_name"]
+            for d in ChunkCatalog(ctx.database.db).list_documents(collection)
+        }
+
+    def test_differently_named_child_reregistered_survives(
+        self, tmp_path: Path
+    ) -> None:
+        """A differently-named subsumed child re-registered before teardown survives.
+
+        force=False for a child whose name != the parent's, so the purge's
+        execution-time re-check sees it re-registered and no-ops — a different
+        directory that reused the freed name keeps its freshly-ingested chunks.
+        """
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
+
+        ctx = self._ctx(tmp_path)
+        child_dir = self._seed_pending(ctx, tmp_path, "childcol")
+        # A different directory re-registers the freed name and re-scans, racing
+        # ahead of the stale teardown purge.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.register_directory(child_dir, "childcol")
+        reg.close()
+
+        lifecycle = RegistrationLifecycle(ctx)
+        asyncio.run(lifecycle._teardown_subsumed("childcol", parent="parentcol"))
+
+        assert self._docnames(ctx, "childcol") == {"x.md"}  # re-check no-op → survives
+
+    def test_same_name_child_force_purges_clean_slate(self, tmp_path: Path) -> None:
+        """The same-name self-subsume child is force-purged even though registered.
+
+        force=True for the child whose name == the parent's (the widen-to-same-name
+        case), so the clean-slate purge deletes the old narrower-root chunks the
+        re-check would otherwise skip as "registered".
+        """
+        from quarry.daemon.registration_lifecycle import RegistrationLifecycle
+        from quarry.sync_registry import SyncRegistry
+
+        ctx = self._ctx(tmp_path)
+        parent_dir = self._seed_pending(ctx, tmp_path, "docs")
+        # The widened parent re-registers the same name; its old chunks must go.
+        reg = SyncRegistry(ctx.settings.registry_path)
+        reg.register_directory(parent_dir, "docs")
+        reg.close()
+
+        asyncio.run(
+            RegistrationLifecycle(ctx)._teardown_subsumed("docs", parent="docs")
+        )
+
+        assert self._docnames(ctx, "docs") == set()  # forced clean slate
 
 
 class TestDatabasesMissingTable:

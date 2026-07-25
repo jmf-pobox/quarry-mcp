@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from quarry.api import RegistrationInfo
+from quarry.api import RegistrationInfo, RetainedCollection
 from quarry.registrations import Registrations
 
 
@@ -20,6 +20,12 @@ def _reg(collection: str, directory: Path) -> RegistrationInfo:
         collection=collection,
         directory=str(directory.resolve()),
         registered_at="2026-01-01",
+    )
+
+
+def _retained(collection: str, directory: Path) -> RetainedCollection:
+    return RetainedCollection(
+        collection=collection, original_directory=str(directory.resolve())
     )
 
 
@@ -117,3 +123,166 @@ class TestUniqueCollectionName:
 
         expected_suffix = hashlib.sha256(str(project).encode()).hexdigest()[:8]
         assert view.unique_collection_name(project) == f"myproject-{expected_suffix}"
+
+    def test_avoids_archived_retained_name(self, tmp_path: Path) -> None:
+        # No LIVE registration named "backend", but it is archived (retained) by a
+        # prior keep-data disable from a DIFFERENT directory. A new, unrelated
+        # "backend" directory must NOT re-use the archived name (which would
+        # inherit its chunks) — it disambiguates off the parent instead.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        view = Registrations(
+            [], retained=[_retained("backend", tmp_path / "elsewhere")]
+        )
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_avoids_chunk_bearing_captures_or_memory_name(self, tmp_path: Path) -> None:
+        # No LIVE registration and no retained archive named "default", but the
+        # collection already holds chunks (a captures/memory/remember target such
+        # as "default-captures", "memory-x", or "default").  A new, unrelated
+        # directory whose leaf is "default" must NOT be handed that chunk-bearing
+        # name (which would merge its chunks into another project's collection) —
+        # it disambiguates off the parent.  FAILS against a live-plus-retained-only
+        # picker (which returns "default"); passes once chunk_collections joins
+        # the avoid-set.
+        parent = tmp_path / "acme"
+        project = parent / "default"
+        project.mkdir(parents=True)
+        view = Registrations([], chunk_collections=["default"])
+
+        assert view.unique_collection_name(project) == "default-acme"
+
+    def test_avoids_subsumed_evicted_child_chunks(self, tmp_path: Path) -> None:
+        # A parent registration once subsumed-and-evicted a child collection
+        # ("backend"); the child's directory row is gone but its chunks remain in
+        # LanceDB (drained lazily by the orphan sweep).  A DIFFERENT directory
+        # whose leaf is "backend" must not claim that still-chunk-bearing name and
+        # merge into the evicted child's chunks — it disambiguates instead.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        view = Registrations([], chunk_collections=["backend"])
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_hash_fallback_avoids_chunk_bearing_name(self, tmp_path: Path) -> None:
+        # Leaf, leaf-parent, AND the 8-char hash candidate all already hold chunks.
+        # The fallback must be avoid-checked too (not returned unchecked), so the
+        # hash suffix lengthens until it clears every chunk-bearing name.
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        digest = hashlib.sha256(str(project).encode()).hexdigest()
+        taken = ["backend", "backend-acme", f"backend-{digest[:8]}"]
+        view = Registrations([], chunk_collections=taken)
+
+        name = view.unique_collection_name(project)
+
+        assert name not in taken
+        assert name.startswith("backend-")
+
+    def test_from_list_carries_chunk_collections(self, tmp_path: Path) -> None:
+        # from_list must thread the wire response's chunk_collections into the
+        # picker so the remote path avoids chunk-bearing names as a local view does.
+        from quarry.api import RegistrationList
+
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        listing = RegistrationList(
+            total_registrations=0,
+            registrations=[],
+            chunk_collections=["backend"],
+        )
+        view = Registrations.from_list(listing)
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_from_list_carries_retained(self, tmp_path: Path) -> None:
+        # from_list must thread the wire response's retained markers into the
+        # picker so the remote path avoids archived names as a local view does.
+        from quarry.api import RegistrationList
+
+        parent = tmp_path / "acme"
+        project = parent / "backend"
+        project.mkdir(parents=True)
+        listing = RegistrationList(
+            total_registrations=0,
+            registrations=[],
+            retained=[_retained("backend", tmp_path / "elsewhere")],
+        )
+        view = Registrations.from_list(listing)
+
+        assert view.unique_collection_name(project) == "backend-acme"
+
+    def test_archived_collection_for_matches_owning_directory(
+        self, tmp_path: Path
+    ) -> None:
+        # The SAME directory that owns an archive re-adopts it by name; an
+        # unrelated directory owns no archive and gets None (→ a fresh name).
+        owner = tmp_path / "acme" / "backend"
+        owner.mkdir(parents=True)
+        other = tmp_path / "other" / "backend"
+        other.mkdir(parents=True)
+        view = Registrations([], retained=[_retained("backend", owner)])
+
+        assert view.archived_collection_for(owner) == "backend"
+        assert view.archived_collection_for(other) is None
+
+    def test_archived_collection_for_is_first_wins_on_duplicate_directory(
+        self, tmp_path: Path
+    ) -> None:
+        # Two archives can share one original_directory (the retained PK is the
+        # collection, not the directory). The client must keep the FIRST marker
+        # seen -- aligned with the daemon resolver's next() over retained_markers()
+        # -- so local and remote re-adopt pick the same archive. Last-wins (a dict
+        # comprehension) would diverge from the daemon.
+        owner = tmp_path / "shared"
+        owner.mkdir()
+        view = Registrations(
+            [], retained=[_retained("aaa", owner), _retained("bbb", owner)]
+        )
+
+        assert view.archived_collection_for(owner) == "aaa"  # first, not last
+
+    def test_remote_readopt_equals_local(self, tmp_path: Path) -> None:
+        """Re-adopt off the wire payload matches re-adopt off the local registry.
+
+        Bridges the whole parity chain: a real registry archives a collection;
+        its ``retained_markers()`` are mapped into the wire ``RetainedCollection``
+        exactly as the HTTP ``/registrations`` route does; ``Registrations.from_list``
+        over that payload re-adopts by the owning directory identically to a local
+        view built from the same markers.
+        """
+        from quarry.api import RegistrationList
+        from quarry.sync_registry import SyncRegistry
+
+        owner = tmp_path / "acme" / "backend"
+        owner.mkdir(parents=True)
+        conn = SyncRegistry(tmp_path / "r.db")
+        try:
+            conn.register_directory(owner, "backend")
+            conn.deregister_directory("backend", keep_data=True)
+            markers = conn.markers.retained_markers()
+        finally:
+            conn.close()
+
+        # Marshal registry markers into the wire shape, exactly as the HTTP route.
+        wire = [
+            RetainedCollection(
+                collection=m.collection, original_directory=m.original_directory
+            )
+            for m in markers
+        ]
+        local = Registrations([], retained=wire)  # straight from the registry
+        remote = Registrations.from_list(  # the same markers through the envelope
+            RegistrationList(total_registrations=0, registrations=[], retained=wire)
+        )
+
+        assert local.archived_collection_for(owner) == "backend"
+        assert remote.archived_collection_for(owner) == "backend"
+        assert local.archived_collection_for(owner) == remote.archived_collection_for(
+            owner
+        )

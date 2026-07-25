@@ -26,8 +26,11 @@ from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.tasks import task_terminal
 from quarry.sync_finalize import SyncFinalizer
+from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from quarry.config import Settings
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.job_spool import SpoolRecord
@@ -85,17 +88,72 @@ class CollectionPurgeJob:
 
     database: Database
     collection: str
+    registry_path: Path
+    # Skip the execution-time re-check and delete unconditionally. Set ONLY for
+    # the self-subsume clean-slate purge (see _purge), never the sweep/deregister
+    # purges, which stay marker-gated.
+    force: bool = False
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Delete the collection's chunks off-thread, recording the count."""
         del ctx  # this job carries its own database; the queue's ctx is unused
         with task_terminal(state):
-            deleted = await run_in_threadpool(
-                self.database.store.delete_collection, self.collection
-            )
+            deleted = await run_in_threadpool(self._purge)
             state.status = "completed"
             state.results = {"deleted": deleted}
 
     def spool_record(self) -> SpoolRecord | None:
         """Return ``None``: a purge has no content to recover."""
         return None
+
+    def _purge(self) -> int:
+        """Re-check the registry under one transaction, then purge if still due.
+
+        A purge submitted from a stale sweep snapshot can be raced by a
+        re-enable: X is marked pending and its immediate purge shed, the sweep
+        snapshots X as an orphan, X is re-registered (clearing the mark, adding
+        the directory row) and re-scanned, THEN this stale purge runs. Deleting
+        unconditionally would wipe the re-ingested chunks — and permanently,
+        since the re-scan's registry rows survive the chunk delete, so the next
+        sync sees them as up to date and never re-ingests.
+
+        So re-check at execution time (the analog of the reconcile's live-key
+        skip): inside ONE registry transaction, purge ONLY if the collection is
+        still marked and neither registered nor retained. Once the chunks are
+        gone the mark is spent, so clearing it keeps the closed set tight and
+        stops a future collection re-using the name from being swept on it.
+
+        ``force`` bypasses the still-pending/registered checks (the self-subsume
+        clean-slate purge MUST delete the widened parent's OLD narrower-root
+        chunks even though it re-registered the same name), but it NEVER bypasses
+        the retained guard: retained is an absolute invariant. A concurrent
+        keep-data deregister can mark the collection retained (an independent
+        commit, no FIFO slot) while a force purge is queued; deleting then would
+        wipe the chunks keep-data was asked to preserve. So retained is checked
+        standalone and always honored, force or not.
+        """
+        conn = SyncRegistry(self.registry_path)
+        try:
+            conn.execute("BEGIN")
+            retained = self.collection in conn.markers.list_retained()
+            superseded = not self.force and self._superseded_excluding_retained(conn)
+            if retained or superseded:
+                conn.commit()  # retained / re-registered / cleared → do NOT delete
+                return 0
+            deleted = self.database.store.delete_collection(self.collection)
+            conn.markers.clear_pending(self.collection)
+            conn.commit()
+        finally:
+            conn.close()
+        return deleted
+
+    def _superseded_excluding_retained(self, conn: SyncRegistry) -> bool:
+        """Return whether the purge is superseded by re-registration or a spent mark.
+
+        Reads under the caller's open transaction (one snapshot).  Retained is the
+        caller's standalone absolute guard, so it is deliberately NOT re-queried
+        here — one ``list_retained()`` per purge, not two.
+        """
+        still_pending = self.collection in conn.markers.pending()
+        registered = conn.get_registration(self.collection) is not None
+        return not still_pending or registered

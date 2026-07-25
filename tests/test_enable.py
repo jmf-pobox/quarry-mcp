@@ -12,21 +12,19 @@ from unittest.mock import patch
 
 import pytest
 
+from quarry.claudemd_block import ClaudeMdBlock
 from quarry.enable import (
-    _CLAUDEMD_BEGIN,
-    _CLAUDEMD_BLOCK,
-    _CLAUDEMD_END,
     _CONFIG_TEMPLATE,
     DisableResult,
     EnableResult,
-    _append_claudemd_block,
     _bootstrap_ethos_memory,
-    _remove_claudemd_block,
     _write_project_config,
     disable_project,
     enable_project,
 )
 from tests.conftest import FakeRegistryClient
+
+_BLOCK = ClaudeMdBlock()
 
 _NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
 
@@ -89,6 +87,105 @@ class TestT4EnableCollectionOverride:
         assert result.collection == "custom"
         assert result.created_registration is True
         assert client.registered[0].collection == "custom"
+
+
+class TestKeepDataArchiveNoMerge:
+    """A keep-data archive is never silently inherited by an unrelated project."""
+
+    def test_unrelated_same_leaf_gets_distinct_collection(self, tmp_path: Path) -> None:
+        """enable dir_a "backend" → keep-data disable → enable an unrelated dir_b.
+
+        dir_b's leaf name is also "backend", but "backend" is archived (retained)
+        from dir_a's keep-data disable.  The name-picker must NOT hand dir_b the
+        archived "backend" (which would merge dir_a's kept chunks into dir_b's
+        collection) — it gets a distinct name, so the two projects never share a
+        collection.
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            assert client.registered[-1].collection == "backend"
+            disable_project(dir_a, client, keep_data=True)
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "backend-other"  # distinct, disambiguated
+        assert result.collection != "backend"  # NOT the archived collection
+        assert client.registered[-1].collection == "backend-other"  # no merge
+
+    def test_same_dir_reenable_readopts_same_collection(self, tmp_path: Path) -> None:
+        """Re-enabling the SAME dir re-adopts its archived collection name.
+
+        enable dir_a "backend" → keep-data disable (archived under original
+        directory dir_a) → re-enable dir_a.  Because dir_a owns the archive, the
+        re-enable must re-adopt the SAME "backend" collection (reusing its kept
+        chunks), not pick a disambiguated fresh name.  A different directory is
+        the ``test_unrelated_same_leaf`` case; this is the intended keep-data
+        round-trip.
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            disable_project(dir_a, client, keep_data=True)
+            result = enable_project(dir_a, client)
+
+        assert result.collection == "backend"  # re-adopt, not "backend-work"
+        assert client.registered[-1].collection == "backend"
+
+    def test_unrelated_dir_with_distinct_leaf_keeps_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """An unrelated dir with its OWN leaf name is untouched by another's archive.
+
+        enable dir_a "backend" → keep-data disable (archived) → enable dir_b, whose
+        leaf is the distinct "svc".  dir_a's archive belongs to dir_a; it neither
+        attracts nor renames an unrelated directory that was never going to collide
+        — dir_b simply registers under its own leaf "svc".  (The refusal to *merge*
+        onto another dir's archived name lives in ``SyncRegistry.register_directory``
+        and is exercised in test_registry.)
+        """
+        dir_a = tmp_path / "work" / "backend"
+        dir_a.mkdir(parents=True)
+        dir_b = tmp_path / "other" / "svc"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(dir_a, client)
+            disable_project(dir_a, client, keep_data=True)
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "svc"  # dir_b keeps its own identity
+
+    def test_unrelated_dir_avoids_chunk_bearing_name(self, tmp_path: Path) -> None:
+        """A different dir never claims a name that already holds chunks.
+
+        A collection "backend" already holds chunks on the daemon (a captures/
+        memory/remember target, or a subsumed-then-evicted child) but has NO
+        registration.  Enabling an unrelated dir_b whose leaf is also "backend"
+        must NOT be handed that chunk-bearing name — the picker avoids every
+        chunk-bearing collection reported on the wire, so it disambiguates and the
+        two projects never share a collection.  FAILS against a live-plus-retained
+        -only picker (which would return "backend"); passes once chunk_collections
+        joins the avoid-set.
+        """
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient(chunk_collections=["backend"])
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "backend-other"  # disambiguated, no merge
+        assert result.collection != "backend"
+        assert client.registered[-1].collection == "backend-other"
 
 
 class TestT5EnableCreatesConfig:
@@ -576,8 +673,8 @@ class TestEnableAppendsClaudemdBlock:
         claudemd = project / "CLAUDE.md"
         assert claudemd.exists()
         content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN in content
-        assert _CLAUDEMD_END in content
+        assert _BLOCK.begin in content
+        assert _BLOCK.end in content
         assert "Local semantic search is available via quarry." in content
 
 
@@ -594,7 +691,7 @@ class TestEnableClaudemdIdempotent:
         assert result1.claudemd_appended is True
         assert result2.claudemd_appended is False
         content = (project / "CLAUDE.md").read_text()
-        assert content.count(_CLAUDEMD_BEGIN) == 1
+        assert content.count(_BLOCK.begin) == 1
 
 
 class TestEnableAppendsToExistingClaudemd:
@@ -611,8 +708,8 @@ class TestEnableAppendsToExistingClaudemd:
         assert result.claudemd_appended is True
         content = claudemd.read_text()
         assert content.startswith("# My Project\n\nExisting content.\n")
-        assert _CLAUDEMD_BEGIN in content
-        assert _CLAUDEMD_END in content
+        assert _BLOCK.begin in content
+        assert _BLOCK.end in content
 
 
 class TestDisableRemovesClaudemdBlock:
@@ -629,8 +726,8 @@ class TestDisableRemovesClaudemdBlock:
         claudemd = project / "CLAUDE.md"
         assert claudemd.exists()
         content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN not in content
-        assert _CLAUDEMD_END not in content
+        assert _BLOCK.begin not in content
+        assert _BLOCK.end not in content
 
 
 class TestDisablePreservesOtherClaudemdContent:
@@ -649,51 +746,4 @@ class TestDisablePreservesOtherClaudemdContent:
         content = claudemd.read_text()
         assert "# My Project" in content
         assert "Keep this." in content
-        assert _CLAUDEMD_BEGIN not in content
-
-
-class TestDisableNoopWhenNoMarkers:
-    def test_no_markers_no_change(self, tmp_path: Path) -> None:
-        project = tmp_path / "myproject"
-        project.mkdir()
-        claudemd = project / "CLAUDE.md"
-        original = "# Untouched\n"
-        claudemd.write_text(original)
-
-        removed = _remove_claudemd_block(project)
-
-        assert removed is False
-        assert claudemd.read_text() == original
-
-
-class TestDisableNoopWhenNoClaudemd:
-    def test_missing_file_no_error(self, tmp_path: Path) -> None:
-        project = tmp_path / "myproject"
-        project.mkdir()
-
-        removed = _remove_claudemd_block(project)
-
-        assert removed is False
-
-
-class TestAppendClaudemdBlockDirect:
-    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
-        appended = _append_claudemd_block(tmp_path)
-
-        assert appended is True
-        claudemd = tmp_path / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert content == _CLAUDEMD_BLOCK
-
-    def test_appends_newline_to_file_without_trailing_newline(
-        self, tmp_path: Path
-    ) -> None:
-        claudemd = tmp_path / "CLAUDE.md"
-        claudemd.write_text("no trailing newline")
-
-        appended = _append_claudemd_block(tmp_path)
-
-        assert appended is True
-        content = claudemd.read_text()
-        assert _CLAUDEMD_BEGIN in content
+        assert _BLOCK.begin not in content

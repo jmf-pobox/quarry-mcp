@@ -30,6 +30,7 @@ from quarry.api.registrations import (
     RegisterRequest,
     RegistrationInfo,
     RegistrationList,
+    RetainedCollection,
 )
 from quarry.api.search import SearchHit, SearchRequest, SearchResponse
 from quarry.api.show import ShowPageResponse, ShowRequest
@@ -62,6 +63,7 @@ __all__ = [
     "RegistrationInfo",
     "RegistrationList",
     "RememberRequest",
+    "RetainedCollection",
     "SearchHit",
     "SearchRequest",
     "SearchResponse",

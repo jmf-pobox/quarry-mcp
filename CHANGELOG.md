@@ -31,6 +31,42 @@ across `transform`, `index`, and `connector`).
   single-writer-per-table invariant across the whole roster. Watching is on by
   default (`watch_enabled=true`); `watch_use_polling` selects watchdog's
   stat-walk fallback. New core dependency: `watchdog>=4.0`.
+- **index (watch lifecycle)**: DES-045a removal lifecycle, orphan sweep, and
+  keep-data re-adopt. Registering a directory that subsumes an existing narrower
+  registration now tears down the child's watch and purges its chunks before
+  installing the parent watch; a deregister or subsume purge shed under a full
+  queue is retried by the periodic safety-scan reconcile. A durable
+  orphan sweep purges only collections the registry has **explicitly marked for
+  purge** (the `pending_purge_collections` table — marked on a non-keep-data
+  deregister or a subsume eviction, in the same transaction as the directory-row
+  delete), never an open-world "everything not currently registered"; so captures,
+  agent memories, and `remember` targets — collections that legitimately have no
+  directory registration — are structurally never swept. The marker survives a
+  daemon restart (a shed purge is drained by the next sweep), and
+  `CollectionPurgeJob` re-checks the mark at execution time so a disable→re-enable
+  toggle can't race the sweep into deleting live chunks. A new
+  `retained_collections` marker records the
+  directory a `--keep-data` disable was taken from, so a *different* directory
+  reusing an archived collection's leaf name (`backend`, `docs`, …) can no longer
+  silently adopt its chunks — a cross-project search-merge that was previously
+  undetectable. Re-enabling the *same* directory re-adopts its kept collection
+  and auto-freshens it: the re-adopt reconciles stored documents against disk and
+  prunes files deleted while it was disabled (pruning keys on the authoritative
+  stored path and only on definite absence, so a nested/basename-stored doc or a
+  transiently-unreadable file is never wrongly deleted). The retained set and the
+  chunk-bearing collection set are both surfaced on `GET /v1/registrations` for
+  remote/local parity. The fresh collection-name picker now avoids every
+  chunk-bearing name (`registered ∪ retained ∪ chunk_collections`) on both the
+  client and the session-start hook, so a different directory can never be
+  auto-assigned a name that already holds another project's chunks — closing a
+  family of cross-project auto-merges; it fails **closed** when the daemon is
+  unreachable (defers the auto-registration with a nudge rather than arm a latent
+  merge). The whole removal + naming lifecycle is modeled in Z
+  (`docs/spec/watch_lifecycle.tex`) and ProB model-checked (invariants I1–I10,
+  incl. non-directory collections; each with a negative control) — the model and
+  adversarial review caught a series of data-safety defects before merge, one of
+  which (an open-world sweep that would have wiped all captures and agent memories
+  on a 5-minute default timer) was catastrophic; see DES-045a.
 - **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
   daemon-first split is now enforced structurally, not by convention. A new
   import-linter contract (`.importlinter`, wired into `make check` via
