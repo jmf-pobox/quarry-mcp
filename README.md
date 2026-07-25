@@ -75,7 +75,20 @@ No special flag needed --- the default install runs a local daemon on localhost.
 
 ### Claude Desktop
 
-[**Download punt-quarry.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) and double-click to install. Alternatively, `quarry install` configures Claude Desktop automatically.
+The `.mcpb` bundle is an *on-top* way to reach the **same** local quarry index from Claude Desktop and CoWork agents. It embeds no engine: it registers the thin `quarry mcp` stdio client, which talks to the same resident `quarryd` daemon that backs the CLI and Claude Code. Desktop searches exactly the data you have already indexed --- not a separate store --- precisely because every surface shares one daemon. The dependency is the same one a menu-bar surface would have: a thin client over the running `quarryd`, not a self-contained app.
+
+**It is not a standalone install.** Quarry must already be present: install it first, which puts the `quarry` binary on your PATH and starts the daemon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh | sh
+```
+
+With quarry installed, add it to Claude Desktop by either route:
+
+- **Automatic:** `quarry install` also configures Claude Desktop --- nothing else to do.
+- **Manual:** [**Download punt-quarry.mcpb**](https://github.com/punt-labs/quarry/releases/latest/download/punt-quarry.mcpb) and double-click to add it to Desktop yourself.
+
+A fresh-machine double-click of the `.mcpb` alone will not work --- it needs the `quarry` binary and a running daemon behind it.
 
 **Note:** Uploaded files in Claude Desktop live in a sandbox that quarry cannot access. Use `remember` for uploaded content, or provide local file paths to `ingest`.
 
