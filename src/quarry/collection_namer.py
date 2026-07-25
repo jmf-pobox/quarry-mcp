@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from itertools import count
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
@@ -35,14 +36,15 @@ class CollectionNamer:
         return self
 
     def unique(self) -> str:
-        """Return the leaf name, else a parent- or path-hash-disambiguated name.
+        """Return the leaf name, else a parent-, hash-, or counter-disambiguated name.
 
         Prefers the directory's leaf name; on collision appends the parent
-        directory name (``leaf-parent``), then a path-hash suffix.  A
-        filesystem-root directory has an empty ``.name``, so the leaf falls back
-        to ``"root"`` — a collection is never named the empty string.  The hash
-        suffix lengthens until it clears every taken name, so even a (astronomical)
-        hash collision never returns a chunk-bearing or archived name.
+        directory name (``leaf-parent``), then a lengthening path-hash suffix, and
+        finally a numeric counter on the full digest.  A filesystem-root directory
+        has an empty ``.name``, so the leaf falls back to ``"root"`` — a collection
+        is never named the empty string.  Because ``taken`` is finite and the
+        counter is unbounded, unique() can never return a taken name by
+        construction, even if the full digest itself is (impossibly) taken.
         """
         leaf = self._directory.name or "root"
         if leaf not in self._taken:
@@ -55,4 +57,10 @@ class CollectionNamer:
             candidate = f"{leaf}-{digest[:length]}"
             if candidate not in self._taken:
                 return candidate
-        return f"{leaf}-{digest}"
+        # Full digest exhausted (a cryptographically impossible collision): count
+        # up until the name is free.  taken is finite, so next() always yields.
+        return next(
+            cand
+            for n in count(2)
+            if (cand := f"{leaf}-{digest}-{n}") not in self._taken
+        )

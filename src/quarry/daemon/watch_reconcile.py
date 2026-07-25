@@ -161,12 +161,16 @@ class WatchReconciler:
         collection re-registered or kept after being marked is spared even if its
         stale mark lingers.
 
-        All four reads run inside ONE explicit transaction so they see a single
-        consistent snapshot.  This is load-bearing: Python's sqlite3 opens an
-        implicit transaction only before DML, never before a SELECT, so without
-        the ``BEGIN`` a register/keep-data-deregister committing between reads
-        could fall through the sets.  Pure reads through ``ctx.database`` and the
-        registry — NO roster access, so nothing races the loop thread.
+        The three registry reads (pending, registered, retained) run inside ONE
+        explicit transaction so they see a single consistent snapshot.  This is
+        load-bearing: Python's sqlite3 opens an implicit transaction only before
+        DML, never before a SELECT, so without the ``BEGIN`` a
+        register/keep-data-deregister committing between reads could fall through
+        the sets.  ``chunk_cols`` is read first from the vector store's catalog (a
+        separate database, so not part of the registry transaction); a collection
+        that gains chunks between that read and the snapshot is simply picked up
+        next reconcile.  Pure reads through ``ctx.database`` and the registry — NO
+        roster access, so nothing races the loop thread.
         """
         ctx = self._deps.ctx
         chunk_cols = {c["collection"] for c in ctx.database.catalog.list_collections()}

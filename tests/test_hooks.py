@@ -326,17 +326,23 @@ class TestIsSyncRunning:
 # ---------------------------------------------------------------------------
 
 
-class TestHandleSessionStart:
+class _ReachableDaemonEmptyCatalog:
+    """Mixin: model a reachable daemon with an empty chunk catalog for its tests.
+
+    The auto-register-fresh-name path needs a reachable daemon for the
+    chunk-collection avoid-set.  Without this, the (correct) fail-closed defer
+    path runs under CI — where no daemon is up — so an auto-register assertion
+    like ``len(regs) == 1`` sees 0.  Modeling an up daemon with an empty catalog
+    lets the picker proceed hermetically, independent of any live quarryd.
+    """
+
     @pytest.fixture(autouse=True)
     def _daemon_up_empty_catalog(self) -> Iterator[None]:
-        # These tests exercise the auto-register-fresh-name path, which needs a
-        # reachable daemon for the chunk-collection avoid-set.  Model a daemon that
-        # is up with a genuinely empty catalog so the picker proceeds; without this
-        # the fail-closed defer path (tested separately) would run under CI, where
-        # no daemon is up.
         with patch("quarry.hooks._daemon_chunk_collections", return_value=frozenset()):
             yield
 
+
+class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_no_cwd_returns_empty(self) -> None:
         result = handle_session_start({})
         assert result == {}
@@ -1480,7 +1486,7 @@ class TestT15SessionStartChildUsesParentCollection:
         assert regs[0].collection == "proj"
 
 
-class TestT16SessionStartAutoRegisters:
+class TestT16SessionStartAutoRegisters(_ReachableDaemonEmptyCatalog):
     """T16: session-start on unregistered directory auto-registers."""
 
     def test_auto_registers_unregistered_directory(self, tmp_path: Path) -> None:
