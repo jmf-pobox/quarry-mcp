@@ -1938,7 +1938,7 @@ The watch loop's *removal* half — deregister, subsumption, and orphan cleanup 
 proved to be the concurrency-critical part and was hardened under an explicit Z
 model rather than through review iteration. The state (`registered`, `watched`,
 `pending`, `chunks`, `retained`, and a per-collection `dir` identity map) carries
-nine invariants (I1–I9), all model-checked across the full reachable space. The
+ten invariants (I1–I10), all model-checked across the full reachable space. The
 ProB model includes **non-directory collections** — captures, agent memories,
 `remember` targets, URL-host collections — as a first-class class (`dircoll` is
 the directory-registration subset); the earlier *absence* of that class is the
@@ -2000,6 +2000,22 @@ abstraction error that produced the I6 erratum below.
   URL host) is structurally unreachable by the sweep. This is the invariant whose
   absence (an unmodeled collection class) produced the I6 erratum; its negative
   control reproduces exactly that capture/memory data loss.
+- **I10** a different directory is never *auto-assigned* a collection name that
+  already holds another project's chunks. The fresh-name picker avoids
+  `registered ∪ retained ∪ chunk_collections` on both surfaces (the client
+  `Registrations`/`CollectionNamer` and the local hooks `CollectionResolver`,
+  including the `{leaf}-{hash}` fallback tier). A merge can only arise by claiming
+  a chunk-bearing name, so avoiding *every* chunk-bearing name is
+  necessary-and-sufficient to make the auto path merge-proof — this closes a
+  family of four cross-project-merge findings (subsumed-child name reuse; and the
+  captures/`memory-*`/`remember`/URL-host auto-merge). The picker **fails closed**:
+  when the daemon is unreachable the chunk set is unverifiable, so session-start
+  skips the auto-registration and nudges rather than arm a latent merge that would
+  materialize on daemon return (registration is local/un-gated, but indexing is
+  daemon-gated, so deferring costs nothing). Same-directory keep-data re-adopt is
+  checked first (local retained markers) and is unaffected. Non-vacuous — the
+  negative control (picker avoiding only `registered ∪ retained`, dropping
+  `chunk_collections`) reproduces the merge in a 4-step trace.
 
 **keep-data re-enable semantics — re-adopt + auto-freshen (operator ruling,
 2026-07-24).** When a directory disabled with `--keep-data` is re-enabled, the
@@ -2019,13 +2035,16 @@ silent correctness gap.
 **Method note.** The removal lifecycle is the project's first use of the
 model-first discipline for stateful-protocol work: model in Z, model-check the
 invariants (a violation is a design bug found before any test), and adversarially
-verify the data-deleting paths. **Five** data-safety defects were caught before
+verify the data-deleting paths. A series of data-safety defects were caught before
 merge that review-by-iteration had not: the I2 deferral asymmetry (model-check);
-the sweep's two-SELECT read-skew and the retained cross-project merge (adversarial
-review); the pending re-register purge race (adversarial review); and — most
-seriously — the **open-world sweep that would have wiped all captures and agent
-memories** on a 5-minute default timer (Cursor/Copilot, djb-confirmed). The last
-is the method's sharpest lesson, and a caution against false confidence: the
-original model *proved the sweep safe by omitting the non-directory collection
-class entirely* — a model is only as sound as its abstraction. The corrected model
+the sweep's two-SELECT read-skew, the retained cross-project merge, the pending
+re-register purge race, the force-purge-vs-keep-data race, and the whole
+name-picker auto-merge family — a different directory being auto-assigned a
+chunk-bearing name — closed structurally by the I10 picker invariant (adversarial
+review + model-check); and — most seriously — the **open-world sweep that would
+have wiped all captures and agent memories** on a 5-minute default timer
+(Cursor/Copilot, djb-confirmed). The last is the method's sharpest lesson, and a
+caution against false confidence: the original model *proved the sweep safe by
+omitting the non-directory collection class entirely* — a model is only as sound
+as its abstraction. The corrected model
 adds that class, and I9 (with a negative control) now pins it.

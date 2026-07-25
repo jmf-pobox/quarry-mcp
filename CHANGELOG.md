@@ -53,13 +53,20 @@ across `transform`, `index`, and `connector`).
   and auto-freshens it: the re-adopt reconciles stored documents against disk and
   prunes files deleted while it was disabled (pruning keys on the authoritative
   stored path and only on definite absence, so a nested/basename-stored doc or a
-  transiently-unreadable file is never wrongly deleted). The retained set is
-  surfaced on `GET /v1/registrations` for remote/local parity. The whole removal
-  lifecycle is modeled in Z (`docs/spec/watch_lifecycle.tex`) and ProB
-  model-checked (invariants I1–I9, incl. non-directory collections; 170k states) —
-  the model and adversarial review caught five data-safety defects before merge,
-  one of which (an open-world sweep that would have wiped all captures and agent
-  memories on a 5-minute default timer) was catastrophic; see DES-045a.
+  transiently-unreadable file is never wrongly deleted). The retained set and the
+  chunk-bearing collection set are both surfaced on `GET /v1/registrations` for
+  remote/local parity. The fresh collection-name picker now avoids every
+  chunk-bearing name (`registered ∪ retained ∪ chunk_collections`) on both the
+  client and the session-start hook, so a different directory can never be
+  auto-assigned a name that already holds another project's chunks — closing a
+  family of cross-project auto-merges; it fails **closed** when the daemon is
+  unreachable (defers the auto-registration with a nudge rather than arm a latent
+  merge). The whole removal + naming lifecycle is modeled in Z
+  (`docs/spec/watch_lifecycle.tex`) and ProB model-checked (invariants I1–I10,
+  incl. non-directory collections; each with a negative control) — the model and
+  adversarial review caught a series of data-safety defects before merge, one of
+  which (an open-world sweep that would have wiped all captures and agent memories
+  on a 5-minute default timer) was catastrophic; see DES-045a.
 - **infra (boundary)**: DES-031 v2 client/engine boundary lock (PR-6) — the
   daemon-first split is now enforced structurally, not by convention. A new
   import-linter contract (`.importlinter`, wired into `make check` via

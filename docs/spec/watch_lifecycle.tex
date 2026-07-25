@@ -102,15 +102,29 @@ because no invariant of interest spans both and coupling them would only enlarge
 the state.  The set $stale$ is a second \textit{auxiliary} observer, the
 document analogue of $moved$: it records any collection a re-adopt leaves holding
 a document absent from disk (a stale survivor).  A correct freshen keeps $stale$
-empty.  The last two components, $sweptUnmarked$ and $sweptProtected$, are the
+empty.  Two components serve the auto-name-picker.  The partial function $origin$
+records, for each collection that currently holds directory-owned chunks, the
+directory whose project those chunks are --- it is the model's account of ``whose
+data is in this collection''.  Its domain is a subset of $chunks$: a collection
+with no chunks owns no project's data, and a class-(ii) capture or memory, though
+it bears chunks, has no \textit{directory} origin and so lies outside $\dom
+origin$.  The set $merged$ is a third \textit{auxiliary} observer, the picker
+analogue of $moved$: it records any collection the auto-name-picker hands to a
+directory other than the one whose chunks the collection already holds --- the
+cross-project merge the fix forbids.  A correct picker keeps $merged$ empty.  The
+last two components, $sweptUnmarked$ and $sweptProtected$, are the
 \textit{auxiliary} observers for the sweep: the first records a collection the
 sweep deletes though it was never marked (the class-(ii) data loss, I9), the
 second one it deletes though it is registered or retained (I6).  Both stay empty
-under the closed-set sweep.  The schema asserts two structural facts: the $dir$
-domain coupling, and that registration, watch, retention, and the purge marker
+under the closed-set sweep.  The schema asserts three structural facts: the $dir$
+domain coupling; that registration, watch, retention, and the purge marker
 $pending$ apply only to directory collections --- $registered$, $watched$,
 $pending$, $retained$ all lie within $dircoll$, so a class-(ii) collection is
-never registered, watched, retained, or marked.  Otherwise it carries typing
+never registered, watched, retained, or marked; and the $origin$ domain coupling
+$\dom origin \subseteq chunks$, so a collection carries a recorded project-origin
+exactly while it holds chunks and a purge that empties a collection clears its
+origin with it --- the picker's chunk-bearing avoid-set and the origin observer
+thus speak of the same collections.  Otherwise it carries typing
 only: no safety predicate is baked in, so a violation, if reachable, is reached
 rather than pruned by the schema of the primed state.
 
@@ -122,17 +136,20 @@ rather than pruned by the schema of the primed state.
   retained : \power COLL \\
   dir : COLL \pfun DIR \\
   moved : \power COLL \\
+  origin : COLL \pfun DIR \\
+  merged : \power COLL \\
   stored : COLL \fun \power DOC \\
   stale : \power COLL \\
   sweptUnmarked : \power COLL \\
   sweptProtected : \power COLL
   \where
   \dom dir = registered \cup retained \\
-  registered \cup watched \cup pending \cup retained \subseteq dircoll
+  registered \cup watched \cup pending \cup retained \subseteq dircoll \\
+  \dom origin \subseteq chunks
 \end{schema}
 
 Initially nothing is registered, watched, pending, chunked, retained, backed by
-a directory, moved, stored, stale, or swept.
+a directory, moved, origin-tagged, merged, stored, stale, or swept.
 
 \begin{schema}{Init}
   Watch \\
@@ -144,6 +161,8 @@ a directory, moved, stored, stale, or swept.
   retained = \emptyset \\
   dir = \emptyset \\
   moved = \emptyset \\
+  origin = \emptyset \\
+  merged = \emptyset \\
   stored = \{ c : COLL @ c \mapsto \emptyset \} \\
   stale = \emptyset \\
   sweptUnmarked = \emptyset \\
@@ -166,10 +185,11 @@ the model checker searches for as a reachable state.
   moved = \emptyset \\
   stale = \emptyset \\
   sweptProtected = \emptyset \\
-  sweptUnmarked = \emptyset
+  sweptUnmarked = \emptyset \\
+  merged = \emptyset
 \end{schema}
 
-The eight conjuncts are, in order, I1, I2, I3, I5, I7, I8, I6 and I9.  I1: a
+The nine conjuncts are, in order, I1, I2, I3, I5, I7, I8, I6, I9 and I10.  I1: a
 registered collection never carries a deferred purge.  I2 (revised): a
 \textit{directory} collection whose chunks exist while it is neither registered
 nor deliberately retained is marked for purging.  The restriction to $dircoll$ is
@@ -186,9 +206,12 @@ by a directory other than the one that archived them, stated as $moved =
 disk, stated as $stale = \emptyset$.  I6 (revised): the sweep never deletes a
 registered or retained collection, stated as $sweptProtected = \emptyset$.  I9:
 the sweep never deletes an \textit{unmarked} collection --- in particular a
-class-(ii) capture or memory --- stated as $sweptUnmarked = \emptyset$.  I4
-(reconcile never tears down a live watch) is a property of the $Reconcile$
-transitions and is discharged below by observing that each preserves I3.
+class-(ii) capture or memory --- stated as $sweptUnmarked = \emptyset$.  I10: the
+auto-name-picker never merges two projects --- a directory it auto-assigns a name
+never inherits chunks that belong to a different directory, stated as $merged =
+\emptyset$.  I4 (reconcile never tears down a live watch) is a property of the
+$Reconcile$ transitions and is discharged below by observing that each preserves
+I3.
 
 \section{Producing chunks}
 
@@ -208,6 +231,8 @@ registered collection.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \oplus \{ c? \mapsto dir~c? \} \\
+  merged' = merged \\
   stored' = stored \oplus \{ c? \mapsto disk? \} \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -232,6 +257,8 @@ survive every sweep.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -276,6 +303,8 @@ and $moved$ is untouched; a fresh registration takes any directory $d?$.
   retained' = retained \setminus (\{ c? \} \cup subsumed?) \\
   dir' = ((\{ c? \} \cup subsumed?) \ndres dir) \cup \{ c? \mapsto d? \} \\
   moved' = moved \\
+  origin' = chunks' \dres origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -329,8 +358,61 @@ grows.
   retained' = retained \setminus \{ c? \} \\
   dir' = dir \oplus \{ c? \mapsto d? \} \\
   moved' = moved \cup \{ x : COLL | x = c? \land (c? \mapsto d?) \notin dir \} \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \oplus \{ c? \mapsto disk? \} \\
   stale' = stale \cup \{ x : COLL | x = c? \land \lnot (stored'~c? \subseteq disk?) \} \\
+  sweptUnmarked' = sweptUnmarked \\
+  sweptProtected' = sweptProtected
+\end{schema}
+
+\section{Auto-name assignment}
+
+When a directory is enabled without an explicit \texttt{--collection} override
+and owns no keep-data archive, the client (or the session-start hook) picks a
+\textit{fresh} collection name for it.  This is the operation the fix touches.
+The picker's contract, on both surfaces --- the remote client's $Registrations$
+view and the local hooks $CollectionResolver$, which delegate identically to the
+shared $CollectionNamer$ --- is that the assigned name lies outside the avoid-set
+$registered \cup retained \cup chunks$: it collides with no live registration, no
+archived (keep-data) name, and no name that already holds chunks.  ($chunks$ here
+is the model's chunk-bearing collection set, the $chunk\_collections$ the daemon
+sends on the wire.)  The three naming tiers (\texttt{leaf}, then \texttt{leaf-parent}, then a
+path-hash suffix) are each checked against that same set, so the model abstracts
+them into a single nondeterministic choice of any $c!$ outside the avoid-set ---
+sound because the only property of interest is that the chosen name avoids the
+set, which every tier now enforces.
+
+$AssignName$ fires only for the no-owned-archive case: if $d?$ owned an archive,
+the same-directory re-adopt reuses the archived name by identity and never
+consults the picker, and that path is $ReAdoptFreshen$ above.  The guard $d?
+\notin dir \limg retained \rimg$ --- $d?$ backs no retained collection --- states
+exactly ``$d?$ owns no archive''.  The operation records the picker's one
+possible sin in the observer $merged$: if the chosen $c!$ already holds chunks
+whose project-origin is a directory other than $d?$, then handing $c!$ to $d?$
+would merge two projects, and $c!$ enters $merged$.  Because the avoid-set
+excludes every chunk-bearing name and $\dom origin \subseteq chunks$, a chosen
+$c!$ has no chunks at all, hence no foreign origin, so the recorded set is empty
+and $merged$ does not grow --- I10 holds by construction.
+
+\begin{schema}{AssignName}
+  \Delta Watch \\
+  d? : DIR \\
+  c! : COLL \\
+  \where
+  d? \notin dir \limg retained \rimg \\
+  c! \notin registered \cup retained \cup chunks \\
+  merged' = merged \cup \{ x : COLL | x = c! \land x \in \dom origin \land origin~x \neq d? \} \\
+  registered' = registered \\
+  watched' = watched \\
+  pending' = pending \\
+  chunks' = chunks \\
+  retained' = retained \\
+  dir' = dir \\
+  moved' = moved \\
+  origin' = origin \\
+  stored' = stored \\
+  stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
   sweptProtected' = sweptProtected
 \end{schema}
@@ -357,6 +439,8 @@ The purge is admitted and drains the chunks.
   retained' = retained \setminus \{ c? \} \\
   dir' = \{ c? \} \ndres dir \\
   moved' = moved \setminus \{ c? \} \\
+  origin' = chunks' \dres origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -380,6 +464,8 @@ stays tracked until a later sweep admits the delete.
   retained' = retained \setminus \{ c? \} \\
   dir' = \{ c? \} \ndres dir \\
   moved' = moved \setminus \{ c? \} \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -405,6 +491,8 @@ side without disturbing the mapping.
   pending' = pending \setminus \{ c? \} \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -428,6 +516,8 @@ deferred purge standing against it.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -456,6 +546,8 @@ The target is still absent: the purge is re-submitted and drains the chunks.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \setminus \{ c? \} \\
+  origin' = chunks' \dres origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -477,6 +569,8 @@ The target was re-registered: it is dropped from $pending$ without a purge.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -518,6 +612,8 @@ deletes.  The closed delete set empties both by construction.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = chunks' \dres origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \cup ((chunks \setminus chunks') \setminus pending) \\
@@ -553,6 +649,8 @@ collection is dropped --- so $pending$ empties.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = chunks' \dres origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -572,6 +670,8 @@ their chunks remain; the live ones are still dropped.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -595,6 +695,8 @@ partial roster would make a live collection look absent.
   retained' = retained \\
   dir' = dir \\
   moved' = moved \\
+  origin' = origin \\
+  merged' = merged \\
   stored' = stored \\
   stale' = stale \\
   sweptUnmarked' = sweptUnmarked \\
@@ -687,5 +789,48 @@ $CaptureProduce$) is deleted though it was never marked, so $sweptUnmarked$
 acquires it and I9 fails --- the concrete capture/memory data loss.  The
 closed-set delete is the whole of what discharges I9; restricting the sweep to
 the marked set is what makes a non-directory collection structurally unreachable.
+
+\section{Class-closing name-picker (I10)}
+
+The last invariant closes a family of four cross-project-merge bugs.  When a
+directory was enabled without an explicit collection override, the auto-name
+picker chose a name for it; the earlier picker steered clear only of live and
+archived names ($registered \cup retained$), not of names that already held
+chunks.  So a \textit{different} directory could be auto-assigned a name whose
+chunks were another project's, and enabling it silently merged the two projects
+into one collection.  The fix widens the avoid-set to include every chunk-bearing
+name; I10 is the formal statement that the widened picker cannot merge.
+
+I10: a directory the picker auto-assigns a name never inherits chunks that belong
+to a different directory, stated as $merged = \emptyset$.  Like I7 and I8 it is a
+property of a single transition --- here $AssignName$ --- discharged by
+construction and mechanised through the observer $merged$.  The observer records
+any collection the picker hands to a directory $d?$ while the collection already
+holds chunks whose origin is some other directory; a correct picker never causes
+that, so $merged$ stays empty.
+
+The discharge rests on two facts the state schema keeps aligned.  First, the
+avoid-set of $AssignName$ is $registered \cup retained \cup chunks$, so a chosen
+$c!$ satisfies $c! \notin chunks$ --- it holds no chunks at all.  Second, $\dom
+origin \subseteq chunks$ is a state invariant, so $c! \notin chunks$ gives $c!
+\notin \dom origin$: the chosen name has no recorded project-origin.  The
+comprehension that would add $c!$ to $merged$ requires $c! \in \dom origin$, so it
+is empty and $merged' = merged$.  No other transition writes $merged$.  Therefore
+$merged = \emptyset$ over the whole reachable state space, which is I10.
+
+The observer is not vacuous, and the negative control is exactly the original
+bug.  Weaken the $AssignName$ guard to the pre-fix avoid-set --- replace $c!
+\notin registered \cup retained \cup chunks$ with $c! \notin registered \cup
+retained$, dropping the chunk-bearing names --- and the merge becomes reachable.
+Register $ca$ under directory $da$ and index it, so $origin(ca) = da$; deregister
+$ca$ with its purge shed, so $ca$ keeps its chunks and its origin but leaves both
+$registered$ and $retained$ (it sits in $pending$).  Now enable directory $db$,
+which owns no archive: the weakened picker may assign it $ca$, a name that still
+holds $da$'s chunks with $origin(ca) = da \neq db$.  $merged$ acquires $ca$ and
+I10 fails --- the concrete cross-project merge.  The chunk-bearing collection the
+picker collides with need not be a shed deregister; a subsumed-and-evicted child
+that shed, or a class-(ii) capture, reaches the same state by a different route.
+Widening the avoid-set to every chunk-bearing name is thus necessary and
+sufficient for merge-safety, and $merged = \emptyset$ measures its sufficiency.
 
 \end{document}
