@@ -12,37 +12,68 @@
 # fails. (Equality against a not-yet-created release commit would be circular;
 # content equality is the property that actually protects users.)
 #
+# Requires the pinned commit to be present in the local object DB. The release
+# workflow checks out with fetch-depth: 0, so full history — and therefore the
+# pinned commit — is always available there. Under a shallow clone the pinned
+# commit is absent and this fails with a clear, actionable message (deepen the
+# clone), rather than silently passing.
+#
 # Usage: ./scripts/check-readme-install-sha.sh
 #
-# Env overrides (for testing): README_PATH, INSTALL_PATH.
+# Env overrides (for hermetic testing): REPO_DIR (git repo to operate in),
+# README_PATH, INSTALL_PATH.
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Operate inside REPO_DIR (default: the repo this script lives in). Making the
+# directory an override keeps the check hermetically testable against a fixture
+# repo instead of the live checkout's history/clone-depth.
+repo_dir="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$repo_dir"
 
 readme="${README_PATH:-README.md}"
 install_sh="${INSTALL_PATH:-install.sh}"
 
-# Extract every SHA that a README install URL pins, de-duplicated.
-mapfile -t shas < <(
+# Extract every SHA a README install URL pins, de-duplicated. Uses a plain
+# command substitution + `while read` rather than `mapfile`/`readarray`, which
+# do not exist in Bash 3.2 (macOS's default /bin/bash) — a local-contributor
+# portability trap.
+shas=$(
     grep -oE 'raw\.githubusercontent\.com/punt-labs/quarry/[0-9a-f]{7,40}/' "$readme" \
         | grep -oE '[0-9a-f]{7,40}' \
         | sort -u
 )
 
-if [ "${#shas[@]}" -eq 0 ]; then
+if [ -z "$shas" ]; then
     echo "ERROR: no install-URL SHA found in $readme" >&2
     exit 1
 fi
-if [ "${#shas[@]}" -ne 1 ]; then
-    echo "ERROR: README install URLs pin multiple SHAs: ${shas[*]}" >&2
+
+count=0
+first_sha=""
+while IFS= read -r sha; do
+    count=$((count + 1))
+    if [ -z "$first_sha" ]; then
+        first_sha="$sha"
+    fi
+done <<EOF
+$shas
+EOF
+
+if [ "$count" -ne 1 ]; then
+    echo "ERROR: README install URLs pin multiple SHAs:" >&2
+    echo "$shas" >&2
     exit 1
 fi
 
-readme_sha="${shas[0]}"
+readme_sha="$first_sha"
 
 if ! git rev-parse --verify --quiet "${readme_sha}^{commit}" >/dev/null; then
-    echo "ERROR: README install SHA $readme_sha is not a commit in this repo" >&2
+    echo "ERROR: README install SHA $readme_sha is not present in the local git" >&2
+    echo "       object DB. This usually means a shallow clone (actions/checkout" >&2
+    echo "       without fetch-depth: 0). The release workflow fetches full history" >&2
+    echo "       (fetch-depth: 0), so the pinned commit is always present there;" >&2
+    echo "       deepen the clone (git fetch --unshallow) to run this check locally." >&2
     exit 1
 fi
 

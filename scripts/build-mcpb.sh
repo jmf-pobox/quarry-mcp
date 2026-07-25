@@ -45,6 +45,17 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
+# Validate the extracted version against a strict semver shape BEFORE it is used
+# in any command. The pyproject regex is permissive, so a crafted version such as
+# "1.0.0$(id)" would command-substitute when interpolated into the mcpb pack path
+# during a release (this job runs with contents: write). Fail closed on anything
+# that is not digits/dots with an optional pre-release/build suffix.
+readonly SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$'
+if ! [[ "$version" =~ $SEMVER_RE ]]; then
+    echo "ERROR: version '$version' from pyproject.toml is not a valid semver — refusing to build" >&2
+    exit 1
+fi
+
 echo "Building punt-quarry $version .mcpb bundle..."
 
 # Stage a clean directory holding only the generated manifest. Packing from this
