@@ -101,6 +101,11 @@ jobs:
   # releases/latest/download/punt-quarry.mcpb but no release ever attached it, so
   # the link 404'd.
   mcpb:
+    # Gate on pypi: the .mcpb is a thin client of the punt-quarry package, so it
+    # is only useful once that package is actually published. Without this gate a
+    # failed PyPI publish would still create/attach a GitHub release for a version
+    # users cannot install.
+    needs: [pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

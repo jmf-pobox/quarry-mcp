@@ -30,9 +30,15 @@ MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
 MCP_SERVER = REPO_ROOT / "src" / "quarry" / "mcp_server.py"
 
-# The daemon-first install path: ``quarry install`` wires Claude Desktop to run
-# the installed ``quarry`` binary as ``quarry mcp`` (a stdio client of quarryd,
-# DES-031 v2.2). The bundle manifest must mirror exactly that.
+# The bundle invokes ``quarry mcp`` — the stdio client of quarryd (DES-031 v2.2).
+# It ships the BARE command ``quarry`` (not an absolute path) on purpose: the
+# mcpb runtime launches the server from the login-shell PATH, where
+# ``uv tool install`` places the ``quarry`` binary (e.g. ~/.local/bin), so a bare
+# command resolves. This deliberately differs from ``quarry install``'s manual
+# claude_desktop_config.json wiring, which runs under a minimal PATH and so must
+# write a ``shutil.which``-resolved ABSOLUTE path (doctor.py resolve_paths=True).
+# Same subcommand, different launcher — do not "align" the bundle to an absolute
+# path; that would break the mcpb runtime, which has no build-time absolute path.
 EXPECTED_MCP_COMMAND = "quarry"
 EXPECTED_MCP_ARGS = ["mcp"]
 
@@ -119,8 +125,15 @@ def test_manifest_template_has_version_placeholder() -> None:
     )
 
 
-def test_manifest_template_mcp_config_matches_install_path() -> None:
-    """The bundle's mcp_config must mirror how quarry install wires Desktop."""
+def test_manifest_template_mcp_config_invokes_bare_quarry_mcp() -> None:
+    """The bundle's mcp_config must invoke the bare ``quarry mcp`` command.
+
+    The mcpb runtime resolves ``quarry`` from the login-shell PATH (where
+    ``uv tool install`` puts the binary), so the command is bare, not an absolute
+    path. This is intentionally NOT the same as ``quarry install``'s manual
+    claude_desktop_config.json wiring, which writes a ``shutil.which``-resolved
+    absolute path for its minimal-PATH runtime (doctor.py resolve_paths=True).
+    """
     template = json.loads(MANIFEST_TEMPLATE.read_text())
     mcp_config = template["server"]["mcp_config"]
     assert mcp_config["command"] == EXPECTED_MCP_COMMAND
