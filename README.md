@@ -40,6 +40,25 @@ quarry doctor
 </details>
 
 <details>
+<summary>CLI only (skip the Claude Code plugin)</summary>
+
+For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, add `--no-plugin` to install the CLI, daemon, and MCP server while skipping only the marketplace-register and plugin-install steps:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh | sh -s -- --no-plugin
+```
+
+In contexts that cannot pass a flag (CI templating a bare `curl … | sh`, config systems that set only env), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh | QUARRY_NO_PLUGIN=1 sh
+```
+
+Everything else runs unchanged — binary, PATH, embedding model, TLS, and the health check. Use the CLI (`quarry find`, `quarry ingest`, `quarry remember`) and the stdio MCP server (`quarry mcp`) directly; both talk to the resident `quarryd` daemon that `quarry install` starts. To add the plugin later, re-run the installer without `--no-plugin`.
+
+</details>
+
+<details>
 <summary>Verify before running</summary>
 
 ```bash

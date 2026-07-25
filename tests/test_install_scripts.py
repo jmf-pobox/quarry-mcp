@@ -1,19 +1,23 @@
-"""Shell-integration tests for install.sh (two-mode installer).
+"""Shell-integration tests for install.sh.
 
-These tests invoke install.sh with different flags (no flag, --network)
-using a ``PATH`` pointing at mock versions of ``nvidia-smi``, ``uv``,
-``curl``, ``ssh``, ``claude``, and ``quarry``.  Each mock records its
-invocation to a log file; the tests then read the log and assert the
-expected call ordering.
+These tests invoke install.sh with different flags (no flag, --network,
+--no-plugin) and environment variables using a ``PATH`` pointing at mock
+versions of ``nvidia-smi``, ``uv``, ``curl``, ``ssh``, ``claude``, and
+``quarry``.  Each mock records its invocation to a log file; the tests then
+read the log and assert the expected call ordering.
 
-The installer has two modes:
+The installer has one daemon-bind mode selector and one plugin toggle:
 
   - **Default** (no flags): full install -- daemon on localhost, TLS,
     plugin (if claude CLI found), local quarry login.
   - **--network**: same as default, but binds daemon to 0.0.0.0 instead
     of localhost.  Requires QUARRY_API_KEY.
+  - **--no-plugin** / **QUARRY_NO_PLUGIN=1**: install the harness-neutral CLI
+    but skip the Claude Code marketplace-register + plugin-install steps.  For
+    non-Claude harnesses and enterprise-policy Claude users (claude present,
+    marketplace blocked).  See punt-kit/standards/install-cli-only.md.
 
-Ordering invariants asserted per CLAUDE.md Class 5:
+Ordering + scoping invariants asserted per CLAUDE.md Class 5:
 
   (a) ``uv tool install --force`` runs before any ``uv pip`` GPU swap call
   (b) When ``nvidia-smi`` reports an NVIDIA GPU, the GPU swap uninstalls
@@ -21,10 +25,16 @@ Ordering invariants asserted per CLAUDE.md Class 5:
   (c) When ``nvidia-smi`` is absent, the GPU swap is not invoked at all
   (d) ``quarry install`` runs after the GPU swap (where applicable)
   (e) ``--network`` without ``QUARRY_API_KEY`` fails early
-  (f) Unknown flags cause the script to exit non-zero
-  (g) ``sh -s -- --network`` works (POSIX piped-stdin argument passing)
-  (h) Plugin install is skipped (no failure) when claude CLI is absent
-  (i) Plugin install runs when claude CLI is present
+  (f) Unknown flags exit 2 with a usage string (a piped installer must not
+      silently ignore a misspelled ``--no-plguin``)
+  (g) ``sh -s -- --network`` / ``sh -s -- --no-plugin`` / ``QUARRY_NO_PLUGIN=1
+      sh`` all work (POSIX piped-stdin argument + environment passing)
+  (h) Plugin install is skipped (no failure) when claude CLI is absent, and the
+      auto-skip prints the same CLI-only message as an explicit --no-plugin skip
+  (i) Plugin install runs when claude CLI is present and no skip was requested
+  (j) --no-plugin / QUARRY_NO_PLUGIN=1 skip ONLY the marketplace + plugin steps;
+      the binary, model+TLS install, local login, and health check still run
+  (k) QUARRY_NO_PLUGIN is honored only when exactly ``1`` (no truthy parser)
 """
 
 from __future__ import annotations
@@ -360,6 +370,17 @@ def test_default_mode_no_claude_skips_plugin(
     # Success message should mention Claude Code not found.
     assert "Claude Code" in result.stdout or "not found" in result.stdout
 
+    # install-cli-only.md: the capability-absent auto-skip prints the SAME
+    # CLI-only block as an explicit --no-plugin skip — gated on the skip boolean,
+    # not the reason. It must NOT claim a plugin was activated when none was
+    # installed (the common bug this rule prevents).
+    assert "Restart Claude Code to activate the plugin" not in result.stdout, (
+        "auto-skip must not print the plugin-activation line — no plugin was installed"
+    )
+    assert "CLI is installed and works" in result.stdout, (
+        "auto-skip must state the CLI is installed and works"
+    )
+
 
 # ---------------------------------------------------------------------------
 # --network mode
@@ -524,12 +545,19 @@ def test_network_mode_success_message(env: dict[str, str]) -> None:
 
 
 def test_unknown_flag_fails(env: dict[str, str]) -> None:
-    """(f) Unknown flags must cause the script to exit non-zero."""
+    """(f) Unknown flags must exit 2 with a usage string.
+
+    Per install-cli-only.md: a piped ``curl … | sh`` must not silently ignore a
+    misspelled flag (``--no-plguin``) and install the plugin the user asked to
+    skip. An unknown option is a usage error with the POSIX conventional exit 2.
+    """
     result = _run_script(INSTALL_SH, env, args=["--bogus"])
-    assert result.returncode != 0, "Unknown flag must exit non-zero"
-    assert "Unknown option" in result.stderr, (
-        "Error message must indicate unknown option"
+    assert result.returncode == 2, "Unknown flag must exit 2 (usage error)"
+    assert "unknown option" in result.stderr, (
+        "Error message must name the unknown option"
     )
+    # The usage string is printed to stderr alongside the error.
+    assert "--no-plugin" in result.stderr, "usage must document --no-plugin"
 
 
 def test_help_flag_exits_zero(env: dict[str, str]) -> None:
@@ -548,13 +576,150 @@ def test_help_does_not_mention_old_flags(env: dict[str, str]) -> None:
 
 
 def test_old_flags_fail(env: dict[str, str]) -> None:
-    """Removed --server and --client flags must fail as unknown options."""
+    """Removed --server and --client flags must fail as unknown options (exit 2)."""
     for flag in ("--server", "--client"):
         result = _run_script(INSTALL_SH, env, args=[flag])
-        assert result.returncode != 0, f"{flag} must exit non-zero"
-        assert "Unknown option" in result.stderr, (
-            f"{flag} must be reported as unknown option"
+        assert result.returncode == 2, f"{flag} must exit 2 (usage error)"
+        assert "unknown option" in result.stderr, (
+            f"{flag} must be reported as an unknown option"
         )
+
+
+# ---------------------------------------------------------------------------
+# --no-plugin / QUARRY_NO_PLUGIN=1 (install-cli-only.md conformance)
+#
+# The installer does two jobs in one run: it installs a harness-neutral CLI
+# (binary, PATH, model, TLS, per-repo enable, health check) and registers a
+# Claude-Code-only plugin (marketplace add, claude plugin install). Per
+# punt-kit/standards/install-cli-only.md, an operator with claude present but
+# marketplace blocked (or a non-Claude harness user) must be able to skip ONLY
+# the plugin steps. These tests hold that line: the flag and env forms skip the
+# marketplace + plugin steps and nothing else.
+# ---------------------------------------------------------------------------
+
+
+def _assert_plugin_skipped_cli_intact(
+    result: subprocess.CompletedProcess[str], log: list[str]
+) -> None:
+    """Assert the plugin was skipped while every CLI step still ran.
+
+    Shared by the flag, env, and piped-form tests so the scoping invariant is
+    expressed once. ``claude`` is only logged when the plugin steps run, so its
+    total absence proves both the marketplace-register and plugin-install steps
+    were skipped.
+    """
+    assert result.returncode == 0, (
+        f"install.sh must succeed with the plugin skipped:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    # Skip is scoped to marketplace + plugin ONLY: no claude call of any kind.
+    assert not _any_line_contains(log, "claude plugin"), (
+        "marketplace-register and plugin-install steps must be skipped"
+    )
+    assert not _any_line_contains(log, "claude"), (
+        "no claude invocation at all when the plugin is skipped"
+    )
+    # Every CLI step still runs: model+TLS install, local login, health check.
+    _index_of(log, "quarry install")
+    assert _any_line_contains(log, "login 127.0.0.1"), (
+        "per-repo local login must still run under --no-plugin"
+    )
+    assert _any_line_contains(log, "quarry doctor"), (
+        "the health check (quarry doctor) must still run under --no-plugin"
+    )
+    # Success message is CLI-only accurate: never claims a plugin was activated.
+    assert "Restart Claude Code to activate the plugin" not in result.stdout, (
+        "skip message must not print the plugin-activation line"
+    )
+    assert "CLI is installed and works" in result.stdout, (
+        "skip message must state the CLI is installed and works"
+    )
+
+
+def test_no_plugin_flag_skips_plugin_only(env: dict[str, str]) -> None:
+    """(a) --no-plugin skips the marketplace + plugin steps and nothing else."""
+    result = _run_script(INSTALL_SH, env, args=["--no-plugin"])
+    _assert_plugin_skipped_cli_intact(result, _read_log(env))
+
+
+def test_no_plugin_flag_remedy_names_the_flag(env: dict[str, str]) -> None:
+    """An explicit --no-plugin skip tells the operator how to add the plugin later.
+
+    The remedy branches on the cause: a requested skip re-runs without the flag
+    (and with QUARRY_NO_PLUGIN unset), never "install claude" — claude is present.
+    """
+    result = _run_script(INSTALL_SH, env, args=["--no-plugin"])
+    assert result.returncode == 0
+    assert "--no-plugin" in result.stdout, (
+        "requested-skip remedy must name the --no-plugin flag to re-enable the plugin"
+    )
+
+
+def test_quarry_no_plugin_env_skips_identically(env: dict[str, str]) -> None:
+    """(b) QUARRY_NO_PLUGIN=1 behaves identically to --no-plugin, no flag needed."""
+    env_skip = {**env, "QUARRY_NO_PLUGIN": "1"}
+    result = _run_script(INSTALL_SH, env_skip)
+    _assert_plugin_skipped_cli_intact(result, _read_log(env_skip))
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes", "2"])
+def test_quarry_no_plugin_env_ignored_unless_exactly_one(
+    env: dict[str, str], value: str
+) -> None:
+    """QUARRY_NO_PLUGIN is honored ONLY when set to exactly ``1``.
+
+    install-cli-only.md forbids a truthy-string parser: empty/0/true/yes must be
+    ignored so the value stays consistent with the installer's 0/1 convention.
+    With the value ignored, the default happy path installs the plugin.
+    """
+    env_val = {**env, "QUARRY_NO_PLUGIN": value}
+    result = _run_script(INSTALL_SH, env_val)
+    assert result.returncode == 0, (
+        f"QUARRY_NO_PLUGIN={value!r} run failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    log = _read_log(env_val)
+    assert _any_line_contains(log, "claude plugin install"), (
+        f"QUARRY_NO_PLUGIN={value!r} must be IGNORED (only '1' skips) — "
+        "the plugin must still install"
+    )
+
+
+def test_no_plugin_over_piped_flag_form(env: dict[str, str]) -> None:
+    """(c) ``sh -s -- --no-plugin`` skips over a piped curl|sh invocation."""
+    result = _run_script_piped(INSTALL_SH, env, args=["--no-plugin"])
+    _assert_plugin_skipped_cli_intact(result, _read_log(env))
+
+
+def test_no_plugin_over_piped_env_form(env: dict[str, str]) -> None:
+    """(c) ``QUARRY_NO_PLUGIN=1 sh`` skips over a piped curl|sh invocation.
+
+    The env form is the argument-hostile path: no operands reach the script, the
+    skip is driven entirely by the environment the piped shell inherits.
+    """
+    env_skip = {**env, "QUARRY_NO_PLUGIN": "1"}
+    result = _run_script_piped(INSTALL_SH, env_skip)
+    _assert_plugin_skipped_cli_intact(result, _read_log(env_skip))
+
+
+def test_no_plugin_with_network_still_skips_plugin(env: dict[str, str]) -> None:
+    """--no-plugin composes with --network: the daemon binds 0.0.0.0, plugin skipped.
+
+    The two flags are orthogonal — one selects the daemon bind host, the other
+    gates the plugin steps. The success block is network-specific (server ready)
+    and never mentions the plugin, so no restart line appears either way.
+    """
+    result = _run_script(INSTALL_SH, env, args=["--network", "--no-plugin"])
+    assert result.returncode == 0, (
+        f"--network --no-plugin failed:\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    log = _read_log(env)
+    assert not _any_line_contains(log, "claude"), (
+        "--no-plugin must skip the plugin even in network mode"
+    )
+    _index_of(log, "quarry install")
+    assert "server is ready" in result.stdout
 
 
 # ---------------------------------------------------------------------------
