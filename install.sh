@@ -405,8 +405,10 @@ else
   if [ "$SKIP_PLUGIN" = "0" ]; then
     printf 'Restart Claude Code to activate the plugin.\n\n'
   else
-    printf 'The quarry CLI is installed and works via the command line and MCP\n'
-    printf '(quarry mcp / quarry serve).  The Claude Code plugin was skipped.\n\n'
+    printf 'The quarry CLI is installed and works via the command line\n'
+    printf '(quarry find / ingest / remember / doctor) and the stdio MCP server\n'
+    printf '(quarry mcp).  Both talk to the resident quarryd daemon that quarry\n'
+    printf 'install started above.  The Claude Code plugin was skipped.\n\n'
     case "$SKIP_REASON" in
       no-claude)
         printf 'The plugin was skipped because Claude Code was not found.  Install it\n'

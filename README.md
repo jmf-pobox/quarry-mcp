@@ -54,7 +54,7 @@ In contexts that cannot pass a flag (CI templating a bare `curl … | sh`, confi
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
-Everything else runs unchanged — binary, PATH, embedding model, TLS, and the health check. Use the CLI (`quarry find`, `quarry ingest`) and MCP (`quarry mcp` / `quarry serve`) directly. To add the plugin later, re-run the installer without `--no-plugin`.
+Everything else runs unchanged — binary, PATH, embedding model, TLS, and the health check. Use the CLI (`quarry find`, `quarry ingest`, `quarry remember`) and the stdio MCP server (`quarry mcp`) directly; both talk to the resident `quarryd` daemon that `quarry install` starts. To add the plugin later, re-run the installer without `--no-plugin`.
 
 </details>
 
