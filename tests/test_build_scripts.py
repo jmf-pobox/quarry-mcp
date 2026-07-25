@@ -161,38 +161,95 @@ def test_manifest_template_tools_match_registered_mcp_tools() -> None:
     assert manifest_tools == _registered_tool_names()
 
 
-def test_readme_install_sha_check_passes_on_current_readme() -> None:
-    """The pinned README install SHA must match the current install.sh."""
+def _run_git(repo: Path, *args: str) -> str:
+    """Run git in *repo* with a fixed identity and no signing (fixture setup)."""
     result = subprocess.run(
-        ["bash", str(README_SHA_CHECK)],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+            *args,
+        ],
         capture_output=True,
         text=True,
-        check=False,
-        cwd=REPO_ROOT,
+        check=True,
     )
-    assert result.returncode == 0, (
-        f"README install-SHA check failed:\n{result.stdout}\n{result.stderr}"
-    )
+    return result.stdout.strip()
 
 
-def test_readme_install_sha_check_rejects_stale_sha(tmp_path: Path) -> None:
-    """A README pinning a SHA whose install.sh differs must fail the check.
+def _make_fixture_repo(repo: Path, install_text: str) -> str:
+    """Init a git repo with install.sh committed; return the commit's short SHA.
 
-    6f90f11 (v1.19.0) predates install.sh changes, so its installer differs from
-    the current one — the exact stale-SHA class the check guards against.
+    Hermetic: the fixture never contains a3c10f9 / 6f90f11, so these tests do not
+    depend on the live repo's history or clone depth — the CI shallow-clone that
+    made a pinned SHA absent from the object DB and broke the previous, non-
+    hermetic version of these tests.
     """
-    stale = tmp_path / "README.md"
-    stale.write_text(
-        "curl -fsSL "
-        "https://raw.githubusercontent.com/punt-labs/quarry/6f90f11/install.sh | sh\n"
-    )
-    result = subprocess.run(
+    repo.mkdir(parents=True, exist_ok=True)
+    _run_git(repo, "init", "-q")
+    (repo / "install.sh").write_text(install_text)
+    _run_git(repo, "add", "install.sh")
+    _run_git(repo, "commit", "-q", "-m", "add install.sh")
+    return _run_git(repo, "rev-parse", "--short", "HEAD")
+
+
+def _run_check(repo: Path) -> subprocess.CompletedProcess[str]:
+    """Invoke the check against fixture *repo* via the REPO_DIR override."""
+    return subprocess.run(
         ["bash", str(README_SHA_CHECK)],
         capture_output=True,
         text=True,
         check=False,
-        cwd=REPO_ROOT,
-        env={"README_PATH": str(stale), "PATH": os.environ["PATH"]},
+        env={**os.environ, "REPO_DIR": str(repo)},
     )
+
+
+def _pin(sha: str) -> str:
+    url = f"https://raw.githubusercontent.com/punt-labs/quarry/{sha}/install.sh"
+    return f"curl -fsSL {url} | sh\n"
+
+
+def test_readme_install_sha_check_passes_when_pin_matches(tmp_path: Path) -> None:
+    """A README pinning a SHA whose install.sh equals the tree's passes."""
+    repo = tmp_path / "repo"
+    sha = _make_fixture_repo(repo, "#!/bin/sh\necho install v1\n")
+    (repo / "README.md").write_text(_pin(sha))
+    result = _run_check(repo)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_readme_install_sha_check_rejects_stale_pin(tmp_path: Path) -> None:
+    """A pin whose install.sh differs from the tree is stale and must fail.
+
+    install.sh moves on (v1 → v2) but the README pin still points at the v1
+    commit — the exact stale-SHA class the check guards against.
+    """
+    repo = tmp_path / "repo"
+    sha = _make_fixture_repo(repo, "#!/bin/sh\necho install v1\n")
+    (repo / "README.md").write_text(_pin(sha))
+    (repo / "install.sh").write_text("#!/bin/sh\necho install v2\n")
+    result = _run_check(repo)
     assert result.returncode != 0, "stale README install SHA must be rejected"
     assert "stale" in result.stderr.lower()
+
+
+def test_readme_install_sha_check_reports_absent_sha(tmp_path: Path) -> None:
+    """A pin absent from the object DB (shallow clone) fails with a clear message.
+
+    This is the CI condition that broke the prior tests: the pinned commit is not
+    in the local object DB. The script must say so plainly, not pass silently.
+    """
+    repo = tmp_path / "repo"
+    _make_fixture_repo(repo, "#!/bin/sh\necho install v1\n")
+    (repo / "README.md").write_text(_pin("0" * 40))
+    result = _run_check(repo)
+    assert result.returncode != 0, "an absent pinned SHA must fail"
+    assert "not present in the local" in result.stderr.lower()
