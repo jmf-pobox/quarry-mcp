@@ -209,12 +209,12 @@ def _check_storage() -> CheckResult:
     )
 
 
-def _human_size(nbytes: int) -> str:
-    """Format byte count as human-readable string."""
+def _human_size(nbytes: float) -> str:
+    """Format byte count as human-readable string (float: /=1024 stays in-type)."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if nbytes < 1024 or unit == "TB":
             return f"{nbytes:.1f} {unit}" if nbytes >= 10 else f"{nbytes:.2f} {unit}"
-        nbytes /= 1024  # type: ignore[assignment]
+        nbytes /= 1024
     return f"{nbytes:.1f} TB"  # unreachable but satisfies type checker
 
 

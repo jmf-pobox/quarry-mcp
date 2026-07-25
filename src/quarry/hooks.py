@@ -163,6 +163,21 @@ def _sync_in_background() -> str:
     return "launched"
 
 
+def _daemon_chunk_collections() -> frozenset[str]:
+    """Daemon's chunk-bearing collection names, or empty if unreachable (fail-open)."""
+    from quarry.client import (  # noqa: PLC0415
+        ClientConfigError,
+        QuarryError,
+        TargetResolver,
+    )
+
+    try:
+        listing = TargetResolver.connect().list_registrations()
+    except (ClientConfigError, QuarryError):
+        return frozenset()  # daemon down -> registry+retained-only naming
+    return frozenset(listing.chunk_collections)
+
+
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     """Handle SessionStart hook.
 
@@ -225,12 +240,13 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                     },
                 }
 
-            # Re-adopt: if this cwd owns an archived (keep-data) collection, reuse
-            # its name so the session-start auto-index re-adopts the kept chunks
-            # (and the background sync auto-freshens), exactly as `quarry enable`
-            # does. A cwd owning no archive falls through to a fresh unique name.
+            # Re-adopt this cwd's own keep-data archive if it owns one (checked
+            # first, so a same-dir re-adopt is unaffected), else pick a fresh name
+            # avoiding every chunk-bearing collection (the local half of the
+            # merge-proof invariant).  Chunk names come from the daemon, which owns
+            # the catalog (DES-031: a thin client never opens the engine).
             collection = resolver.archived_collection_for(directory) or (
-                resolver.unique_collection_name(directory)
+                resolver.unique_collection_name(directory, _daemon_chunk_collections())
             )
             conn.register_directory(directory, collection)
             logger.info(

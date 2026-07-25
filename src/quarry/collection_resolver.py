@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.collection_namer import CollectionNamer
+
 if TYPE_CHECKING:
+    from collections.abc import Set as AbstractSet
+
     from quarry.sync_registry import SyncRegistry
 
 
@@ -16,10 +19,10 @@ class CollectionResolver:
 
     Bundles the (registry, directory) resolution policy the session-start hook
     applies: the collection covering a cwd, the archive a directory owns (the
-    re-adopt lookup), and a fresh unique name that avoids both live and archived
-    names.  These three share the same registry + directory vocabulary, so they
-    are methods on one resolver rather than free functions (PY-OO-7).  The
-    hooks-side counterpart of the client's ``Registrations`` view.
+    re-adopt lookup), and a fresh unique name that avoids live, archived, AND
+    chunk-bearing names.  These share the same registry + directory vocabulary,
+    so they are methods on one resolver rather than free functions (PY-OO-7).
+    The hooks-side counterpart of the client's ``Registrations`` view.
     """
 
     __slots__ = ("_conn",)
@@ -69,28 +72,26 @@ class CollectionResolver:
             None,
         )
 
-    def unique_collection_name(self, directory: Path) -> str:
-        """Derive a collection name colliding with no live OR archived collection.
+    def unique_collection_name(
+        self, directory: Path, chunk_collections: AbstractSet[str]
+    ) -> str:
+        """Derive a name colliding with no live, archived, OR chunk-bearing name.
 
-        Prefers ``directory.name``.  If that's taken — by a live registration or a
-        keep-data ``retained`` marker — appends the parent directory name
-        (``leaf-parent``), then a path-hash suffix.  Avoiding archived names keeps
-        an unrelated directory from silently inheriting another project's kept
-        chunks (and from tripping ``register_directory``'s identity guard).
+        Delegates to :class:`~quarry.collection_namer.CollectionNamer` over the
+        union of live registrations, retained (keep-data) markers, and
+        *chunk_collections* — the names that already hold chunks.  Avoiding all
+        chunk-bearing names is necessary-and-sufficient for merge-safety: a
+        different directory can never adopt a name that already holds another
+        project's chunks (and the hash-suffix fallback is avoid-checked too),
+        matching the remote client's ``Registrations`` picker exactly.
+
+        *chunk_collections* is supplied by the caller from the daemon's catalog
+        (over the wire), not read here: this module is registry-tier and never
+        opens the vector engine (DES-031, the thin-client boundary).
         """
-        retained = set(self._conn.markers.list_retained())
-
-        def _available(name: str) -> bool:
-            return self._conn.get_registration(name) is None and name not in retained
-
-        # A filesystem-root directory has an empty ``.name``; fall back to "root"
-        # so a collection is never registered under an empty name.
-        leaf = directory.name or "root"
-        if _available(leaf):
-            return leaf
-        parent = directory.parent.name or "root"
-        candidate = f"{leaf}-{parent}"
-        if _available(candidate):
-            return candidate
-        suffix = hashlib.sha256(str(directory).encode()).hexdigest()[:8]
-        return f"{leaf}-{suffix}"
+        taken = (
+            {r.collection for r in self._conn.list_registrations()}
+            | set(self._conn.markers.list_retained())
+            | set(chunk_collections)
+        )
+        return CollectionNamer(directory, taken).unique()

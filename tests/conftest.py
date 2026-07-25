@@ -126,6 +126,7 @@ class FakeRegistryClient:
     """
 
     __slots__ = (
+        "_chunk_collections",
         "_delete_error",
         "_deleted",
         "_deregistered",
@@ -143,6 +144,9 @@ class FakeRegistryClient:
     # the real retained_collections (PK ``collection``, ``original_directory``
     # column) so the client sees archived names AND their origin (for re-adopt).
     _retained: dict[str, str]
+    # Chunk-bearing collection names the daemon reports on the wire, so the
+    # client-side picker avoids a name that already holds another project's chunks.
+    _chunk_collections: list[str]
     # When set, delete_collection raises it — models a rejected captures purge.
     _delete_error: Exception | None
 
@@ -151,6 +155,7 @@ class FakeRegistryClient:
         registrations: Iterable[tuple[str, Path]] = (),
         *,
         delete_error: Exception | None = None,
+        chunk_collections: Iterable[str] = (),
     ) -> Self:
         self = super().__new__(cls)
         self._regs = [
@@ -165,6 +170,7 @@ class FakeRegistryClient:
         self._deregistered = []
         self._deleted = []
         self._retained = {}
+        self._chunk_collections = list(chunk_collections)
         self._delete_error = delete_error
         return self
 
@@ -177,6 +183,7 @@ class FakeRegistryClient:
             total_registrations=len(self._regs),
             registrations=list(self._regs),
             retained=retained,
+            chunk_collections=list(self._chunk_collections),
         )
 
     def register(self, req: RegisterRequest) -> TaskAccepted:

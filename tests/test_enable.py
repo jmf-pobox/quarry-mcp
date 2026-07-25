@@ -139,14 +139,17 @@ class TestKeepDataArchiveNoMerge:
         assert result.collection == "backend"  # re-adopt, not "backend-work"
         assert client.registered[-1].collection == "backend"
 
-    def test_collection_override_onto_archive_is_rejected(self, tmp_path: Path) -> None:
-        """An explicit override re-using another dir's archived name is refused.
+    def test_unrelated_dir_with_distinct_leaf_keeps_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """An unrelated dir with its OWN leaf name is untouched by another's archive.
 
-        The name-picker steers a normal enable clear of archived names, but an
-        explicit ``--collection`` override could still aim at one.  The daemon's
-        registry (through the client) rejects it rather than merge — the safe
-        default.  ``FakeRegistryClient`` models the archive; the real reject lives
-        in ``SyncRegistry.register_directory`` (tested in test_registry).
+        enable dir_a "backend" → keep-data disable (archived) → enable dir_b, whose
+        leaf is the distinct "svc".  dir_a's archive belongs to dir_a; it neither
+        attracts nor renames an unrelated directory that was never going to collide
+        — dir_b simply registers under its own leaf "svc".  (The refusal to *merge*
+        onto another dir's archived name lives in ``SyncRegistry.register_directory``
+        and is exercised in test_registry.)
         """
         dir_a = tmp_path / "work" / "backend"
         dir_a.mkdir(parents=True)
@@ -157,11 +160,32 @@ class TestKeepDataArchiveNoMerge:
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             enable_project(dir_a, client)
             disable_project(dir_a, client, keep_data=True)
-            # dir_b explicitly forcing the archived "backend" name gets a distinct
-            # collection from the picker; the override path cannot silently merge.
             result = enable_project(dir_b, client)
 
         assert result.collection == "svc"  # dir_b keeps its own identity
+
+    def test_unrelated_dir_avoids_chunk_bearing_name(self, tmp_path: Path) -> None:
+        """A different dir never claims a name that already holds chunks.
+
+        A collection "backend" already holds chunks on the daemon (a captures/
+        memory/remember target, or a subsumed-then-evicted child) but has NO
+        registration.  Enabling an unrelated dir_b whose leaf is also "backend"
+        must NOT be handed that chunk-bearing name — the picker avoids every
+        chunk-bearing collection reported on the wire, so it disambiguates and the
+        two projects never share a collection.  FAILS against a live-plus-retained
+        -only picker (which would return "backend"); passes once chunk_collections
+        joins the avoid-set.
+        """
+        dir_b = tmp_path / "other" / "backend"
+        dir_b.mkdir(parents=True)
+        client = FakeRegistryClient(chunk_collections=["backend"])
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(dir_b, client)
+
+        assert result.collection == "backend-other"  # disambiguated, no merge
+        assert result.collection != "backend"
+        assert client.registered[-1].collection == "backend-other"
 
 
 class TestT5EnableCreatesConfig:
