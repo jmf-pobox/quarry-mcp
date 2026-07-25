@@ -1,0 +1,50 @@
+{
+  "manifest_version": "0.4",
+  "name": "quarry",
+  "display_name": "Quarry",
+  "version": "__VERSION__",
+  "description": "Search your documents by meaning. Index PDFs, images, spreadsheets, presentations, code, and webpages, then ask Claude about them.",
+  "long_description": "Quarry extracts knowledge from your files and makes it searchable by meaning. It reads PDFs (text and scanned), images, spreadsheets, presentations, source code, Markdown, LaTeX, DOCX, HTML, and webpages.\n\nArchitecture is daemon-first: a single local `quarryd` process loads the embedding model once and serves search over a versioned REST API. This bundle registers the stdio `quarry mcp` server, a thin client that reaches the daemon; it does not run an in-process engine. Data lives in `~/.punt-labs/quarry`, owned by the daemon.\n\nPrerequisite: install the `quarry` CLI and start the daemon first (`quarry install`), which also downloads the embedding model. Everything runs locally with no cloud accounts or API keys.",
+  "author": {
+    "name": "Punt Labs",
+    "email": "hello@punt-labs.com",
+    "url": "https://github.com/punt-labs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/punt-labs/quarry.git"
+  },
+  "homepage": "https://github.com/punt-labs/quarry",
+  "documentation": "https://github.com/punt-labs/quarry#readme",
+  "support": "https://github.com/punt-labs/quarry/issues",
+  "server": {
+    "type": "binary",
+    "entry_point": "quarry",
+    "mcp_config": {
+      "command": "quarry",
+      "args": ["mcp"]
+    }
+  },
+  "tools": [
+    {"name": "find", "description": "Search indexed documents by meaning (hybrid vector + BM25, RRF-fused)."},
+    {"name": "ingest", "description": "Fetch and index an HTTP(S) URL (sitemap discovery with single-page fallback)."},
+    {"name": "remember", "description": "Index inline text content (clipboard, API response, sandbox-uploaded files)."},
+    {"name": "list", "description": "List documents, collections, databases, or directory registrations."},
+    {"name": "show", "description": "Show a document, collection, or registration in detail."},
+    {"name": "delete", "description": "Delete indexed data for a document or collection."},
+    {"name": "register_directory", "description": "Register a directory for incremental filesystem sync."},
+    {"name": "deregister_directory", "description": "Remove a directory registration (optionally keeping indexed data)."},
+    {"name": "sync_all_registrations", "description": "Sync all registered directories: ingest new/changed, drop deleted."},
+    {"name": "status", "description": "Report database status: document/chunk counts, storage size, model info."},
+    {"name": "use", "description": "Switch to a different named database for subsequent operations."}
+  ],
+  "keywords": ["search", "documents", "ocr", "vector-search", "knowledge-base", "semantic-search"],
+  "license": "MIT",
+  "privacy_policies": [],
+  "compatibility": {
+    "platforms": ["darwin", "linux"],
+    "runtimes": {
+      "python": ">=3.13"
+    }
+  }
+}
