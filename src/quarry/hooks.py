@@ -164,7 +164,16 @@ def _sync_in_background() -> str:
 
 
 def _daemon_chunk_collections() -> frozenset[str]:
-    """Daemon's chunk-bearing collection names, or empty if unreachable (fail-open)."""
+    """Return the daemon's chunk-bearing collection names.
+
+    Raise ``ConnectionError`` when the daemon is unreachable or the client is
+    misconfigured: a down daemon yields no listing, and an empty set from a down
+    daemon is indistinguishable from a genuinely empty catalog.  Translating the
+    client-specific errors into one boundary-neutral exception here lets the
+    caller fail CLOSED without importing quarry.client's exception hierarchy — a
+    fresh name picked against an unverifiable (empty) chunk set would arm a latent
+    cross-project chunk merge.
+    """
     from quarry.client import (  # noqa: PLC0415
         ClientConfigError,
         QuarryError,
@@ -173,9 +182,20 @@ def _daemon_chunk_collections() -> frozenset[str]:
 
     try:
         listing = TargetResolver.connect().list_registrations()
-    except (ClientConfigError, QuarryError):
-        return frozenset()  # daemon down -> registry+retained-only naming
+    except (ClientConfigError, QuarryError) as exc:
+        msg = "quarryd unreachable; chunk-collection set unverifiable"
+        raise ConnectionError(msg) from exc
     return frozenset(listing.chunk_collections)
+
+
+def _session_start_output(context: str) -> dict[str, object]:
+    """Wrap *context* in the SessionStart hook-response envelope."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        },
+    }
 
 
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
@@ -229,25 +249,40 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
                     directory,
                     directory,
                 )
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": (
-                            f"Quarry: child registrations exist under {directory}. "
-                            "Auto-register skipped to prevent subsumption. "
-                            f"Run 'quarry enable {directory}' to register the parent."
-                        ),
-                    },
-                }
+                return _session_start_output(
+                    f"Quarry: child registrations exist under {directory}. "
+                    "Auto-register skipped to prevent subsumption. "
+                    f"Run 'quarry enable {directory}' to register the parent."
+                )
 
             # Re-adopt this cwd's own keep-data archive if it owns one (checked
-            # first, so a same-dir re-adopt is unaffected), else pick a fresh name
-            # avoiding every chunk-bearing collection (the local half of the
-            # merge-proof invariant).  Chunk names come from the daemon, which owns
-            # the catalog (DES-031: a thin client never opens the engine).
-            collection = resolver.archived_collection_for(directory) or (
-                resolver.unique_collection_name(directory, _daemon_chunk_collections())
-            )
+            # first, over LOCAL retained markers, so a same-dir re-adopt works even
+            # with the daemon down).  Only a cwd owning NO archive needs a fresh
+            # name — and a merge-safe fresh name requires the daemon's chunk set.
+            collection = resolver.archived_collection_for(directory)
+            if collection is None:
+                try:
+                    chunk_collections = _daemon_chunk_collections()
+                except ConnectionError:
+                    # Fail closed: the daemon is unreachable, so the chunk set is
+                    # unverifiable.  Writing a registration now would clear the
+                    # orphan sweep's pending mark and arm a latent cross-project
+                    # merge when the daemon returns.  No indexing runs while the
+                    # daemon is down, so deferring has zero functional cost.
+                    logger.warning(
+                        "session-start: quarryd unreachable; deferring "
+                        "auto-registration of %s to avoid a cross-project merge",
+                        directory,
+                    )
+                    return _session_start_output(
+                        f"Quarry: quarryd is unreachable, so auto-registration of "
+                        f"{directory} is deferred to avoid merging chunks across "
+                        "projects. Start quarryd and re-open the session to enable "
+                        "semantic search here."
+                    )
+                collection = resolver.unique_collection_name(
+                    directory, chunk_collections
+                )
             conn.register_directory(directory, collection)
             logger.info(
                 "session-start: auto-registered %s as '%s'",
@@ -275,12 +310,7 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             "For deep research across local docs and the web, use the "
             "researcher agent."
         )
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "SessionStart",
-                "additionalContext": context,
-            },
-        }
+        return _session_start_output(context)
     finally:
         conn.close()
 

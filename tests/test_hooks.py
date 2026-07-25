@@ -6,10 +6,11 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from quarry.__main__ import app
@@ -21,9 +22,6 @@ from quarry.hooks import (
     handle_session_start,
 )
 from quarry.sync_registry import SyncRegistry
-
-if TYPE_CHECKING:
-    import pytest
 
 runner = CliRunner()
 
@@ -329,6 +327,16 @@ class TestIsSyncRunning:
 
 
 class TestHandleSessionStart:
+    @pytest.fixture(autouse=True)
+    def _daemon_up_empty_catalog(self) -> Iterator[None]:
+        # These tests exercise the auto-register-fresh-name path, which needs a
+        # reachable daemon for the chunk-collection avoid-set.  Model a daemon that
+        # is up with a genuinely empty catalog so the picker proceeds; without this
+        # the fail-closed defer path (tested separately) would run under CI, where
+        # no daemon is up.
+        with patch("quarry.hooks._daemon_chunk_collections", return_value=frozenset()):
+            yield
+
     def test_no_cwd_returns_empty(self) -> None:
         result = handle_session_start({})
         assert result == {}
@@ -563,6 +571,122 @@ class TestSessionStartReadopt:
         conn.close()
         assert [r.collection for r in regs] == ["backend"]  # re-adopted, not fresh
         assert retained == []  # marker cleared by the re-adopt
+
+
+class TestSessionStartFailsClosedWhenDaemonUnreachable:
+    """A fresh auto-registration needs the daemon's chunk set to be merge-safe.
+
+    Without it, the picker would run against an empty avoid-set and could hand a
+    different directory a name that already holds another project's chunks; the
+    local ``register_directory`` then clears the orphan sweep's pending mark,
+    arming a cross-project merge the moment the daemon returns.  So a cwd that
+    owns no archive and cannot reach the daemon must DEFER, not register.  A cwd
+    that owns an archive re-adopts from LOCAL markers and is unaffected.
+    """
+
+    @staticmethod
+    def _settings(tmp_path: Path) -> MagicMock:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        return settings
+
+    def test_unreachable_daemon_no_archive_defers_and_nudges(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # No coverage, no descendants, no archive, daemon DOWN -> fail closed:
+        # no registry row, no background sync, a nudge to start quarryd.  The old
+        # fail-open code registered "solo" and launched sync (the latent merge).
+        from quarry.client import QuarryConnectionError
+
+        project = tmp_path / "solo"
+        project.mkdir()
+        settings = self._settings(tmp_path)
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.client.TargetResolver.connect",
+                side_effect=QuarryConnectionError("down", "url"),
+            ),
+            caplog.at_level(logging.WARNING, logger="quarry.hooks"),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert regs == []  # fail closed: no armed registration
+        mock_sync.assert_not_called()  # no sync into an unverifiable collection
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "unreachable" in ctx
+        assert "deferred" in ctx
+        assert any("deferring auto-registration" in r.message for r in caplog.records)
+
+    def test_unreachable_daemon_with_archive_still_readopts(
+        self, tmp_path: Path
+    ) -> None:
+        # The SAME directory that owns a keep-data archive re-adopts it by name
+        # from LOCAL retained markers, BEFORE the picker — so a down daemon never
+        # blocks the re-adopt of its own kept chunks.
+        from quarry.client import QuarryConnectionError
+
+        project = tmp_path / "backend"
+        project.mkdir()
+        settings = self._settings(tmp_path)
+
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "backend")
+        conn.deregister_directory("backend", keep_data=True)  # archive it
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch(
+                "quarry.client.TargetResolver.connect",
+                side_effect=QuarryConnectionError("down", "url"),
+            ),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert [r.collection for r in regs] == ["backend"]  # re-adopted despite down
+        mock_sync.assert_called_once()
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert "backend" in str(output["additionalContext"])
+
+    def test_reachable_daemon_empty_catalog_registers_fresh(
+        self, tmp_path: Path
+    ) -> None:
+        # Daemon UP, genuinely empty chunk catalog: an empty set is a VERIFIED
+        # answer, not an unreachable one, so the picker proceeds and registers.
+        project = tmp_path / "fresh"
+        project.mkdir()
+        settings = self._settings(tmp_path)
+
+        client = MagicMock()
+        client.list_registrations.return_value.chunk_collections = []
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as mock_sync,
+            patch("quarry.client.TargetResolver.connect", return_value=client),
+        ):
+            handle_session_start({"cwd": str(project)})
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert [r.collection for r in regs] == ["fresh"]  # registered normally
+        mock_sync.assert_called_once()
 
 
 class TestHandlePostWebFetch:
