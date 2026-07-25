@@ -136,7 +136,8 @@ class CollectionPurgeJob:
         try:
             conn.execute("BEGIN")
             retained = self.collection in conn.markers.list_retained()
-            if retained or (not self.force and self._superseded(conn)):
+            superseded = not self.force and self._superseded_excluding_retained(conn)
+            if retained or superseded:
                 conn.commit()  # retained / re-registered / cleared → do NOT delete
                 return 0
             deleted = self.database.store.delete_collection(self.collection)
@@ -146,14 +147,13 @@ class CollectionPurgeJob:
             conn.close()
         return deleted
 
-    def _superseded(self, conn: SyncRegistry) -> bool:
-        """Return whether the collection is no longer due for purge.
+    def _superseded_excluding_retained(self, conn: SyncRegistry) -> bool:
+        """Return whether the purge is superseded by re-registration or a spent mark.
 
-        Read under the caller's open transaction so the three checks share one
-        snapshot: a purge is superseded once the collection is re-registered,
-        kept (retained), or its mark already cleared.
+        Reads under the caller's open transaction (one snapshot).  Retained is the
+        caller's standalone absolute guard, so it is deliberately NOT re-queried
+        here — one ``list_retained()`` per purge, not two.
         """
         still_pending = self.collection in conn.markers.pending()
         registered = conn.get_registration(self.collection) is not None
-        retained = self.collection in conn.markers.list_retained()
-        return not still_pending or registered or retained
+        return not still_pending or registered

@@ -132,7 +132,11 @@ class WatchReconciler:
         except Exception as exc:  # noqa: BLE001 — backstop liveness: a read error of
             # any type (incl. LanceDB/pyarrow errors outside the stdlib hierarchy)
             # must skip the cycle, never kill the safety loop; fails toward safety.
-            logger.warning("watch: orphan sweep read failed, skipping cycle: %s", exc)
+            logger.warning(
+                "watch: orphan sweep read failed, skipping cycle: %s",
+                exc,
+                exc_info=True,  # traceback: diagnose a production read failure
+            )
             return
         active = ctx.database_name
         for collection in orphans:
@@ -203,7 +207,10 @@ class WatchReconciler:
                         submitter.submit_scan(key, root.resolve())
         except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
             # error may escape and kill the safety loop; fail closed and self-heal.
-            logger.warning("watch: safety-scan reconcile failed: %s", exc)
+            # exc_info: a production enumeration failure needs the traceback.
+            logger.warning(
+                "watch: safety-scan reconcile failed: %s", exc, exc_info=True
+            )
             return set(), current, False
         return watched, current, True
 
