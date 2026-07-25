@@ -14,6 +14,20 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **infra (mcpb)**: restore the Claude Desktop `.mcpb` distribution. The README
+  download link (`releases/latest/download/punt-quarry.mcpb`) 404'd because no
+  release ever attached the asset and `scripts/build-mcpb.sh` still read a
+  `manifest.json` that had been removed (b2c9ffb). The manifest is now generated
+  at build time into `dist/mcpb-staging/` — never the repo root, which would
+  re-strip the plugin's slash commands — from `scripts/mcpb-manifest.template.json`
+  with the version sourced from `pyproject.toml`. The manifest reflects the
+  current daemon-first architecture: the `quarry mcp` stdio client, the 11 current
+  MCP tool names, and the `~/.punt-labs/quarry` data dir. The release workflow now
+  builds and attaches the bundle on every `v*` tag and verifies both that the
+  asset is downloadable and that the README install-URL SHA is not stale.
+
 ## [1.20.0] - 2026-07-25
 
 ### Added

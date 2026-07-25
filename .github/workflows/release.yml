@@ -93,3 +93,70 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+
+  # Claude Desktop .mcpb bundle. Self-contained and decoupled from punt-kit's
+  # release.py: this job builds the bundle and attaches it to the GitHub release
+  # for the tag, then verifies the asset is downloadable and the README install
+  # URL is not stale. quarry-521g: the README linked to
+  # releases/latest/download/punt-quarry.mcpb but no release ever attached it, so
+  # the link 404'd.
+  mcpb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Required to create/upload GitHub release assets via gh.
+      contents: write
+    steps:
+      - name: Validate tag ref
+        run: |
+          if [[ "$GITHUB_REF_NAME" != v* ]]; then
+            echo "::error::Release must be triggered by a v* tag push. For manual dispatch, use: gh workflow run release.yml --ref v1.2.3"
+            exit 1
+          fi
+      # fetch-depth: 0 is load-bearing: check-readme-install-sha.sh resolves the
+      # README-pinned SHA and diffs its install.sh against the tree — a shallow
+      # clone lacks that history.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      # Node is preinstalled on ubuntu-latest; no setup-node action needed.
+      - name: Install mcpb
+        run: npm install -g @anthropic-ai/mcpb
+      - name: Build .mcpb bundle
+        run: ./scripts/build-mcpb.sh
+      - name: Attach .mcpb to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          # punt-kit phase 7 may create the release concurrently. Wait briefly,
+          # then create it ourselves if it still does not exist, so this job is
+          # correct whether or not punt-kit runs.
+          for _ in 1 2 3 4 5 6; do
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            sleep 10
+          done
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --generate-notes --title "$TAG"
+          fi
+          gh release upload "$TAG" \
+            "dist/punt-quarry.mcpb" \
+            "dist/punt-quarry-${VERSION}.mcpb" \
+            --clobber
+      - name: Verify the .mcpb asset is downloadable
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          url="https://github.com/punt-labs/quarry/releases/download/${TAG}/punt-quarry.mcpb"
+          code=$(curl -fsSL -o /dev/null -w '%{http_code}' "$url" || true)
+          if [ "$code" != "200" ]; then
+            echo "::error::$url returned HTTP $code (expected 200) — the .mcpb asset is missing from the release."
+            exit 1
+          fi
+          echo "OK: $url returns HTTP 200"
+      - name: Verify README install URL is not stale
+        run: ./scripts/check-readme-install-sha.sh
