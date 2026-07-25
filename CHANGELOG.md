@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-07-25
+
 ### Added
 
 - **index (watch)**: DES-045 always-on filesystem watch loop — the daemon now
