@@ -14,6 +14,11 @@ interactions.jsonl
 
 # Embedded Dolt store (unused in server mode; left for legacy/rollback)
 embeddeddolt/
+
+# bd 1.0.x local dolt server store — never tracked. Source of truth is the
+# central Hosted DoltDB (metadata.json + BEADS_DOLT_* env). Tracking it dirties
+# the tree on every local dolt write and blocks releases (fleet sweep pkit-jsxe).
+dolt/
 backup/
 *.corrupt.backup/
 export-state.json
