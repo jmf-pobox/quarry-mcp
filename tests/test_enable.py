@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.claudemd_block import ClaudeMdBlock
 from quarry.enable import (
     _CONFIG_TEMPLATE,
     DisableResult,
@@ -22,9 +21,9 @@ from quarry.enable import (
     disable_project,
     enable_project,
 )
+from quarry.enabled_marker import EnabledMarker
+from quarry.guidance import REPO_IMPORT_LINE
 from tests.conftest import FakeRegistryClient
-
-_BLOCK = ClaudeMdBlock()
 
 _NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
 
@@ -660,8 +659,8 @@ class TestT20CheckEnableStatusConfigMissing:
         assert "config.md missing" not in result.message
 
 
-class TestEnableAppendsClaudemdBlock:
-    def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
+class TestEnableRegistersImportAndMarker:
+    def test_enable_writes_import_marker_and_guide(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
@@ -669,16 +668,19 @@ class TestEnableAppendsClaudemdBlock:
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
-        assert result.claudemd_appended is True
+        # The enabled marker and the repo @-import are the §2.11 biconditional:
+        # both present after enable.
+        assert result.import_registered is True
+        assert result.enabled_marker_written is True
+        assert result.guide_deposited is True
+        assert EnabledMarker(project).is_present()
         claudemd = project / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert _BLOCK.begin in content
-        assert _BLOCK.end in content
-        assert "Local semantic search is available via quarry." in content
+        assert claudemd.read_text().rstrip("\n").endswith(REPO_IMPORT_LINE)
+        guide = project / ".punt-labs" / "quarry" / "CLAUDE.md"
+        assert "Local semantic search is available via quarry." in guide.read_text()
 
 
-class TestEnableClaudemdIdempotent:
+class TestEnableImportIdempotent:
     def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
@@ -688,10 +690,10 @@ class TestEnableClaudemdIdempotent:
             result1 = enable_project(project, client)
             result2 = enable_project(project, client)
 
-        assert result1.claudemd_appended is True
-        assert result2.claudemd_appended is False
+        assert result1.import_registered is True
+        assert result2.import_registered is False
         content = (project / "CLAUDE.md").read_text()
-        assert content.count(_BLOCK.begin) == 1
+        assert content.count(REPO_IMPORT_LINE) == 1
 
 
 class TestEnableAppendsToExistingClaudemd:
@@ -705,15 +707,37 @@ class TestEnableAppendsToExistingClaudemd:
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
-        assert result.claudemd_appended is True
+        assert result.import_registered is True
         content = claudemd.read_text()
         assert content.startswith("# My Project\n\nExisting content.\n")
-        assert _BLOCK.begin in content
-        assert _BLOCK.end in content
+        assert content.rstrip("\n").endswith(REPO_IMPORT_LINE)
 
 
-class TestDisableRemovesClaudemdBlock:
-    def test_disable_removes_markers_and_content(self, tmp_path: Path) -> None:
+class TestEnableStripsLegacyBlock:
+    def test_legacy_block_replaced_by_import(self, tmp_path: Path) -> None:
+        """A repo carrying the old marker block migrates to the @-import on enable."""
+        project = tmp_path / "myproject"
+        project.mkdir()
+        claudemd = project / "CLAUDE.md"
+        claudemd.write_text(
+            "# My Project\n\nKeep this.\n\n"
+            "<!-- quarry:begin -->\n## Quarry\nold body\n<!-- quarry:end -->\n"
+        )
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
+
+        assert result.legacy_block_stripped is True
+        content = claudemd.read_text()
+        assert "quarry:begin" not in content
+        assert "old body" not in content
+        assert "# My Project\n\nKeep this.\n" in content
+        assert REPO_IMPORT_LINE in content
+
+
+class TestDisableRemovesImportAndMarker:
+    def test_disable_prunes_import_and_marker(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
@@ -722,12 +746,13 @@ class TestDisableRemovesClaudemdBlock:
             enable_project(project, client)
             result = disable_project(project, client)
 
-        assert result.claudemd_removed is True
-        claudemd = project / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert _BLOCK.begin not in content
-        assert _BLOCK.end not in content
+        assert result.import_pruned is True
+        assert result.enabled_marker_removed is True
+        assert not EnabledMarker(project).is_present()
+        content = (project / "CLAUDE.md").read_text()
+        assert REPO_IMPORT_LINE not in content
+        # §2.9: the vendored guide is left dormant, not erased.
+        assert (project / ".punt-labs" / "quarry" / "CLAUDE.md").exists()
 
 
 class TestDisablePreservesOtherClaudemdContent:
@@ -742,8 +767,8 @@ class TestDisablePreservesOtherClaudemdContent:
             enable_project(project, client)
             result = disable_project(project, client)
 
-        assert result.claudemd_removed is True
+        assert result.import_pruned is True
         content = claudemd.read_text()
         assert "# My Project" in content
         assert "Keep this." in content
-        assert _BLOCK.begin not in content
+        assert REPO_IMPORT_LINE not in content

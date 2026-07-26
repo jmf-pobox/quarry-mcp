@@ -40,7 +40,12 @@ class RegistryClient(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EnableResult:
-    """Result of enabling quarry for a project directory."""
+    """Result of enabling quarry for a project directory.
+
+    The four CLAUDE.md fields track the § 2.3 enable steps: the vendored guide
+    deposit, the ``enabled`` marker, the one bare ``@``-import line, and the
+    one-time strip of the retired ``quarry:begin``/``end`` legacy block.
+    """
 
     directory: str
     collection: str
@@ -48,7 +53,10 @@ class EnableResult:
     memory_collections: list[str] = field(default_factory=list)
     config_path: str = ""
     created_registration: bool = False
-    claudemd_appended: bool = False
+    guide_deposited: bool = False
+    enabled_marker_written: bool = False
+    import_registered: bool = False
+    legacy_block_stripped: bool = False
     ethos_skipped: bool = False
     ethos_updated: list[str] = field(default_factory=list)
     ethos_already_set: list[str] = field(default_factory=list)
@@ -59,14 +67,20 @@ class EnableResult:
 @dataclass(frozen=True, slots=True)
 class DisableResult:
     """Result of disabling quarry.  ``removed`` is the registry file count the
-    daemon reported synchronously; the chunk purge runs as a background task."""
+    daemon reported synchronously; the chunk purge runs as a background task.
+
+    ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the
+    ``@``-import line and deletes the ``enabled`` marker, leaving the deposited
+    ``.punt-labs/quarry/CLAUDE.md`` dormant on disk.
+    """
 
     directory: str
     collection: str
     captures_collection: str
     removed: int = 0
     config_removed: bool = False
-    claudemd_removed: bool = False
+    import_pruned: bool = False
+    enabled_marker_removed: bool = False
 
 
 _GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
@@ -108,7 +122,9 @@ def enable_project(
     a local ``SyncRegistry``.  The project files (config.md, CLAUDE.md, ethos ext)
     are the client's and are written locally.
     """
-    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
+    from quarry.claude_import import ClaudeMdImport  # noqa: PLC0415
+    from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
+    from quarry.guidance import REPO_IMPORT_LINE, Guidance  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
@@ -136,9 +152,21 @@ def enable_project(
     memory_collections = [f"memory-{h}" for h in created_handles]
 
     config_path = _write_project_config(directory)
-    claudemd_appended = ClaudeMdBlock().append_to(directory)
-    if claudemd_appended:
-        logger.info("Appended quarry instructions to CLAUDE.md")
+
+    # The four § 2.3 CLAUDE.md steps: deposit the vendored guide, write the
+    # enabled marker, strip the retired marker block (forward-integration, no
+    # shim), then register the one bare @-import line. Deposit + marker are
+    # unconditional (wholesale-overwrite determinism); the last two report
+    # whether they changed the host CLAUDE.md.
+    guidance = Guidance(directory)
+    guidance.deposit()
+    EnabledMarker(directory).write()
+    legacy_stripped = guidance.strip_legacy_block()
+    import_registered = ClaudeMdImport(directory / "CLAUDE.md").register(
+        REPO_IMPORT_LINE
+    )
+    if import_registered:
+        logger.info("Registered quarry @-import in CLAUDE.md")
 
     return EnableResult(
         directory=str(directory),
@@ -147,7 +175,10 @@ def enable_project(
         memory_collections=memory_collections,
         config_path=config_path,
         created_registration=created,
-        claudemd_appended=claudemd_appended,
+        guide_deposited=True,
+        enabled_marker_written=True,
+        import_registered=import_registered,
+        legacy_block_stripped=legacy_stripped,
         ethos_skipped=ethos_skipped,
         ethos_updated=updated_handles,
         ethos_already_set=already_set_handles,
@@ -177,8 +208,10 @@ def disable_project(
     or CLAUDE.md claiming enabled.
     """
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
-    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
+    from quarry.claude_import import ClaudeMdImport  # noqa: PLC0415
     from quarry.client.errors import QuarryError  # noqa: PLC0415
+    from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
+    from quarry.guidance import REPO_IMPORT_LINE  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd,
@@ -203,21 +236,22 @@ def disable_project(
             DeregisterRequest(collection=collection, keep_data=keep_data)
         ).removed
 
-    # Clean local files whether or not a registration was present, and BEFORE the
-    # best-effort captures purge below — a retry always reaches here.
+    # Clean local capture config whether or not a registration was present, and
+    # BEFORE the best-effort captures purge below — a retry always reaches here.
     config_path = directory / ".punt-labs" / "quarry" / "config.md"
     config_removed = False
     if config_path.exists():
         config_path.unlink()
         config_removed = True
 
-    quarry_dir = directory / ".punt-labs" / "quarry"
-    if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
-        quarry_dir.rmdir()
-
-    claudemd_removed = ClaudeMdBlock().remove_from(directory)
-    if claudemd_removed:
-        logger.info("Removed quarry instructions from CLAUDE.md")
+    # Prune the @-import line and delete the enabled marker (§ 2.3). The vendored
+    # guide is left in place — disable is non-destructive of vendored content
+    # (§ 2.9), so the .punt-labs/quarry/ subtree stays as dormant, git-recoverable
+    # history rather than being erased on a toggle.
+    import_pruned = ClaudeMdImport(directory / "CLAUDE.md").prune(REPO_IMPORT_LINE)
+    if import_pruned:
+        logger.info("Removed quarry @-import from CLAUDE.md")
+    enabled_marker_removed = EnabledMarker(directory).remove()
 
     # Best-effort captures purge, dispatched last. A rejection is caught and
     # warned, never propagated: the primary teardown (deregister + local file
@@ -241,7 +275,8 @@ def disable_project(
         captures_collection=captures_collection,
         removed=removed,
         config_removed=config_removed,
-        claudemd_removed=claudemd_removed,
+        import_pruned=import_pruned,
+        enabled_marker_removed=enabled_marker_removed,
     )
 
 

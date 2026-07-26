@@ -66,8 +66,12 @@ class ProjectCli:
         ]
         if result.config_path:
             lines.append(f"  Config: {result.config_path}")
-        if result.claudemd_appended:
-            lines.append("  Appended quarry instructions to CLAUDE.md")
+        if result.guide_deposited:
+            lines.append("  Deposited quarry guide to .punt-labs/quarry/CLAUDE.md")
+        if result.import_registered:
+            lines.append("  Registered @.punt-labs/quarry/CLAUDE.md in CLAUDE.md")
+        if result.legacy_block_stripped:
+            lines.append("  Removed legacy quarry block from CLAUDE.md")
         if result.ethos_skipped:
             lines.append("  Ethos: not installed (agent memory skipped)")
         else:
@@ -118,6 +122,8 @@ class ProjectCli:
             lines.append("  Already disabled (no registration)")
         if result.config_removed:
             lines.append("  Config file removed")
-        if result.claudemd_removed:
-            lines.append("  Removed quarry instructions from CLAUDE.md")
+        if result.import_pruned:
+            lines.append("  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md")
+        if result.enabled_marker_removed:
+            lines.append("  Removed enabled marker (guide left dormant)")
         self._p.emit(dataclasses.asdict(result), "\n".join(lines))
