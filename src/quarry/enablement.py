@@ -17,12 +17,11 @@ __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
 
 @dataclass(frozen=True, slots=True)
 class EnablementResult:
-    """What the four § 2.3 enable steps did to a repo's CLAUDE.md."""
+    """What the § 2.3 enable steps did to a repo's CLAUDE.md."""
 
     guide_deposited: bool
     enabled_marker_written: bool
     import_registered: bool
-    legacy_block_stripped: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,9 +38,8 @@ class Enablement:
 
     Owns the ordering of the tool-enable-disable.md § 2.3 steps so ``enable`` /
     ``disable`` stay a single call rather than loose orchestration inside the
-    capture flow: deposit the vendored guide, write the ``enabled`` marker,
-    strip the retired legacy block (forward-integration, no shim), and register
-    the one bare ``@``-import line — and the symmetric teardown. The
+    capture flow: deposit the vendored guide, write the ``enabled`` marker, and
+    register the one bare ``@``-import line — and the symmetric teardown. The
     marker ⟺ import-line biconditional (§ 2.11) is this object's invariant:
     ``enable`` writes both, ``disable`` removes both.
     """
@@ -60,21 +58,19 @@ class Enablement:
         return self
 
     def enable(self) -> EnablementResult:
-        """Deposit the guide + marker, strip the legacy block, register the import.
+        """Deposit the guide, write the marker, register the import.
 
         The deposit and the marker are unconditional (wholesale-overwrite
-        determinism, § 2.2); the strip and the register report whether they
-        changed the host CLAUDE.md.
+        determinism, § 2.2); the register reports whether it changed the host
+        CLAUDE.md.
         """
         self._guidance.deposit()
         self._marker.write()
-        legacy_stripped = self._guidance.strip_legacy_block()
         import_registered = self._import.register(REPO_IMPORT_LINE)
         return EnablementResult(
             guide_deposited=True,
             enabled_marker_written=True,
             import_registered=import_registered,
-            legacy_block_stripped=legacy_stripped,
         )
 
     def disable(self) -> DisablementResult:

@@ -15,14 +15,12 @@ def test_enable_report_lists_claudemd_steps() -> None:
         guide_deposited=True,
         enabled_marker_written=True,
         import_registered=True,
-        legacy_block_stripped=True,
     )
     lines = EnableReport(result).lines()
     assert lines[0] == "Enabled quarry for /p"
     joined = "\n".join(lines)
     assert "Deposited quarry guide" in joined
     assert "Registered @.punt-labs/quarry/CLAUDE.md" in joined
-    assert "Removed legacy quarry block" in joined
 
 
 def test_enable_report_omits_absent_steps() -> None:
@@ -31,7 +29,6 @@ def test_enable_report_omits_absent_steps() -> None:
     )
     joined = "\n".join(EnableReport(result).lines())
     assert "Registered @" not in joined
-    assert "Removed legacy" not in joined
 
 
 def test_enable_report_reports_ethos_skipped() -> None:

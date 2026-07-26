@@ -51,10 +51,6 @@ class EnableReport:
                     r.import_registered,
                     "  Registered @.punt-labs/quarry/CLAUDE.md in CLAUDE.md",
                 ),
-                (
-                    r.legacy_block_stripped,
-                    "  Removed legacy quarry block from CLAUDE.md",
-                ),
             )
         )
         return lines + self._ethos_lines()

@@ -14,7 +14,6 @@ def test_enable_writes_guide_marker_and_import(tmp_path: Path) -> None:
     assert result.guide_deposited is True
     assert result.enabled_marker_written is True
     assert result.import_registered is True
-    assert result.legacy_block_stripped is False
     assert EnabledMarker(tmp_path).is_present()
     assert REPO_IMPORT_LINE in (tmp_path / "CLAUDE.md").read_text()
     assert (tmp_path / ".punt-labs" / "quarry" / "CLAUDE.md").exists()
@@ -34,18 +33,6 @@ def test_enable_is_idempotent(tmp_path: Path) -> None:
     assert first.import_registered is True
     assert second.import_registered is False
     assert (tmp_path / "CLAUDE.md").read_text().count(REPO_IMPORT_LINE) == 1
-
-
-def test_enable_strips_legacy_block(tmp_path: Path) -> None:
-    (tmp_path / "CLAUDE.md").write_text(
-        "# rules\n<!-- quarry:begin -->\nold\n<!-- quarry:end -->\n"
-    )
-    result = Enablement(tmp_path).enable()
-    assert result.legacy_block_stripped is True
-    content = (tmp_path / "CLAUDE.md").read_text()
-    assert "quarry:begin" not in content
-    assert REPO_IMPORT_LINE in content
-    assert "# rules\n" in content
 
 
 def test_disable_prunes_import_and_marker_leaves_guide(tmp_path: Path) -> None:

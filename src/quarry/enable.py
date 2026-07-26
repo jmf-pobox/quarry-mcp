@@ -39,9 +39,8 @@ class RegistryClient(Protocol):
 class EnableResult:
     """Result of enabling quarry for a project directory.
 
-    The four CLAUDE.md fields track the § 2.3 enable steps: the vendored guide
-    deposit, the ``enabled`` marker, the one bare ``@``-import line, and the
-    one-time strip of the retired ``quarry:begin``/``end`` legacy block.
+    The three CLAUDE.md fields track the § 2.3 enable steps: the vendored guide
+    deposit, the ``enabled`` marker, and the one bare ``@``-import line.
     """
 
     directory: str
@@ -53,7 +52,6 @@ class EnableResult:
     guide_deposited: bool = False
     enabled_marker_written: bool = False
     import_registered: bool = False
-    legacy_block_stripped: bool = False
     ethos_skipped: bool = False
     ethos_updated: list[str] = field(default_factory=list)
     ethos_already_set: list[str] = field(default_factory=list)
@@ -149,7 +147,6 @@ def enable_project(
         guide_deposited=claudemd.guide_deposited,
         enabled_marker_written=claudemd.enabled_marker_written,
         import_registered=claudemd.import_registered,
-        legacy_block_stripped=claudemd.legacy_block_stripped,
         ethos_skipped=ethos.skipped,
         ethos_updated=ethos.updated,
         ethos_already_set=ethos.already_set,

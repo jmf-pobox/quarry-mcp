@@ -18,12 +18,12 @@ __all__ = ["FileLock"]
 class FileLock:
     """Hold an exclusive ``flock`` on a sibling lock file for one read-modify-write.
 
-    Every shared host-file mutation in tool-enable-disable.md § 2.4 — the
-    ``CLAUDE.md`` import line and the legacy-block strip both — is a
-    read-modify-write on a file other tools and invocations also touch. Atomic
-    rename prevents a torn file but not a lost update: two parallel ``enable``
-    runs each read the old bytes, write their change, and rename, and the second
-    silently clobbers the first. This lock serializes them.
+    A shared host-file mutation in tool-enable-disable.md § 2.4 — the
+    ``CLAUDE.md`` import line — is a read-modify-write on a file other tools and
+    invocations also touch. Atomic rename prevents a torn file but not a lost
+    update: two parallel ``enable`` runs each read the old bytes, write their
+    change, and rename, and the second silently clobbers the first. This lock
+    serializes them.
 
     The lock file lives beside its target (``.CLAUDE.md.lock`` next to
     ``CLAUDE.md``) so it shares the directory the atomic rename needs anyway,

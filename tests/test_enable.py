@@ -597,29 +597,6 @@ class TestEnableAppendsToExistingClaudemd:
         assert content.rstrip("\n").endswith(REPO_IMPORT_LINE)
 
 
-class TestEnableStripsLegacyBlock:
-    def test_legacy_block_replaced_by_import(self, tmp_path: Path) -> None:
-        """A repo carrying the old marker block migrates to the @-import on enable."""
-        project = tmp_path / "myproject"
-        project.mkdir()
-        claudemd = project / "CLAUDE.md"
-        claudemd.write_text(
-            "# My Project\n\nKeep this.\n\n"
-            "<!-- quarry:begin -->\n## Quarry\nold body\n<!-- quarry:end -->\n"
-        )
-        client = FakeRegistryClient()
-
-        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
-            result = enable_project(project, client)
-
-        assert result.legacy_block_stripped is True
-        content = claudemd.read_text()
-        assert "quarry:begin" not in content
-        assert "old body" not in content
-        assert "# My Project\n\nKeep this.\n" in content
-        assert REPO_IMPORT_LINE in content
-
-
 class TestDisableRemovesImportAndMarker:
     def test_disable_prunes_import_and_marker(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
