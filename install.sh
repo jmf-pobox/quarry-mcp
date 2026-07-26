@@ -196,7 +196,12 @@ info "Installing $PACKAGE..."
 # box without a desktop.  A uv override drops the GUI build for the whole
 # resolution (the marker never matches), leaving `opencv-python-headless` as the
 # sole cv2 provider.  uv --overrides takes a requirements FILE, so write one.
-OPENCV_OVERRIDE="$(mktemp)"
+#
+# Use an EXPLICIT path template: bare `mktemp` (GNU default) fails on BSD/macOS,
+# where `mktemp` requires a template argument -- under `set -eu` that aborts the
+# installer before `uv tool install`, breaking every macOS install.  An absolute
+# template with trailing X's is portable across BSD and GNU mktemp.
+OPENCV_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/quarry-opencv-override.XXXXXX")"
 # Class-1 temp-file cleanup: remove the overrides file on ANY exit from here on
 # -- normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
 # before the install.  A per-branch `rm` would leak on an interrupt or on any
