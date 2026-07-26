@@ -70,6 +70,14 @@ def test_register_idempotent_on_crlf_host(tmp_path: Path) -> None:
     assert path.read_bytes() == f"{IMPORT}\r\n".encode()
 
 
+def test_register_uses_lf_first_newline_despite_stray_cr(tmp_path: Path) -> None:
+    """A mostly-LF host with a stray CR mid-body gets an LF-terminated import."""
+    path = tmp_path / "CLAUDE.md"
+    path.write_bytes(b"line one\nli\rne two\n")
+    ClaudeMdImport(path).register(IMPORT)
+    assert path.read_bytes() == b"line one\nli\rne two\n" + f"{IMPORT}\n".encode()
+
+
 # ── prune ────────────────────────────────────────────────────────────
 
 
@@ -169,6 +177,17 @@ def test_prune_leaves_import_in_backtick_fence_holding_tilde_line(
     assert ClaudeMdImport(path).prune(IMPORT) is True
     # Only the top-level copy after the fence is removed; the fenced one stays.
     assert path.read_text() == f"```\n~~~\n{IMPORT}\n```\n"
+
+
+def test_prune_leaves_import_after_info_string_line_inside_fence(
+    tmp_path: Path,
+) -> None:
+    """A ```note line has an info string, so it does not close the fence."""
+    path = tmp_path / "CLAUDE.md"
+    path.write_text(f"```\n```note\n{IMPORT}\n```\n{IMPORT}\n")
+    assert ClaudeMdImport(path).prune(IMPORT) is True
+    # The import inside the still-open fence survives; only the top-level one goes.
+    assert path.read_text() == f"```\n```note\n{IMPORT}\n```\n"
 
 
 # ── boundary validation ──────────────────────────────────────────────

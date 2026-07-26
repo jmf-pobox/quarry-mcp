@@ -38,10 +38,16 @@ class Enablement:
 
     Owns the ordering of the tool-enable-disable.md § 2.3 steps so ``enable`` /
     ``disable`` stay a single call rather than loose orchestration inside the
-    capture flow: deposit the vendored guide, write the ``enabled`` marker, and
-    register the one bare ``@``-import line — and the symmetric teardown. The
-    marker ⟺ import-line biconditional (§ 2.11) is this object's invariant:
-    ``enable`` writes both, ``disable`` removes both.
+    capture flow: deposit the vendored guide, register the one bare ``@``-import
+    line, and write the ``enabled`` marker — and the symmetric teardown.
+
+    The enforced invariant (§ 2.11) is one-directional: marker present ⇒ import
+    present. Both operations make the near-infallible marker their commit point —
+    ``enable`` registers the import before touching the marker, ``disable``
+    removes the marker before pruning the import — so a mid-operation failure can
+    only leave import-present + marker-absent, the recoverable state a re-run
+    reconciles, never marker-present + import-absent (a marker advertising
+    guidance that is not wired in).
     """
 
     __slots__ = ("_guidance", "_import", "_marker")

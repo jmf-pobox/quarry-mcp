@@ -54,3 +54,15 @@ def test_indented_line_inside_fence_does_not_close_it() -> None:
     """An indented line inside a fence is literal content, never a closer."""
     flags = _shield_flags("```\n    ```\ninside\n```\nafter\n")
     assert flags == [True, True, True, True, False]
+
+
+def test_info_string_line_does_not_close_a_fence() -> None:
+    """A closing fence carries only whitespace; a ```note line keeps it open."""
+    flags = _shield_flags("```\n```note\ninside\n```\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_trailing_whitespace_after_closer_still_closes() -> None:
+    """Spaces/tabs after the closing marker are allowed (CommonMark §4.5)."""
+    flags = _shield_flags("```\nbody\n```   \nafter\n")
+    assert flags == [True, True, True, False]

@@ -48,9 +48,17 @@ class FenceScanner:
         return True
 
     def _closes(self, raw: str) -> bool:
-        """Return whether *raw* closes the open fence: same char, length >= opener."""
+        """Return whether *raw* closes the open fence.
+
+        A closing fence matches the open marker, is at least as long, and carries
+        only trailing whitespace (CommonMark §4.5). An info string is valid on an
+        opening fence only, so a backtick run followed by ``note`` never closes.
+        """
         run = self._fence_run(raw)
-        return run is not None and run[0] == self._char and run[1] >= self._length
+        if run is None or run[0] != self._char or run[1] < self._length:
+            return False
+        rest = raw.rstrip("\r\n").lstrip(" ")[run[1] :]
+        return not rest.strip()
 
     @staticmethod
     def _fence_run(raw: str) -> tuple[str, int] | None:  # None: no fence run present

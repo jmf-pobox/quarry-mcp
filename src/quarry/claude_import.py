@@ -132,9 +132,14 @@ class ClaudeMdImport:
 
     @staticmethod
     def _host_eol(content: str) -> str:
-        """Return the host file's line ending: CRLF, lone CR, or LF (the default)."""
-        if "\r\n" in content:
-            return "\r\n"
-        if "\r" in content:
-            return "\r"
+        """Return the host's line ending from its FIRST newline: CRLF, lone CR, or LF.
+
+        Detecting the first terminator, not "contains anywhere", keeps a stray
+        ``\\r`` inside a code block from overriding a mostly-LF file's true ending
+        and appending the import with the wrong line separator.
+        """
+        cr = content.find("\r")
+        lf = content.find("\n")
+        if cr != -1 and (lf == -1 or cr < lf):
+            return "\r\n" if content[cr + 1 : cr + 2] == "\n" else "\r"
         return "\n"
