@@ -24,26 +24,43 @@ from quarry.client import QuarryClient
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.storage import get_db
+from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB
 from tests.inproc_daemon import InProcessDaemon
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-# Tests build simulated project roots via ``tmp_path``.  The workspace exports
-# ``TMPDIR=$PWD/.tmp``, so pytest would place those roots under the repo's own
-# ``.tmp`` scratch — which the watcher/indexer now refuses (DES-045).  Redirect
-# pytest's temp base to a non-scratch sibling (``<repo>/.pytest-work``) so a
-# test's project root is indexable while the daemon still refuses real ``.tmp``
-# and OS-temp roots.  Overriding ``tempfile.tempdir`` (not ``--basetemp``)
-# preserves pytest's ``pytest-of-<user>/pytest-<n>`` rotation and concurrency.
-_PYTEST_TMP_BASE = Path(__file__).resolve().parent.parent / ".pytest-work"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _pytest_tmp_base() -> Path:
+    """Return a temp base for ``tmp_path`` that the watcher/indexer never refuses.
+
+    Tests build simulated project roots via ``tmp_path``.  The workspace exports
+    ``TMPDIR=$PWD/.tmp``, so pytest would place those roots under the repo's own
+    ``.tmp`` scratch — which the guard now refuses (DES-045).  ``<repo>/.pytest-
+    work`` sidesteps that in CI.  A dev worktree can itself live under a parent
+    repo's ``.tmp`` (this one is ``<quarry>/.tmp/watch-wt``); the guard then also
+    refuses ``<repo>/.pytest-work``, so fall back to a home-cache base that no
+    repo's scratch encloses.  Either way the base is a directory the guard
+    permits, so a test's project root stays indexable.
+    """
+    candidate = _REPO_ROOT / ".pytest-work"
+    if ScratchGuard().refuses_root(candidate):
+        return Path.home() / ".cache" / "quarry-pytest"
+    return candidate
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Move pytest's temp base off the repo's ``.tmp`` scratch tree (DES-045)."""
+    """Point pytest's temp base at a guard-permitted directory (DES-045).
+
+    Overriding ``tempfile.tempdir`` (not ``--basetemp``) preserves pytest's
+    ``pytest-of-<user>/pytest-<n>`` rotation and its concurrency safety.
+    """
     del config
-    _PYTEST_TMP_BASE.mkdir(exist_ok=True)
-    tempfile.tempdir = str(_PYTEST_TMP_BASE)
+    base = _pytest_tmp_base()
+    base.mkdir(parents=True, exist_ok=True)
+    tempfile.tempdir = str(base)
 
 
 @pytest.fixture(scope="session")

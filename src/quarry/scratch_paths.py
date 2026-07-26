@@ -74,6 +74,8 @@ _ALWAYS_SKIP_SUFFIXES: Final[tuple[str, ...]] = (".egg-info",)
 _SYSTEM_TEMP_ROOTS: Final[tuple[Path, ...]] = (
     Path("/", "tmp"),
     Path("/", "private", "tmp"),
+    Path("/", "var", "tmp"),
+    Path("/", "private", "var", "tmp"),
     Path("/", "var", "folders"),
     Path("/", "private", "var", "folders"),
 )
@@ -111,8 +113,7 @@ class ScratchGuard:
         folded = self._casefold(root)
         if any(folded.is_relative_to(self._casefold(t)) for t in self._temp_roots):
             return True
-        scratch = self._repo_scratch(root)
-        return scratch is not None and root.is_relative_to(scratch)
+        return self._under_repo_scratch(root)
 
     @staticmethod
     def _casefold(path: Path) -> Path:
@@ -128,14 +129,18 @@ class ScratchGuard:
         return any(self.is_skip_name(part) for part in relative.parts)
 
     @staticmethod
-    def _repo_scratch(root: Path) -> Path | None:
-        """Return ``<git-repo>/.tmp`` for *root*'s enclosing repo, or ``None``.
+    def _under_repo_scratch(root: Path) -> bool:
+        """Return whether *root* lies in ANY ancestor git repo's ``.tmp`` scratch.
 
-        Anchored on the nearest ancestor holding a ``.git`` entry (a worktree's
-        ``.git`` is a file, so ``exists`` — not ``is_dir`` — is correct) so only a
-        repository's *own* scratch is refused, not any ``.tmp`` ancestor.
+        Every ancestor is checked, not just the innermost ``.git`` (a worktree's
+        ``.git`` is a file, so ``exists`` — not ``is_dir`` — is correct).  A
+        first-``.git``-wins check has a real bypass: a nested repo under
+        ``<outer>/.tmp/...`` shadows the outer repo, so a root still inside
+        ``<outer>/.tmp`` would be found relative to the inner repo (whose own
+        ``.tmp`` it is not under) and wrongly pass.  Checking every ancestor
+        refuses a root under any enclosing repo's scratch tree.
         """
-        for base in (root, *root.parents):
-            if (base / ".git").exists():
-                return base / _REPO_SCRATCH_NAME
-        return None
+        return any(
+            (base / ".git").exists() and root.is_relative_to(base / _REPO_SCRATCH_NAME)
+            for base in (root, *root.parents)
+        )

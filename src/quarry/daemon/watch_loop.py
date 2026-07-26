@@ -222,7 +222,13 @@ class WatchLoop:
             WatchSubmitter.summarize_scan(umbrella, children, timed_out=timed_out)
 
     def _submit_all_scans(self) -> list[TaskState]:
-        """Scan+finalize every active-DB registration (runs even if observer off)."""
+        """Scan+finalize every active-DB registration (runs even if observer off).
+
+        Applies the temp/scratch guard explicitly: ``request_scan`` (an on-demand
+        ``quarry sync``) reaches the queue here, NOT through ``_begin_collection``,
+        so a registered ``/private/tmp`` would otherwise be scanned on demand even
+        though the live watch refuses it.  Refused roots are skipped here too.
+        """
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:  # start() never ran
             return []
@@ -230,6 +236,9 @@ class WatchLoop:
         roster.ensure_database(name)
         children: list[TaskState] = []
         for collection, root in roster.registrations(name):
+            if self._guard.refuses_root(root.resolve()):
+                logger.info("watch: skipping scan of temp/scratch root %s", root)
+                continue
             children.extend(submitter.submit_scan(RouteKey(name, collection), root))
         return children
 

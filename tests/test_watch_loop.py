@@ -11,6 +11,7 @@ would hand to the real DES-042 queue.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
@@ -1029,6 +1030,28 @@ def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def _seed_registration(settings: Settings, directory: str, collection: str) -> None:
+    """Insert a registry row directly, bypassing register_directory's disk check.
+
+    A temp root like ``/private/tmp`` does not exist on the Linux CI runner, so
+    ``register_directory`` would raise ``FileNotFoundError`` before the guard is
+    ever exercised.  The guard must refuse a temp root regardless of whether the
+    OS directory exists, so the row is seeded without the existence validation —
+    modelling a stale registry entry the daemon meets on restart.
+    """
+    SyncRegistry(settings.registry_path).close()  # ensure the schema exists
+    conn = sqlite3.connect(settings.registry_path)
+    try:
+        conn.execute(
+            "INSERT INTO directories (directory, collection, registered_at) "
+            "VALUES (?, ?, ?)",
+            (directory, collection, "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _build_with_root(
     tmp_path: Path, *, queue: _RecordingQueue, root: Path, collection: str
 ) -> DaemonContext:
@@ -1036,7 +1059,8 @@ def _build_with_root(
 
     Models an ENTRY ALREADY IN THE REGISTRY (the operator's stale ``/private/tmp``)
     so a restart's ``start()`` must refuse to watch it — not merely reject a new
-    registration.
+    registration.  The row is seeded directly so the test never depends on the
+    temp directory existing on the runner (portable across macOS and Linux CI).
     """
     data = tmp_path / "data"
     (data / "testdb").mkdir(parents=True)
@@ -1050,7 +1074,7 @@ def _build_with_root(
         watch_bulk_threshold=5,
         watch_safety_scan_s=0.0,
     )
-    _register(settings, root, collection)
+    _seed_registration(settings, str(root), collection)
     ctx = SimpleNamespace(
         settings=settings,
         ingest_queue=queue,
@@ -1145,6 +1169,32 @@ def test_reconcile_skips_a_registered_temp_root(tmp_path: Path) -> None:
         await _reconciler(loop).run_once()
         assert queue.submitted == []  # the temp root is not enumerated for scan
         assert source.watch_count == 0
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_request_scan_skips_a_registered_temp_root(tmp_path: Path) -> None:
+    """An on-demand `quarry sync` (request_scan) never scans a registered temp root.
+
+    request_scan submits per-registration scans directly, NOT through
+    _begin_collection, so the guard must also fire in _submit_all_scans — else a
+    manual sync would OCR-storm a stale /private/tmp entry the live watch refuses.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        umbrella = ctx.tasks.begin("sync")
+        await loop.request_scan(umbrella)
+        assert queue.submitted == []  # refused root → zero scan/finalize jobs
+        assert umbrella.status == "completed"  # no children → truthful success
         await loop.stop()
 
     asyncio.run(_run())

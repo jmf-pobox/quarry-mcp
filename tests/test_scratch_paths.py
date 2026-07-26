@@ -18,11 +18,18 @@ from quarry.scratch_paths import ScratchGuard
         Path("/private/tmp/scan-dir"),
         Path("/var/folders/ab/xxxx/T/quarry"),
         Path("/private/var/folders/ab/xxxx/T"),
+        # /var/tmp is standard OS temp on both Linux and macOS.
+        Path("/var/tmp"),
+        Path("/var/tmp/quarry-xyz"),
+        Path("/private/var/tmp/scan-dir"),
         # Case variants — case-insensitive APFS resolves these to the same dirs,
-        # so the guard must casefold both sides (djb).
+        # so the guard casefolds both sides; /Private/Tmp caps the first letter
+        # too, which casefold still normalises.
         Path("/private/TMP"),
         Path("/private/Tmp/scan-dir"),
+        Path("/Private/Tmp"),
         Path("/var/Folders/ab/xxxx/T"),
+        Path("/VAR/TMP/x"),
     ],
 )
 def test_os_temp_roots_are_refused(root: Path) -> None:
@@ -36,6 +43,22 @@ def test_repo_scratch_root_is_refused(tmp_path: Path) -> None:
     scratch_root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
     scratch_root.mkdir(parents=True)
     assert ScratchGuard().refuses_root(scratch_root) is True
+
+
+def test_nested_repo_under_outer_scratch_is_refused(tmp_path: Path) -> None:
+    """A nested git repo under ``<outer>/.tmp`` does not shadow the outer scratch.
+
+    A first-``.git``-wins check would find the INNER repo (whose own ``.tmp`` the
+    root is not under) and wrongly permit a root still inside the OUTER repo's
+    ``.tmp`` — reopening the OCR storm.  Walking every ancestor refuses it.
+    """
+    (tmp_path / ".git").mkdir()  # OUTER repo
+    inner = tmp_path / ".tmp" / "inner"
+    inner.mkdir(parents=True)
+    (inner / ".git").mkdir()  # nested INNER repo under outer's scratch
+    root = inner / "docs"
+    root.mkdir()
+    assert ScratchGuard().refuses_root(root) is True
 
 
 def test_project_root_is_not_refused(tmp_path: Path) -> None:
