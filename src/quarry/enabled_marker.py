@@ -43,20 +43,23 @@ class EnabledMarker:
         """Return whether the marker exists (quarry is enabled here)."""
         return self._path.is_file()
 
-    def write(self) -> None:
-        """Create the marker at mode ``0644``; do nothing if it already exists.
+    def write(self) -> bool:
+        """Create the marker at mode ``0644``; return whether it was created.
 
-        A present marker is left untouched — no mtime bump — so re-enabling is a
-        true idempotent no-op. On the creation path the mode is set by an explicit
+        A present marker is left untouched — no mtime bump — and ``False`` is
+        returned, so re-enabling is a true idempotent no-op the caller can
+        report as such. On the creation path the mode is set by an explicit
         ``chmod``: ``touch``'s create mode is masked by the process umask, so a
         restrictive umask would otherwise yield ``0600`` instead of the ``0644``
-        both the hook gates and ``punt audit`` expect.
+        both the hook gates and ``punt audit`` expect; that path returns
+        ``True``.
         """
         if self._path.is_file():
-            return
+            return False
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.touch()
         self._path.chmod(0o644)
+        return True
 
     def remove(self) -> bool:
         """Delete the marker; return whether a marker was present to remove.

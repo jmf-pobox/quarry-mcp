@@ -34,6 +34,13 @@ def test_write_is_idempotent(tmp_path: Path) -> None:
     assert marker.path.read_text() == "sentinel"
 
 
+def test_write_returns_true_on_create_false_when_present(tmp_path: Path) -> None:
+    """write() reports whether it created the marker, mirroring remove()."""
+    marker = EnabledMarker(tmp_path)
+    assert marker.write() is True
+    assert marker.write() is False
+
+
 def test_write_present_does_not_bump_mtime(tmp_path: Path) -> None:
     """Re-enabling a present marker is a true no-op: the mtime is left as-is."""
     marker = EnabledMarker(tmp_path)

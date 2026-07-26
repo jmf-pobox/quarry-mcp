@@ -123,6 +123,19 @@ def test_symlink_target_is_rewritten_link_preserved(tmp_path: Path) -> None:
     assert real.read_text() == "new\n"
 
 
+def test_symlink_to_absent_target_is_created_through_link(tmp_path: Path) -> None:
+    """A dangling symlink (target not created yet) is written through, not crashed."""
+    target = tmp_path / "target.md"  # deliberately absent
+    link = tmp_path / "CLAUDE.md"
+    link.symlink_to(target)
+    assert not target.exists()
+
+    AtomicFile(link).replace("first write\n")
+
+    assert link.is_symlink()
+    assert target.read_text() == "first write\n"
+
+
 def test_creates_parent_directories(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "deep" / "CLAUDE.md"
     AtomicFile(path).replace("x\n")

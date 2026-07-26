@@ -34,7 +34,9 @@ def test_enable_is_idempotent(tmp_path: Path) -> None:
     first = Enablement(tmp_path).enable()
     second = Enablement(tmp_path).enable()
     assert first.import_registered is True
+    assert first.enabled_marker_written is True
     assert second.import_registered is False
+    assert second.enabled_marker_written is False
     assert (tmp_path / "CLAUDE.md").read_text().count(REPO_IMPORT_LINE) == 1
 
 

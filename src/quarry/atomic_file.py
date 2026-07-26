@@ -128,9 +128,15 @@ class AtomicFile:
         ``resolve()`` also settles a symlinked parent so the temp shares the
         target's filesystem and the rename stays atomic. A non-symlink path is
         returned unchanged.
+
+        ``strict=False`` is required: a dotfile manager may point the link at a
+        target that does not exist yet (first ``enable`` on a fresh checkout).
+        ``resolve(strict=True)`` would raise ``FileNotFoundError`` there; the
+        non-strict form still normalizes the path so the create lands on the
+        link's destination.
         """
         if self._path.is_symlink():
-            return self._path.resolve()
+            return self._path.resolve(strict=False)
         return self._path
 
     def _replacement_mode(self, target: Path, mode: int | None) -> int:
