@@ -14,8 +14,6 @@ from quarry.doctor import (
     _check_embedding_model,
     _check_fts_health,
     _check_imports,
-    _check_local_ocr,
-    _check_provider,
     _check_python_version,
     _check_storage,
     _check_sync_directories,
@@ -30,6 +28,7 @@ from quarry.doctor import (
     run_install,
 )
 from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_inference import InferenceDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
 
@@ -135,59 +134,30 @@ class TestCheckImports:
         assert "lancedb" in result.message
 
 
-class TestCheckLocalOcr:
-    def test_reports_result(self):
-        result = _check_local_ocr()
-        assert result.name == "Local OCR"
-        # Pass/fail depends on whether rapidocr is installed in test env
-        if result.passed:
-            assert "RapidOCR" in result.message
+class TestCheckImportsExcludesCv2:
+    def test_cv2_import_failure_does_not_fail_core_imports(self):
+        # cv2 is rapidocr's transitive GUI-linked dep, not a quarry core import;
+        # a headless box where it won't load must still pass Core imports.
+        import builtins
 
+        real_import = builtins.__import__
 
-class TestCheckProvider:
-    def test_reports_provider_on_success(self) -> None:
-        from quarry.ingestion.provider import ProviderSelection
+        def mock_import(
+            name: str,
+            globals: dict[str, object] | None = None,
+            locals: dict[str, object] | None = None,
+            fromlist: list[str] = [],  # noqa: B006
+            level: int = 0,
+        ) -> object:
+            if name == "cv2":
+                msg = "libGL.so.1: cannot open shared object file"
+                raise ImportError(msg)
+            return real_import(name, globals, locals, fromlist, level)
 
-        selection = ProviderSelection(
-            provider="CPUExecutionProvider",
-            model_file="onnx/model_int8.onnx",
-        )
-        with patch.object(
-            ProviderSelection, "from_environment", return_value=selection
-        ):
-            result = _check_provider()
+        with patch("builtins.__import__", side_effect=mock_import):
+            result = _check_imports()
         assert result.passed is True
-        assert result.required is False
-        assert result.name == "ONNX provider"
-        assert "CPUExecutionProvider" in result.message
-        assert "onnx/model_int8.onnx" in result.message
-
-    def test_reports_cuda_provider(self) -> None:
-        from quarry.ingestion.provider import ProviderSelection
-
-        selection = ProviderSelection(
-            provider="CUDAExecutionProvider",
-            model_file="onnx/model_fp16.onnx",
-        )
-        with patch.object(
-            ProviderSelection, "from_environment", return_value=selection
-        ):
-            result = _check_provider()
-        assert result.passed is True
-        assert "CUDAExecutionProvider" in result.message
-
-    def test_reports_failure_on_exception(self) -> None:
-        from quarry.ingestion.provider import ProviderSelection
-
-        with patch.object(
-            ProviderSelection,
-            "from_environment",
-            side_effect=RuntimeError("CUDA not available"),
-        ):
-            result = _check_provider()
-        assert result.passed is False
-        assert result.required is False
-        assert "CUDA not available" in result.message
+        assert "cv2" not in result.message
 
 
 class TestCheckStorage:
@@ -455,8 +425,8 @@ class TestCheckEnvironment:
 
         _ok = CheckResult
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_local_ocr",
+            InferenceDiagnostics,
+            "local_ocr",
             lambda: _ok(name="Local OCR", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
@@ -470,8 +440,8 @@ class TestCheckEnvironment:
             lambda: _ok(name="Embedding model", passed=True, message="mocked"),
         )
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_provider",
+            InferenceDiagnostics,
+            "onnx_provider",
             lambda: _ok(
                 name="ONNX provider", passed=True, message="mocked", required=False
             ),

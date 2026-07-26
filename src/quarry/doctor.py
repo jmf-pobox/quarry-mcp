@@ -15,6 +15,7 @@ from pathlib import Path
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_resources import ResourceDiagnostics
 from quarry.results import CheckResult
 
@@ -118,56 +119,18 @@ def _check_embedding_model() -> CheckResult:
     )
 
 
-def _check_local_ocr() -> CheckResult:
-    """Check that the local OCR engine (RapidOCR) can initialize."""
-    try:
-        from quarry.ingestion.ocr_local import get_engine  # noqa: PLC0415
-
-        get_engine()
-        return CheckResult(
-            name="Local OCR",
-            passed=True,
-            message="RapidOCR engine OK",
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="Local OCR",
-            passed=False,
-            message=str(exc),
-        )
-
-
-def _check_provider() -> CheckResult:
-    """Report which ONNX execution provider is selected."""
-    from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
-
-    try:
-        selection = ProviderSelection.from_environment()
-        return CheckResult(
-            name="ONNX provider",
-            passed=True,
-            message=f"{selection.provider} ({selection.model_file})",
-            required=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="ONNX provider",
-            passed=False,
-            message=str(exc),
-            required=False,
-        )
-
-
 def _check_imports() -> CheckResult:
+    # OCR's modules (rapidocr, cv2) are deliberately absent: they are an optional
+    # capability, and importing rapidocr can transitively load the GUI-linked cv2
+    # that fails on a headless box. Their absence must not fail this required
+    # check; OCR availability is reported separately (advisory) by _check_local_ocr.
     modules = [
         "lancedb",
         "tokenizers",
         "huggingface_hub",
         "fitz",
         "PIL",
-        "rapidocr",
         "onnxruntime",
-        "cv2",
     ]
     failed: list[str] = []
     for mod in modules:
@@ -937,6 +900,37 @@ def _configure_ethos_ext(
     )
 
 
+def _install_embedding_model() -> bool:
+    """Download the INT8 model (and FP16 on CUDA); return whether it succeeded.
+
+    The FP16 download is best-effort — its failure is swallowed because first-use
+    falls back to INT8. Only an INT8 failure marks the step failed.
+
+    NOTE: the CUDA probe is an in-process import. If onnxruntime was imported
+    earlier (before ``GpuRuntime.ensure()`` swapped the package), the old native
+    libraries stay loaded and provider detection here may be stale; a fresh
+    ``quarry install`` has not imported it yet, so this is accurate, and the FP16
+    model is fetched on the next run if needed.
+    """
+    try:
+        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
+
+        OnnxEmbeddingBackend.download_model_files()
+        print("  ✓ snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ✗ Model download failed: {exc}")  # noqa: T201
+        return False
+    try:
+        import onnxruntime as ort  # noqa: PLC0415
+
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            OnnxEmbeddingBackend.download_model_files(model_file="onnx/model_fp16.onnx")
+            print("  ✓ FP16 model cached (for CUDA)")  # noqa: T201
+    except Exception:  # noqa: BLE001, S110
+        pass  # FP16 download is optional -- first-use fallback works
+    return True
+
+
 def run_install() -> int:  # noqa: C901
     """Create data directory, download model, and configure MCP clients.
 
@@ -950,7 +944,7 @@ def run_install() -> int:  # noqa: C901
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/8] Creating directories...")  # noqa: T201
+    print("[1/9] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -960,9 +954,23 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
         failed = True
 
-    # Step 2: GPU runtime (must run before model download so CUDA provider
+    # Step 2: headless OpenCV (rapidocr hard-requires the GUI opencv-python;
+    # force the headless wheel to own cv2 so OCR loads on a screenless box, the
+    # package-side equivalent of install.sh's resolver override). Best-effort:
+    # a failure here leaves OCR to degrade cleanly via the runtime guard.
+    print("[2/9] Ensuring headless OpenCV...")  # noqa: T201
+    try:
+        from quarry.opencv_headless import HeadlessOpenCv  # noqa: PLC0415
+
+        msg = HeadlessOpenCv(sys.executable).enforce()
+        print(f"  ✓ {msg}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  • Skipped: {exc}")  # noqa: T201
+        print("    OCR degrades cleanly; run the printed fix to enable it.")  # noqa: T201
+
+    # Step 3: GPU runtime (must run before model download so CUDA provider
     # detection can trigger FP16 model caching)
-    print("[2/8] Checking GPU runtime...")  # noqa: T201
+    print("[3/9] Checking GPU runtime...")  # noqa: T201
     try:
         from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
 
@@ -975,38 +983,14 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2717 GPU runtime check failed: {exc}")  # noqa: T201
         failed = True
 
-    # Step 3: embedding model
-    print("[3/8] Downloading embedding model...")  # noqa: T201
-    try:
-        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
-
-        OnnxEmbeddingBackend.download_model_files()
-        print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
-        # Also download FP16 model if CUDA is available.
-        # NOTE: This is an in-process import. If onnxruntime was already
-        # imported earlier in this process *before* GpuRuntime.ensure()
-        # swapped the package in step 2, the native shared libraries (.so)
-        # from the old onnxruntime remain loaded and provider detection here
-        # may be stale. In a typical `quarry install` run where onnxruntime
-        # has not yet been imported in-process, this is accurate. The FP16
-        # model will be downloaded on the next run if needed.
-        try:
-            import onnxruntime as ort  # noqa: PLC0415
-
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                OnnxEmbeddingBackend.download_model_files(
-                    model_file="onnx/model_fp16.onnx"
-                )
-                print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201
-        except Exception:  # noqa: BLE001, S110
-            pass  # FP16 download is optional -- first-use fallback works
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
+    # Step 4: embedding model
+    print("[4/9] Downloading embedding model...")  # noqa: T201
+    if not _install_embedding_model():
         failed = True
 
-    # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
+    # Step 5: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[4/8] Installing mcp-proxy...")  # noqa: T201
+    print("[5/9] Installing mcp-proxy...")  # noqa: T201
     try:
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
@@ -1016,13 +1000,13 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
 
-    # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
-    print("[5/8] Configuring MCP clients...")  # noqa: T201
+    # Step 6: MCP clients (uses mcp-proxy if step 5 succeeded, otherwise quarry mcp)
+    print("[6/9] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
-    # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[6/8] Registering quarry daemon...")  # noqa: T201
+    # Step 7: daemon service (best-effort — not available in CI, containers, SSH)
+    print("[7/9] Registering quarry daemon...")  # noqa: T201
     try:
         from quarry.service import install as svc_install  # noqa: PLC0415
 
@@ -1032,16 +1016,16 @@ def run_install() -> int:  # noqa: C901
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
         print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
 
-    # Step 7: CLAUDE.md context injection (best-effort)
-    print("[7/8] Injecting quarry context into CLAUDE.md...")  # noqa: T201
+    # Step 8: CLAUDE.md context injection (best-effort)
+    print("[8/9] Injecting quarry context into CLAUDE.md...")  # noqa: T201
     try:
         msg = _inject_claude_md()
         print(f"  \u2713 {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201
 
-    # Step 8: ethos ext session_context (best-effort)
-    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
+    # Step 9: ethos ext session_context (best-effort)
+    print("[9/9] Configuring ethos identity extension...")  # noqa: T201
     try:
         check = _configure_ethos_ext()
         _print_check(check)
@@ -1069,9 +1053,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
         all_results: list[CheckResult | None] = [
             _check_python_version(),
             _check_data_directory(),
-            _check_local_ocr(),
+            InferenceDiagnostics.local_ocr(),
             _check_embedding_model(),
-            _check_provider(),
+            InferenceDiagnostics.onnx_provider(),
             _check_imports(),
             _check_mcp_proxy(),
             _check_claude_code_mcp(),
