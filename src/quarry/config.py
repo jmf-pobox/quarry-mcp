@@ -57,12 +57,12 @@ class Settings(BaseSettings):
     watch_use_polling: bool = False
     watch_poll_interval_s: float = Field(default=2.0, gt=0)
     watch_safety_scan_s: float = Field(default=300.0, ge=0)
-    # Rate-limit the per-batch finalize (optimize + full FTS rebuild) so sustained
-    # churn — a make check editing files across the registered repos — does not
-    # trigger a heavy compaction every debounce window.  A finalize runs at most
-    # once per interval per database; churn arriving inside the window coalesces
-    # into one trailing finalize when it elapses (FTS lags, vector channel stays
-    # fresh; DES-045 §9).  0 disables the rate-limit (finalize every batch).
+    # Rate-limit the finalize (optimize + full FTS rebuild) the daemon runs behind
+    # each indexed batch, so ordinary edit activity under the registered repos does
+    # not drive a heavy compaction every debounce window.  A finalize runs at most
+    # once per interval per database; batches inside the window coalesce into one
+    # trailing finalize when it elapses (FTS lags, vector channel stays fresh;
+    # DES-045 §9).  0 disables the rate-limit (finalize every batch).
     watch_optimize_min_interval_s: float = Field(default=30.0, ge=0)
 
     model_config = {"env_file": ".env", "extra": "ignore"}

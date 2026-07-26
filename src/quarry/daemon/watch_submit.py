@@ -109,20 +109,31 @@ class FinalizeThrottle:
             timer.cancel()
         self._timers.clear()
 
-    def _fire(self, database: str, submit: Callable[[], object]) -> None:
-        """Submit one finalize for *database* and stamp the interval clock.
+    def mark_finalized(self, database: str) -> None:
+        """Record that *database* was just finalized: cancel any pending trailing
+        timer and stamp the interval clock.
 
-        Cancel any pending trailing timer, don't just drop it: the immediate path
-        fires exactly when a trailing timer is due (both trigger at ``last +
-        interval``), so a debounce flush landing in that tick would run the
-        immediate finalize AND leave the overdue timer callback queued — two
-        finalizes for one interval.  ``cancel`` de-queues the callback; a bare
-        ``pop`` would not.
+        Callers that finalize a database OUTSIDE this throttle — the reconcile and
+        explicit-sync scans, which run an immediate finalize directly — must call
+        this so their finalize and an already-armed trailing finalize for the same
+        database do not both run (a redundant double-compaction).  Cancelling,
+        not just dropping, de-queues an overdue timer callback; stamping ``_last``
+        makes the next in-window request coalesce behind the finalize that ran.
         """
         timer = self._timers.pop(database, None)
         if timer is not None:
             timer.cancel()
         self._last[database] = self._loop.time()
+
+    def _fire(self, database: str, submit: Callable[[], object]) -> None:
+        """Finalize *database* now: stamp the clock, cancel any timer, then submit.
+
+        The immediate path fires exactly when a trailing timer is due (both at
+        ``last + interval``), so without the cancel in ``mark_finalized`` a
+        debounce flush in that tick would run this finalize AND leave the overdue
+        timer queued — two finalizes for one interval.
+        """
+        self.mark_finalized(database)
         submit()
 
 
@@ -221,13 +232,17 @@ class WatchSubmitter:
         finalize is the FTS self-heal and must always run, never coalesce away).
         The high-frequency bulk-churn path (``on_batch``) throttles its finalize
         instead.  A scan shed by a full queue is recovered by the reconcile.
+
+        This immediate finalize is registered with the throttle (``mark_finalized``)
+        so it cancels any trailing finalize already armed for the same database and
+        resets that database's interval clock — otherwise a reconcile/sync finalize
+        and an armed trailing finalize would both run (a redundant double-compaction).
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
-        return [
-            self._submit_scan_job(key, root, db, settings),
-            self._submit_finalize(key, db, settings),
-        ]
+        scan = self._submit_scan_job(key, root, db, settings)
+        self._throttle.mark_finalized(key.database)
+        return [scan, self._submit_finalize(key, db, settings)]
 
     def _submit_scan_job(
         self, key: RouteKey, root: Path, db: Database, settings: Settings

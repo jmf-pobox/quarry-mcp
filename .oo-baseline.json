@@ -1107,10 +1107,10 @@
   "src/quarry/daemon/watch_submit.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.11,
+    "avg_params": 2.05,
     "max_complexity": 10.0,
-    "avg_complexity": 2.74,
-    "module_size": 309.0,
+    "avg_complexity": 2.65,
+    "module_size": 321.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

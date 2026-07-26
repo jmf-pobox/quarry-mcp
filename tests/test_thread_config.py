@@ -184,20 +184,24 @@ class TestApplyEnvLimits:
     def test_honored_lower_override_does_not_warn(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        # OMP=1 is inside [1, 2] — honored, so no "not honored" warning fires.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("OMP_NUM_THREADS", "1")
         with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
-        assert not any("clamping" in r.getMessage() for r in caplog.records)
+        assert not any(
+            "OMP_NUM_THREADS preset" in r.getMessage() for r in caplog.records
+        )
 
     def test_no_warning_when_cap_applied(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        # No preset → the cap is applied with no adjustment, so nothing warns.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
         with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
-        assert not any("clamping" in r.getMessage() for r in caplog.records)
+        assert not any("not honored" in r.getMessage() for r in caplog.records)
 
     def test_apply_returns_self(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("os.cpu_count", lambda: 8)

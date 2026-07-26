@@ -238,7 +238,10 @@ def test_ten_edits_coalesce_to_one_file_index_job(tmp_path: Path) -> None:
 
     async def _run() -> None:
         queue = _RecordingQueue()
-        ctx, root = _build(tmp_path, queue=queue)
+        # optimize_interval=0 disables the finalize throttle: this test is about
+        # debounce coalescing (ten events -> one index job), so the finalize
+        # should fire per batch, not be deferred by the rate-limiter.
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.0)
         source = _FakeSource()
         loop = WatchLoop(ctx, source=source)
         await loop.start()
@@ -290,6 +293,9 @@ def test_sustained_bulk_churn_coalesces_finalize(tmp_path: Path) -> None:
         source = _FakeSource()
         loop = WatchLoop(ctx, source=source)
         await loop.start()
+        # The initial scan finalized and stamped the throttle clock; let it expire
+        # so the first burst below fires immediately (not coalesced behind start).
+        await asyncio.sleep(0.55)
         queue.submitted.clear()
         # Burst 1: > threshold distinct files → one bulk scan + the first finalize.
         for i in range(6):
@@ -306,6 +312,34 @@ def test_sustained_bulk_churn_coalesces_finalize(tmp_path: Path) -> None:
         # After the interval, the single coalesced trailing finalize lands.
         await asyncio.sleep(0.6)
         assert len(queue.jobs(CollectionFinalizeJob)) == 2
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_finalize_cancels_armed_trailing(tmp_path: Path) -> None:
+    """A reconcile's immediate finalize cancels a trailing finalize already armed
+    for the same database — exactly one finalize, not a redundant double.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue, optimize_interval=0.3)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()  # initial scan finalizes + stamps the throttle clock
+        queue.submitted.clear()
+        # A delta inside the interval coalesces → arms a trailing finalize (~+0.3s).
+        source.emit(root, _fs(_write(root, "a.md")))
+        await asyncio.sleep(0.1)
+        assert queue.jobs(CollectionFinalizeJob) == []  # deferred, not yet fired
+        # The reconcile finalizes "col" immediately and must cancel that trailing.
+        await _reconciler(loop).run_once()
+        fin_after = len(queue.jobs(CollectionFinalizeJob))
+        assert fin_after >= 1  # the reconcile finalized
+        # Past the trailing's original due time: no extra (double) finalize appears.
+        await asyncio.sleep(0.35)
+        assert len(queue.jobs(CollectionFinalizeJob)) == fin_after
         await loop.stop()
 
     asyncio.run(_run())

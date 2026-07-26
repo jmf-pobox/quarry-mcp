@@ -145,3 +145,30 @@ def test_immediate_path_cancels_pending_timer_no_double_fire() -> None:
         assert calls == 2
 
     asyncio.run(_run())
+
+
+def test_mark_finalized_cancels_pending_trailing_and_stamps() -> None:
+    """An out-of-band immediate finalize (reconcile/sync) must cancel an armed
+    trailing timer for the same db, so the two don't both run.
+    """
+
+    async def _run() -> None:
+        calls = 0
+
+        def submit() -> None:
+            nonlocal calls
+            calls += 1
+
+        loop = asyncio.get_running_loop()
+        throttle = FinalizeThrottle(loop, 0.05)
+        throttle.request("db", submit)  # fires now (calls=1), stamps _last
+        throttle.request("db", submit)  # within interval → arms a trailing timer
+        pending = throttle._timers["db"]
+        # A reconcile/sync finalizes "db" directly, then registers it here.
+        throttle.mark_finalized("db")
+        assert pending.cancelled()  # armed trailing timer de-queued
+        assert "db" not in throttle._timers
+        await asyncio.sleep(_INTERVAL * 2)  # the trailing would have fired by now
+        assert calls == 1  # only the original fire; no redundant trailing finalize
+
+    asyncio.run(_run())
