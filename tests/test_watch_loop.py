@@ -11,9 +11,11 @@ would hand to the real DES-042 queue.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
+from unittest.mock import patch
 
 from quarry.config import Settings
 from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
@@ -1024,6 +1026,222 @@ def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
         _reconciler(loop).defer_purge(gone)
         await _reconciler(loop).run_once()  # drain re-submits, but the full queue sheds
         assert gone in _reconciler(loop)._pending_purges  # survives the next cycle
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def _seed_registration(settings: Settings, directory: str, collection: str) -> None:
+    """Insert a registry row directly, bypassing register_directory's disk check.
+
+    A temp root like ``/private/tmp`` does not exist on the Linux CI runner, so
+    ``register_directory`` would raise ``FileNotFoundError`` before the guard is
+    ever exercised.  The guard must refuse a temp root regardless of whether the
+    OS directory exists, so the row is seeded without the existence validation —
+    modelling a stale registry entry the daemon meets on restart.
+    """
+    SyncRegistry(settings.registry_path).close()  # ensure the schema exists
+    conn = sqlite3.connect(settings.registry_path)
+    try:
+        conn.execute(
+            "INSERT INTO directories (directory, collection, registered_at) "
+            "VALUES (?, ?, ?)",
+            (directory, collection, "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _build_with_root(
+    tmp_path: Path, *, queue: _RecordingQueue, root: Path, collection: str
+) -> DaemonContext:
+    """Build a fake daemon context with *root* pre-registered under *collection*.
+
+    Models an ENTRY ALREADY IN THE REGISTRY (the operator's stale ``/private/tmp``)
+    so a restart's ``start()`` must refuse to watch it — not merely reject a new
+    registration.  The row is seeded directly so the test never depends on the
+    temp directory existing on the runner (portable across macOS and Linux CI).
+    """
+    data = tmp_path / "data"
+    (data / "testdb").mkdir(parents=True)
+    settings = Settings(
+        quarry_root=data,
+        lancedb_path=data / "testdb" / "lancedb",
+        registry_path=data / "testdb" / "registry.db",
+        watch_enabled=True,
+        watch_debounce_s=0.03,
+        watch_max_delay_s=0.3,
+        watch_bulk_threshold=5,
+        watch_safety_scan_s=0.0,
+    )
+    _seed_registration(settings, str(root), collection)
+    ctx = SimpleNamespace(
+        settings=settings,
+        ingest_queue=queue,
+        tasks=TaskRegistry(),
+        database=_FakeDatabase(),
+        database_name="testdb",
+    )
+    return cast("DaemonContext", ctx)
+
+
+def test_registered_system_temp_root_is_never_watched_on_restart(
+    tmp_path: Path,
+) -> None:
+    """A registry entry for /private/tmp is refused at start (restart-safe).
+
+    The operator's real registry holds ``/private/tmp``; on restart the daemon
+    must refuse to WATCH it, or it OCR-storms everything the OS drops in temp.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 0  # the OS-temp tree is never observed
+        assert queue.submitted == []  # no scan, no finalize for a temp root
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_registered_repo_scratch_root_is_never_watched(tmp_path: Path) -> None:
+    """A registry entry for a repo's own ``.tmp`` scratch is refused at start."""
+
+    async def _run() -> None:
+        (tmp_path / ".git").mkdir()  # mark tmp_path as a git repo root
+        scratch_root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
+        scratch_root.mkdir(parents=True)
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=scratch_root.resolve(), collection="scratch"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 0
+        assert queue.submitted == []
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_burst_on_registered_temp_root_produces_no_work(tmp_path: Path) -> None:
+    """A churn storm on a refused temp root fans out to zero queue jobs.
+
+    Bounded work for a refused tree is zero: the observer never watches it, so a
+    fixture burst cannot fan out to a full OCR+embed per file per event.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        root = Path("/private/tmp")
+        ctx = _build_with_root(tmp_path, queue=queue, root=root, collection="systmp")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        for i in range(20):  # a churn storm on the refused tree
+            source.emit(root, _fs(root / f"scan{i}.png"))
+        await asyncio.sleep(0.15)
+        assert queue.submitted == []  # bounded == zero: nothing enqueued
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_skips_a_registered_temp_root(tmp_path: Path) -> None:
+    """The periodic reconcile never enumerates or re-scans a temp root."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        assert queue.submitted == []  # the temp root is not enumerated for scan
+        assert source.watch_count == 0
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_request_scan_skips_a_registered_temp_root(tmp_path: Path) -> None:
+    """An on-demand `quarry sync` (request_scan) never scans a registered temp root.
+
+    request_scan submits per-registration scans directly, NOT through
+    _begin_collection, so the guard must also fire in _submit_all_scans — else a
+    manual sync would OCR-storm a stale /private/tmp entry the live watch refuses.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        umbrella = ctx.tasks.begin("sync")
+        await loop.request_scan(umbrella)
+        assert queue.submitted == []  # refused root → zero scan/finalize jobs
+        assert umbrella.status == "completed"  # no children → truthful success
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_request_scan_skips_an_unresolvable_root(tmp_path: Path) -> None:
+    """A registration whose resolve() raises (ELOOP) is skipped, not fatal.
+
+    ``root.resolve()`` can raise (symlink loop, permission).  An on-demand sync
+    must skip that one bad registration and scan the good ones, never crash the
+    whole request_scan (Class-2 exception boundary).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        good = tmp_path / "good"
+        bad = tmp_path / "bad"
+        good.mkdir()
+        bad.mkdir()
+        ctx = _build_with_root(tmp_path, queue=queue, root=good, collection="good")
+        _seed_registration(ctx.settings, str(bad), "bad")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()  # bad resolves fine here; the loop starts cleanly
+        queue.submitted.clear()
+
+        real_resolve = Path.resolve
+
+        def _resolve(self: Path, *, strict: bool = False) -> Path:
+            if self == bad:
+                msg = "ELOOP: too many symbolic links"
+                raise OSError(msg)
+            return real_resolve(self, strict=strict)
+
+        umbrella = ctx.tasks.begin("sync")
+        with patch.object(Path, "resolve", _resolve):
+            await loop.request_scan(umbrella)  # must NOT raise
+
+        scanned = {
+            job.collection
+            for _key, job in queue.submitted
+            if isinstance(job, CollectionSyncJob)
+        }
+        assert "good" in scanned  # the resolvable root is scanned
+        assert "bad" not in scanned  # the ELOOP root is skipped, not fatal
+        assert umbrella.status == "completed"
         await loop.stop()
 
     asyncio.run(_run())

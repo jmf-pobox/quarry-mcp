@@ -22,6 +22,7 @@ from quarry.db.storage import get_db
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
+from quarry.scratch_paths import ScratchGuard
 from quarry.sync import compute_sync_plan, sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_file_store import FileRecord
@@ -485,12 +486,54 @@ class TestIsIndexable:
         assert discovery.is_deletable(root / "gone.txt", exts) is False
         assert discovery.is_deletable(root / ".hidden.md", exts) is False
 
+    def test_skips_htmlcov_by_default(self, tmp_path: Path):
+        """A non-dot build/coverage dir (htmlcov) is pruned even without gitignore."""
+        cov = tmp_path / "htmlcov"
+        cov.mkdir()
+        (cov / "index.txt").touch()
+        (tmp_path / "keep.txt").touch()
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
+        assert [p.name for p in result] == ["keep.txt"]
+
+    def test_htmlcov_file_is_not_indexable(self, tmp_path: Path):
+        """A live edit inside htmlcov/ is dropped, matching the empty scan."""
+        cov = tmp_path / "htmlcov"
+        cov.mkdir()
+        (cov / "report.md").write_text("coverage")
+        discovery = FileDiscovery(tmp_path)
+        exts = frozenset({".md"})
+        assert discovery.is_indexable(cov / "report.md", exts) is False
+        assert discovery.is_deletable(cov / "report.md", exts) is False
+
+    def test_repo_scratch_root_discovers_nothing(self, tmp_path: Path):
+        """A root that IS a repo's own ``.tmp`` scratch is never walked.
+
+        The runaway bug: the daemon watched a temp root and OCR-stormed the
+        fixtures inside it.  ``<repo>/.tmp/...`` is refused up front, so both the
+        bulk scan and the live path treat it as empty.
+        """
+        (tmp_path / ".git").mkdir()  # mark tmp_path as a git repo root
+        root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
+        root.mkdir(parents=True)
+        (root / "scan.txt").write_text("fixture body")
+        discovery = FileDiscovery(root)
+        assert discovery.discover(frozenset({".txt"})) == []
+        assert discovery.is_indexable(root / "scan.txt", frozenset({".txt"})) is False
+
 
 class TestLoadIgnoreSpec:
-    def test_default_patterns_present(self):
-        assert "venv/" in _DEFAULT_IGNORE_PATTERNS
-        assert "node_modules/" in _DEFAULT_IGNORE_PATTERNS
-        assert "__pycache__/" in _DEFAULT_IGNORE_PATTERNS
+    def test_default_patterns_are_globs_not_dir_names(self):
+        # Glob patterns stay in the pathspec defaults; scratch/VCS/cache DIR
+        # names moved to ScratchGuard (pruned by name in the walk), so they are
+        # no longer duplicated here.
+        assert "*.pyc" in _DEFAULT_IGNORE_PATTERNS
+        assert ".DS_Store" in _DEFAULT_IGNORE_PATTERNS
+        assert "node_modules/" not in _DEFAULT_IGNORE_PATTERNS
+        assert "venv/" not in _DEFAULT_IGNORE_PATTERNS
+        guard = ScratchGuard()
+        assert guard.is_skip_name("venv")
+        assert guard.is_skip_name("node_modules")
+        assert guard.is_skip_name("__pycache__")
 
     def test_loads_gitignore(self, tmp_path: Path):
         (tmp_path / ".gitignore").write_text("*.log\noutput/\n")
@@ -506,8 +549,8 @@ class TestLoadIgnoreSpec:
 
     def test_no_ignore_files_uses_defaults(self, tmp_path: Path):
         spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("venv/")
-        assert spec.match_file("node_modules/")
+        assert spec.match_file("module.pyc")
+        assert spec.match_file(".DS_Store")
         assert not spec.match_file("src/app.py")
 
     def test_comments_and_blanks_ignored(self, tmp_path: Path):

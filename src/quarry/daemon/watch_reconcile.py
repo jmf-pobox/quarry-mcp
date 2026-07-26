@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.finalize_job import CollectionPurgeJob
 from quarry.daemon.route_key import RouteKey
+from quarry.scratch_paths import ScratchGuard
 from quarry.sync_registry import SyncRegistry
 
 if TYPE_CHECKING:
@@ -52,15 +53,17 @@ class ReconcilerDeps:
 class WatchReconciler:
     """Reconcile the roster on a timer and back-stop orphaned collection chunks."""
 
-    __slots__ = ("_deps", "_pending_purges")
+    __slots__ = ("_deps", "_guard", "_pending_purges")
 
     _deps: ReconcilerDeps
     _pending_purges: set[RouteKey]
+    _guard: ScratchGuard
 
     def __new__(cls, deps: ReconcilerDeps) -> Self:
         self = super().__new__(cls)
         self._deps = deps
         self._pending_purges = set()
+        self._guard = ScratchGuard()
         return self
 
     def defer_purge(self, key: RouteKey) -> None:
@@ -203,12 +206,29 @@ class WatchReconciler:
             for name in roster.roster_names():
                 roster.ensure_database(name)
                 for collection, root in roster.registrations(name):
+                    # A temp/scratch root already in the registry (e.g. a stale
+                    # /private/tmp entry) is refused here too, so a restart never
+                    # enumerates or re-scans it and a vanishing temp tree cannot
+                    # thrash the cycle.  Same predicate the watch gate uses.
+                    # Resolve once, per-root fail-closed: an unresolvable root
+                    # (ELOOP) skips this one registration, never the whole cycle.
+                    try:
+                        resolved = root.resolve()
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        logger.warning(
+                            "watch: reconcile skipping unresolvable root %s: %s",
+                            root,
+                            exc,
+                        )
+                        continue
+                    if self._guard.refuses_root(resolved):
+                        continue
                     key = RouteKey(name, collection)
                     current.add(key)
                     if key not in watched:
                         self._deps.begin(name, collection, root)
                     else:
-                        submitter.submit_scan(key, root.resolve())
+                        submitter.submit_scan(key, resolved)
         except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
             # error may escape and kill the safety loop; fail closed and self-heal.
             # exc_info: a production enumeration failure needs the traceback.
