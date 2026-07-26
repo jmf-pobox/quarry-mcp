@@ -510,7 +510,7 @@ curl --cacert ~/.punt-labs/quarry/tls/ca.crt https://localhost:8420/health
 
 - Phase 1: all 14 MCP tool calls succeed, BM25 keyword match works
   (1.4), cleanup leaves no smoke-test data
-- Phase 2: all 17 CLI checks succeed, BM25 keyword match works (2.5),
+- Phase 2: all 18 CLI checks succeed, BM25 keyword match works (2.5),
   cleanup leaves no smoke-test data, `list databases` completes in <3s
 - Phase 3: all 7 enable/disable checks succeed, registrations created
   and removed correctly, config.md managed, doctor reports enable status
@@ -582,6 +582,7 @@ Phase 2: CLI (1:1 mirror of Phase 1 + CLI-only checks)
   2.15 use database              PASS / FAIL / SKIP
   2.16 version                   PASS / FAIL  <version string>
   2.17 remote list --ping        PASS / FAIL / SKIP  <status>
+  2.18 capture PII redaction     PASS / FAIL
 
 Phase 3: Enable/Disable
   3.1  enable                    PASS / FAIL
