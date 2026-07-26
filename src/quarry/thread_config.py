@@ -5,13 +5,16 @@ ncpu rayon + ncpu ONNX threads — three on 8 cores reach load ~148 and starve t
 query path.  ``ThreadConfig`` caps the budget per hardware/provider: GPU offloads
 GEMMs to CUDA (1 feeder thread), CPU caps at 2 (DES-027 arena).  See DES-032.
 
-LanceDB is the second, larger offender.  Its Rust core builds a tokio compute
-runtime sized to ``num_cpus`` and floods every core during ``optimize()`` /
-``create_fts_index`` — the daemon's watch loop fires these on ordinary file
-churn, spiking to 300-400% CPU.  ``LANCE_CPU_THREADS`` is a hard ceiling on that
-compute pool: lance builds the runtime with exactly that many workers and cannot
-exceed it regardless of churn or core count.  Two is the floor — one stalls
-lance's runtime (an internal operation needs a second worker to make progress).
+LanceDB is the second, larger offender.  Its Rust core sizes its compute and
+tokio pools to ``num_cpus`` and floods every core during ``optimize()`` /
+``create_fts_index`` (native FTS, not Tantivy) — the daemon's watch loop fires
+these on ordinary file churn, spiking to 300-400% CPU.  ``LANCE_CPU_THREADS``
+governs those pools: their sizes track the cap, not the core count (measured
+lance-cpu/tokio 6/33 uncapped, 3/14 at cap 2 on 8 cores), so a small cap bounds
+lance no matter how many cores are present.  The cap is applied fail-closed — an
+inherited value is honored only if it is a tighter (lower) bound; a higher one is
+clamped down (see ``_cap_env``), so a stale ``LANCE_CPU_THREADS=32`` export cannot
+lift the ceiling.  Two is the floor — one stalls lance's runtime.
 """
 
 from __future__ import annotations
@@ -75,17 +78,17 @@ class ThreadConfig:
         sess_options.inter_op_num_threads = 1
 
     def apply_env_limits(self) -> Self:
-        """Cap the rayon/OMP and LanceDB thread pools for this whole process.
+        """Clamp the rayon/OMP and LanceDB thread pools for this whole process.
 
-        Idempotent (``setdefault``), so a redundant call from the embedding
-        backend after the daemon boot call is a no-op.  Must run before the first
-        ``lancedb.connect`` — lance reads ``LANCE_CPU_THREADS`` once when it
-        builds its compute runtime, so a later set is ignored.
+        Idempotent, so a redundant call from the embedding backend after the
+        daemon boot call is a no-op.  Must run before the first ``lancedb.connect``
+        — lance reads ``LANCE_CPU_THREADS`` once when it builds its compute
+        runtime, so a later set is ignored.
         """
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         omp = self._cap_env("OMP_NUM_THREADS", self._omp_threads)
-        # LanceDB's tokio compute pool (compaction, FTS rebuild) — the hard
-        # ceiling that stops the daemon seizing every core on watch-loop churn.
+        # LanceDB's tokio compute pool (compaction, FTS rebuild) — the ceiling
+        # that stops the daemon seizing every core on watch-loop churn.
         self._cap_env("LANCE_CPU_THREADS", self._lance_threads)
         self._cap_env("LANCE_IO_THREADS", self._lance_threads)
         logger.info(
@@ -99,19 +102,24 @@ class ThreadConfig:
 
     @staticmethod
     def _cap_env(name: str, cap: int) -> str:
-        """Set ``name`` to ``cap`` unless preset; return the effective value.
+        """Clamp ``name`` to at most ``cap`` fail-closed; return the effective value.
 
-        Warns when an operator preset diverges from the cap — the DES-032
-        oversubscription mitigation is then only as tight as the preset.
+        ``setdefault`` yields upward: a stale export or dev-shell ``OMP_NUM_THREADS=32``
+        would survive as-is and the daemon would run at 32, defeating the ceiling.
+        Clamp instead — honor a LOWER operator value (an intentional tightening),
+        overwrite a HIGHER one down to the cap, and warn only on that downward
+        clamp.  A non-numeric preset is replaced by the cap (fail closed).
         """
-        os.environ.setdefault(name, str(cap))
-        value = os.environ[name]
-        if value != str(cap):
+        preset = os.environ.get(name)
+        if preset is not None and preset.isdigit() and 1 <= int(preset) <= cap:
+            return preset  # operator asked for a tighter bound; honor it
+        os.environ[name] = str(cap)
+        if preset is not None and preset != str(cap):
             logger.warning(
-                "%s preset to %s, not the cap %d; DES-032 oversubscription "
-                "mitigation may be defeated",
+                "%s preset to %r not honored (exceeds the DES-032 cap or is "
+                "invalid); clamping to %d",
                 name,
-                value,
+                preset,
                 cap,
             )
-        return value
+        return str(cap)

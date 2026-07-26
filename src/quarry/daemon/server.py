@@ -131,12 +131,6 @@ class DaemonServer:
         the caller (the ``quarryd`` entry point) owns option parsing and this
         method stays a two-argument seam rather than a wide parameter list.
         """
-        # Cap LanceDB's compute pool (and OMP) BEFORE the first lancedb.connect
-        # in warm(): lance reads LANCE_CPU_THREADS once when it builds its tokio
-        # compute runtime, so this is the daemon's structural CPU ceiling (DES-032).
-        # is_gpu=False — the lance/OMP caps are provider-independent; the embedding
-        # backend builds its own provider-specific ONNX config.
-        ThreadConfig(is_gpu=False).apply_env_limits()
         cls(settings, config).run()
 
     def run(self) -> None:
@@ -153,6 +147,12 @@ class DaemonServer:
                 api_key=self._config.api_key,
                 cors_origins=self._config.cors_origins,
             )
+            # Clamp LanceDB's compute pool (and OMP) immediately before warm()'s
+            # first lancedb.connect — adjacent to the connect it guards, so no
+            # alternate caller of run() can connect uncapped.  lance reads
+            # LANCE_CPU_THREADS once when it builds its runtime, so a later set is
+            # ignored; is_gpu=False since the lance/OMP caps are provider-independent.
+            ThreadConfig(is_gpu=False).apply_env_limits()
             ctx.warm()  # Build cached resources single-threaded before serving.
 
             app = build_app(ctx, lifespan=self._lifespan)

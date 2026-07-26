@@ -254,25 +254,37 @@ class TestCorsOrigins:
         )
 
 
-class TestServeAppliesThreadCaps:
-    """serve() must cap LanceDB threads BEFORE run() connects (the CPU ceiling)."""
+class TestRunClampsThreadsBeforeWarm:
+    """run() must clamp LanceDB threads immediately before warm()'s connect."""
 
-    def test_serve_sets_lance_cpu_cap_before_run(
+    def test_run_clamps_stale_high_lance_cpu_before_warm(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from quarry.config import Settings
+        from quarry.daemon.context import DaemonContext
         from quarry.daemon.server import DaemonServer, ServeConfig
 
         monkeypatch.setattr("os.cpu_count", lambda: 8)
-        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
-        # run() is where the first lancedb.connect happens; capture the env as it
-        # stood when run() was entered, proving the cap was set beforehand.
+        # A stale high export is exactly what the daemon must not inherit.
+        monkeypatch.setenv("LANCE_CPU_THREADS", "32")
+
         seen: dict[str, str | None] = {}
 
-        def fake_run(self: DaemonServer) -> None:
-            seen["lance_cpu"] = os.environ.get("LANCE_CPU_THREADS")
+        class _StopBeforeServeError(Exception):
+            pass
 
-        monkeypatch.setattr(DaemonServer, "run", fake_run)
-        config = ServeConfig(api_key="k")
-        DaemonServer.serve(Settings(), config)
+        def fake_warm(self: DaemonContext) -> None:
+            # warm() is where the first lancedb.connect happens; capture the env
+            # as it stands here, then abort before uvicorn binds.
+            seen["lance_cpu"] = os.environ.get("LANCE_CPU_THREADS")
+            raise _StopBeforeServeError
+
+        monkeypatch.setattr(DaemonServer, "_acquire_run_dir_lock", lambda self: None)
+        monkeypatch.setattr(DaemonServer, "_release_run_dir_lock", lambda self: None)
+        monkeypatch.setattr(DaemonContext, "warm", fake_warm)
+
+        server = DaemonServer(Settings(), ServeConfig(api_key="k"))
+        with pytest.raises(_StopBeforeServeError):
+            server.run()
+        # Clamped down from the inherited 32 to the cap, before warm connected.
         assert seen["lance_cpu"] == "2"
