@@ -62,6 +62,9 @@ htmlcov/
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
 
+# Clean-machine install harness — staged working-tree wheel (built at run time)
+tests/harness/.stage/
+
 # Plugin runtime state (tts, biff)
 .tts/
 .biff.local

@@ -1,4 +1,4 @@
-.PHONY: help test test-slow lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
+.PHONY: help test test-slow lint lint-docs type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -104,6 +104,9 @@ build: ## Build wheel and sdist
 
 test-wheel: build ## Test the built wheel in an isolated venv on port 8422
 	bash scripts/test-wheel.sh
+
+test-install-clean: ## Clean-machine Docker gate: run install.sh from scratch, assert the CLI-only path
+	bash tests/harness/build-and-run.sh
 
 clean: ## Remove build artifacts
 	rm -rf dist/ .tmp/

@@ -1,0 +1,16 @@
+# Build context for tests/harness/Dockerfile. The image copies only install.sh,
+# tests/harness/guide.sh, and the staged wheel (tests/harness/.stage/), so deny
+# everything and re-include just those paths — the repo carries multi-hundred-MB
+# dirs (.git, .venv, .tmp, htmlcov) that would otherwise stream to the daemon on
+# every build. Nested files need each parent dir re-included, then its other
+# contents re-excluded (Docker .dockerignore precedence rules).
+*
+!install.sh
+!tests
+tests/*
+!tests/harness
+tests/harness/*
+!tests/harness/guide.sh
+!tests/harness/.stage
+tests/harness/.stage/*
+!tests/harness/.stage/*.whl
