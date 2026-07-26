@@ -73,10 +73,10 @@ Download the installer:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh -o install.sh
 ```
 
-Check its digest:
+Check its digest (`shasum -a 256 install.sh` on macOS):
 
 ```bash
-shasum -a 256 install.sh
+sha256sum install.sh
 ```
 
 Read it:
