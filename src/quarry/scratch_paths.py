@@ -100,11 +100,24 @@ class ScratchGuard:
         return self
 
     def refuses_root(self, root: Path) -> bool:
-        """Return whether *root* is an OS-temp or repo-scratch dir, never watched."""
-        if any(root.is_relative_to(temp) for temp in self._temp_roots):
+        """Return whether *root* is an OS-temp or repo-scratch dir, never watched.
+
+        The OS-temp comparison casefolds both sides: macOS's case-insensitive
+        APFS resolves ``/private/TMP`` to the same directory as ``/private/tmp``
+        without normalizing case, so a case variant would otherwise slip the
+        guard and reopen the OCR storm.  The ``<gitroot>/.tmp`` anchor stays
+        case-exact — repo scratch is spelled ``.tmp`` by design.
+        """
+        folded = self._casefold(root)
+        if any(folded.is_relative_to(self._casefold(t)) for t in self._temp_roots):
             return True
         scratch = self._repo_scratch(root)
         return scratch is not None and root.is_relative_to(scratch)
+
+    @staticmethod
+    def _casefold(path: Path) -> Path:
+        """Return *path* with every component casefolded (APFS case-insensitivity)."""
+        return Path(*(part.casefold() for part in path.parts))
 
     def is_skip_name(self, name: str) -> bool:
         """Return whether one path component names a scratch/VCS/cache subdirectory."""

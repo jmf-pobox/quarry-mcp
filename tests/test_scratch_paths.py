@@ -18,6 +18,11 @@ from quarry.scratch_paths import ScratchGuard
         Path("/private/tmp/scan-dir"),
         Path("/var/folders/ab/xxxx/T/quarry"),
         Path("/private/var/folders/ab/xxxx/T"),
+        # Case variants — case-insensitive APFS resolves these to the same dirs,
+        # so the guard must casefold both sides (djb).
+        Path("/private/TMP"),
+        Path("/private/Tmp/scan-dir"),
+        Path("/var/Folders/ab/xxxx/T"),
     ],
 )
 def test_os_temp_roots_are_refused(root: Path) -> None:
