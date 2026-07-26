@@ -227,7 +227,8 @@ class WatchLoop:
         Applies the temp/scratch guard explicitly: ``request_scan`` (an on-demand
         ``quarry sync``) reaches the queue here, NOT through ``_begin_collection``,
         so a registered ``/private/tmp`` would otherwise be scanned on demand even
-        though the live watch refuses it.  Refused roots are skipped here too.
+        though the live watch refuses it.  Refused (and unresolvable) roots are
+        skipped here too, via the same fail-closed helper.
         """
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:  # start() never ran
@@ -236,10 +237,10 @@ class WatchLoop:
         roster.ensure_database(name)
         children: list[TaskState] = []
         for collection, root in roster.registrations(name):
-            if self._guard.refuses_root(root.resolve()):
-                logger.info("watch: skipping scan of temp/scratch root %s", root)
+            resolved = self._resolve_watchable(root, collection)
+            if resolved is None:
                 continue
-            children.extend(submitter.submit_scan(RouteKey(name, collection), root))
+            children.extend(submitter.submit_scan(RouteKey(name, collection), resolved))
         return children
 
     # -- internals ----------------------------------------------------------
@@ -258,19 +259,37 @@ class WatchLoop:
         for collection, root in registrations:
             self._begin_collection(name, collection, root)
 
-    def _begin_collection(self, database: str, collection: str, root: Path) -> None:
-        """Schedule *collection*'s tree and submit its initial scan + finalize."""
-        if self._roster is None or self._submitter is None:
-            return
-        resolved = root.resolve()
-        # A system-temp root (``/private/tmp`` was in the operator's registry) is
-        # never watched or scanned: watching it OCR-storms everything the OS drops
-        # in temp and thrashes the reconcile.  One predicate, shared with the
-        # indexer (scratch *below* a real root is pruned by the discovery walk).
+    def _resolve_watchable(self, root: Path, collection: str) -> Path | None:
+        """Resolve *root* for watching, or return ``None`` to skip it (fail closed).
+
+        ``None`` is a control sentinel meaning "do not watch this root": either
+        the resolved path is a temp/scratch tree (``/private/tmp`` was in the
+        operator's registry; watching it OCR-storms the OS temp dir), OR
+        ``resolve()`` raised (ELOOP symlink cycle, permission) — a root the
+        daemon cannot resolve is not one it should walk.  Both fail closed so a
+        single bad registration skips-and-continues, never aborting an on-demand
+        sync or the roster start (Class-2 exception boundary).
+        """
+        try:
+            resolved = root.resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "watch: skipping unresolvable root %s (%s): %s", root, collection, exc
+            )
+            return None
         if self._guard.refuses_root(resolved):
             logger.info(
                 "watch: skipping temp/scratch root %s (%s)", resolved, collection
             )
+            return None
+        return resolved
+
+    def _begin_collection(self, database: str, collection: str, root: Path) -> None:
+        """Schedule *collection*'s tree and submit its initial scan + finalize."""
+        if self._roster is None or self._submitter is None:
+            return
+        resolved = self._resolve_watchable(root, collection)
+        if resolved is None:
             return
         key = RouteKey(database, collection)
         # A re-registration makes the collection live again — cancel any stale

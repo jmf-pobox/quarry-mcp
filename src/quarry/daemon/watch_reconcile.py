@@ -210,14 +210,25 @@ class WatchReconciler:
                     # /private/tmp entry) is refused here too, so a restart never
                     # enumerates or re-scans it and a vanishing temp tree cannot
                     # thrash the cycle.  Same predicate the watch gate uses.
-                    if self._guard.refuses_root(root.resolve()):
+                    # Resolve once, per-root fail-closed: an unresolvable root
+                    # (ELOOP) skips this one registration, never the whole cycle.
+                    try:
+                        resolved = root.resolve()
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        logger.warning(
+                            "watch: reconcile skipping unresolvable root %s: %s",
+                            root,
+                            exc,
+                        )
+                        continue
+                    if self._guard.refuses_root(resolved):
                         continue
                     key = RouteKey(name, collection)
                     current.add(key)
                     if key not in watched:
                         self._deps.begin(name, collection, root)
                     else:
-                        submitter.submit_scan(key, root.resolve())
+                        submitter.submit_scan(key, resolved)
         except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
             # error may escape and kill the safety loop; fail closed and self-heal.
             # exc_info: a production enumeration failure needs the traceback.

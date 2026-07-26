@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, cast, final
+from unittest.mock import patch
 
 from quarry.config import Settings
 from quarry.daemon.finalize_job import CollectionFinalizeJob, CollectionPurgeJob
@@ -1195,6 +1196,52 @@ def test_request_scan_skips_a_registered_temp_root(tmp_path: Path) -> None:
         await loop.request_scan(umbrella)
         assert queue.submitted == []  # refused root → zero scan/finalize jobs
         assert umbrella.status == "completed"  # no children → truthful success
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_request_scan_skips_an_unresolvable_root(tmp_path: Path) -> None:
+    """A registration whose resolve() raises (ELOOP) is skipped, not fatal.
+
+    ``root.resolve()`` can raise (symlink loop, permission).  An on-demand sync
+    must skip that one bad registration and scan the good ones, never crash the
+    whole request_scan (Class-2 exception boundary).
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        good = tmp_path / "good"
+        bad = tmp_path / "bad"
+        good.mkdir()
+        bad.mkdir()
+        ctx = _build_with_root(tmp_path, queue=queue, root=good, collection="good")
+        _seed_registration(ctx.settings, str(bad), "bad")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()  # bad resolves fine here; the loop starts cleanly
+        queue.submitted.clear()
+
+        real_resolve = Path.resolve
+
+        def _resolve(self: Path, *, strict: bool = False) -> Path:
+            if self == bad:
+                msg = "ELOOP: too many symbolic links"
+                raise OSError(msg)
+            return real_resolve(self, strict=strict)
+
+        umbrella = ctx.tasks.begin("sync")
+        with patch.object(Path, "resolve", _resolve):
+            await loop.request_scan(umbrella)  # must NOT raise
+
+        scanned = {
+            job.collection
+            for _key, job in queue.submitted
+            if isinstance(job, CollectionSyncJob)
+        }
+        assert "good" in scanned  # the resolvable root is scanned
+        assert "bad" not in scanned  # the ELOOP root is skipped, not fatal
+        assert umbrella.status == "completed"
         await loop.stop()
 
     asyncio.run(_run())
