@@ -53,7 +53,7 @@ bounded cosine.
 | Layer | Quarry today |
 |---|---|
 | Dense | `snowflake-arctic-embed-m-v1.5`, 768-dim, **512-token max, mean-pooled**, ONNX int8 on CPU by default; FP16 on CUDA when detected (DES-016) |
-| Sparse | BM25 full-text via Tantivy |
+| Sparse | BM25 full-text via LanceDB's native inverted index (`use_tantivy=False`) |
 | Fusion | Reciprocal Rank Fusion, `_RRF_K = 60` |
 | Store | LanceDB, one `chunks` table |
 | Results | per-chunk, no document-level dedup |

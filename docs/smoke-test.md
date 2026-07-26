@@ -318,7 +318,8 @@ quarry find "JSON encoder decoder" --collection smoke-test
 quarry delete cli-smoke-test.md --collection smoke-test
 ```
 
-**Verify:** Reports chunks deleted.
+**Verify:** Reports a task acceptance (`task_id` + `status`) — delete is
+fire-and-forget through the daemon (DES-001), not a synchronous chunk count.
 
 ### 2.14 Delete collection (cleanup)
 
@@ -326,7 +327,7 @@ quarry delete cli-smoke-test.md --collection smoke-test
 quarry delete smoke-test --type collection
 ```
 
-**Verify:** Reports chunks deleted. Confirm with
+**Verify:** Reports a task acceptance (fire-and-forget). Confirm with
 `quarry list collections` — `smoke-test` should be gone.
 
 ### 2.15 Use database
@@ -473,8 +474,8 @@ launchctl list | grep quarry      # macOS
 **Verify:**
 
 - Service is active/running
-- ExecStart points to `~/.local/share/uv/tools/punt-quarry/bin/quarry`
-  (NOT `.venv/bin/python3`)
+- ExecStart points to the `quarryd` engine binary `~/.local/bin/quarryd`
+  (NOT `quarry serve`, which is retired, and NOT `.venv/bin/python3`)
 - Includes `--host 0.0.0.0` if installed with `--network`
 - Includes `--tls`
 
@@ -525,8 +526,9 @@ curl --cacert ~/.punt-labs/quarry/tls/ca.crt https://localhost:8420/health
 - `doctor` shows "FTS index: stale" — need `quarry sync` to trigger
   rebuild
 - `list databases` takes >5 seconds — still using rglob instead of du
-- Service ExecStart contains `.venv/bin/python3` — dev venv baked into
-  unit, will crash-loop on next restart
+- Service ExecStart contains `.venv/bin/python3` or `quarry serve` — a dev
+  venv or the retired subcommand baked into the unit; it must exec `quarryd`,
+  or it will crash-loop on next restart
 - ONNX provider shows CPU on a GPU host — onnxruntime-gpu not installed,
   check install.sh GPU swap
 - `quarry enable` crashes on child of registered parent — walk-up

@@ -59,17 +59,21 @@ Quarry is a local semantic search engine.  It ingests documents in
 LanceDB, and serves semantic search to AI agents (Claude Code, Claude
 Desktop) and a macOS menu bar app.
 
-The system is \textbf{daemon-first} (DES-031 v2.2, ACCEPTED, in
-implementation): a single \texttt{quarryd} process holds the engine,
-and the CLI, MCP, and library are clients that reach it over a versioned
-wire protocol --- the daemon is the intermediary service layer.  As of
-v2-3a the engine runs only in \texttt{quarryd} (the \texttt{quarry
-serve} subcommand is retired), loopback requests are authenticated with a
-mode-0600 \texttt{serve.token}, and the CLI remote paths resolve that
-token through \texttt{ClientConfig}.  The full client tier
-(\texttt{QuarryClient}) and \texttt{quarry mcp}-as-client are in flight
-(v2-3/v2-4); until they land, the local-mode CLI and \texttt{quarry mcp}
-still load the engine in-process.
+The system is \textbf{daemon-first} (DES-031 v2.2, ACCEPTED and
+complete): a single \texttt{quarryd} process holds the engine, and the
+CLI, MCP, and library are pure clients that reach it over a versioned
+wire protocol --- the daemon is the intermediary service layer.  The
+engine runs only in \texttt{quarryd} (the \texttt{quarry serve}
+subcommand is retired); loopback requests are authenticated with a
+mode-0600 \texttt{serve.token} resolved through \texttt{ClientConfig};
+and every client surface --- the CLI, the \texttt{quarry mcp} stdio
+server, hooks, and the library --- reaches the daemon through one
+\texttt{QuarryClient} over the \texttt{/v1} REST contract.  No client
+process imports or constructs the engine; an import-linter contract and
+a runtime engine-sabotage test enforce that boundary structurally in CI
+(the epic \texttt{quarry-ma6f}/\texttt{quarry-ynvs} is closed).  The
+always-on watch/index loop that daemon-first exists to enable (DES-045)
+keeps every registered directory's index fresh with no human action.
 
 \subsection{Design Principles}
 
@@ -77,10 +81,10 @@ still load the engine in-process.
   \item \textbf{Daemon-first.}  The \texttt{quarryd} process is
     the single engine (embedding model, LanceDB, pipeline, sync
     registry); the CLI, MCP, and library are clients over a
-    versioned REST contract (DES-031 v2.2, ACCEPTED, in
-    implementation).  The prior \emph{library-first} principle --- the
-    core library did all work and the surfaces were thin wrappers ---
-    described the as-built state DES-031 v2 replaces.
+    versioned REST contract (DES-031 v2.2, ACCEPTED and complete).
+    The prior \emph{library-first} principle --- the core library did
+    all work and the surfaces were thin wrappers --- described the
+    as-built state DES-031 v2 replaced.
   \item \textbf{Local by default.}  Everything runs on the user's
     machine.  No API keys, no cloud accounts.  The embedding model
     downloads once ($\sim$120\,MB, int8 quantized).
@@ -104,27 +108,32 @@ still load the engine in-process.
 
 \textbf{Single machine (localhost TLS):}
 \begin{lstlisting}
-                    stdio                      wss:// (TLS)
-Claude Code <------------------> mcp-proxy <-------------------> quarryd
-             MCP JSON-RPC        (~5 MB Go)   pinned CA cert     (one daemon)
+                       stdio               HTTPS /v1 (TLS)
+Claude Code <------------------> quarry mcp <-------------------> quarryd
+             MCP JSON-RPC        (QuarryClient) pinned CA cert    (one daemon)
 \end{lstlisting}
 
 \textbf{Remote server (GPU):}
 \begin{lstlisting}
 Mac (client)                                   Linux (server)
-                    stdio                       wss:// (TLS)
-Claude Code <------------------> mcp-proxy <---------------------> quarryd
-             MCP JSON-RPC        (~5 MB Go)     pinned CA cert     (GPU daemon)
+                       stdio               HTTPS /v1 (TLS)
+Claude Code <------------------> quarry mcp <---------------------> quarryd
+             MCP JSON-RPC        (QuarryClient) pinned CA cert     (GPU daemon)
 
-CLI -----> HTTPS GET/POST ---------> quarryd
+CLI -----> HTTPS GET/POST /v1 -----> quarryd
            Bearer + pinned CA
 \end{lstlisting}
 
-Without the proxy, every Claude Code tab spawns a separate Python
-process, each loading the embedding model into $\sim$200\,MB of RAM.
-With it, startup is instant and state is shared across all sessions.
-Installed services use TLS with TOFU certificate pinning (DES-020)
---- even on localhost.
+Quarry's own Claude Code plugin runs \texttt{quarry mcp} directly (a
+FastMCP stdio server whose tools are \texttt{QuarryClient} calls over the
+daemon's \texttt{/v1} REST API); it no longer routes through
+\texttt{mcp-proxy} (DES-031 v2.2).  Because a single \texttt{quarryd}
+holds the resident engine, every Claude Code tab shares one warm model
+rather than spawning a Python process that loads $\sim$200\,MB of its
+own.  Installed services use TLS with TOFU certificate pinning (DES-020)
+--- even on localhost.  (\texttt{mcp-proxy} remains a supported,
+separately-installed tool for other consumers of the REST API; it is
+simply no longer on quarry's own MCP path.)
 
 When a remote server is configured (DES-021), the CLI routes
 all data commands over HTTPS to the server, with only authentication
@@ -144,9 +153,9 @@ remote call.
 \toprule
 \textbf{Surface} & \textbf{Transport} & \textbf{Purpose} \\
 \midrule
-CLI         & Direct library calls & Interactive use from terminal \\
-MCP server  & stdio or WebSocket   & Claude Code/Desktop tools \\
-HTTP server & REST JSON + WS \texttt{/mcp} & Menu bar app + mcp-proxy \\
+CLI         & \texttt{QuarryClient} over HTTPS \texttt{/v1} & Interactive use from terminal \\
+MCP server  & stdio (\texttt{quarry mcp}, a \texttt{QuarryClient}) & Claude Code/Desktop tools \\
+HTTP server & REST JSON \texttt{/v1} (FastAPI in \texttt{quarryd}) & CLI, MCP, menu bar app \\
 Plugin      & Hook shell commands  & Auto-register, auto-ingest, compaction safety \\
 \bottomrule
 \end{tabular}
@@ -436,35 +445,121 @@ and thus cannot race.
 \midrule
 Watch loop  & \modpath{daemon/watch\_loop.py}   & The \texttt{WatchLoop}:
               per-database watch sets + observer lifecycle, initial scan,
-              start/stop watching, \texttt{request\_scan}, FTS-rebuild
-              coalescer.  Producer into the queue. \\
+              start/stop watching, \texttt{request\_scan}.  Producer into
+              the queue. \\
+Reconcile   & \modpath{daemon/watch\_reconcile.py} & The
+              \texttt{watch\_safety\_scan\_s} roster reconcile: re-enumerate,
+              start watching new databases, re-submit shed scans, run the
+              orphan sweep (DES-045a). \\
+Submit      & \modpath{daemon/watch\_submit.py} & Turns a debounced delta
+              into per-file or bulk \texttt{IngestUnit}s and enqueues them. \\
 Roster      & \modpath{daemon/watch\_roster.py} & Per-database connections +
               watch sets enumerated from the on-disk roster (trust boundary:
               only roster DBs are opened). \\
+Scratch guard & \modpath{scratch\_paths.py}    & \texttt{ScratchGuard}: refuses
+              a temp/scratch/VCS root and skips gitignored paths at every
+              producer seam (DES-045b). \\
+Removal     & \modpath{daemon/registration\_lifecycle.py} & Deregister /
+              subsume / retain: marks a collection in
+              \texttt{pending\_purge\_collections} on non-keep-data removal;
+              records retained-collection identity (DES-045a). \\
+Purge       & \modpath{daemon/purge\_service.py} & The orphan sweep +
+              \texttt{CollectionPurgeJob}: deletes only marked collections
+              still holding chunks, re-checked under its own transaction. \\
+Route key   & \modpath{daemon/route\_key.py}   & \texttt{RouteKey =
+              (database, collection)} --- the queue routing key that extends
+              single-writer-per-table across the roster. \\
 Events      & \modpath{daemon/fs\_events.py}    & \texttt{FsEvent} +
               \texttt{FsEventSource} protocol seam (tests inject synthetic
               events). \\
 Watchdog    & \modpath{daemon/fs\_watchdog.py}  & The sole \texttt{watchdog}
               importer: FSEvents (macOS) / inotify (Linux) with a
-              \texttt{PollingObserver} fallback. \\
+              \texttt{PollingObserver} fallback (on \texttt{ENOSPC}). \\
 Debounce    & \modpath{daemon/debounce.py}      & Per-path debounce window +
               max-delay cap + bulk-threshold coalescing. \\
 Index jobs  & \modpath{daemon/index\_jobs.py}   & \texttt{FileIndexJob} /
               \texttt{DocumentDeleteJob} / \texttt{CollectionSyncJob}
               (\texttt{IngestUnit}s). \\
+Finalize    & \modpath{daemon/finalize\_job.py} & \texttt{CollectionFinalizeJob}
+              (\texttt{SyncFinalizer}): the lone post-quiescence
+              \texttt{optimize()} + FTS rebuild, coalesced by
+              \texttt{FinalizeThrottle} (DES-045c). \\
 \bottomrule
 \end{tabular}
 \end{center}
 
+The loop feeds the same DES-042 serialized queue (\modpath{daemon/ingest\_queue.py},
+\modpath{daemon/collection\_worker.py}): one resident FIFO worker per
+\texttt{RouteKey} (one in-flight \texttt{progressive\_insert} per LanceDB
+table) behind a global embed \texttt{Semaphore} hard-clamped to~1 (DES-032:
+more than one buys no matmul parallelism behind the shared ONNX session mutex
+and re-adds arena contention).  Admission is non-blocking and bounded --- a
+full queue returns 503 and the event re-arms with capped backoff, never a
+silent drop.
+
 A small delta re-indexes as per-file jobs (embed gate released between files
 for cross-collection fairness); a burst above \texttt{watch\_bulk\_threshold}
-collapses to one \texttt{CollectionSyncJob} (DES-034's size-gated flush keeps
-the fragment budget). Per-file jobs \emph{never} rebuild the FTS index --- a
-lone finalize job runs post-quiescence per \texttt{(database, collection)}, so
-the daemon's persistent connection does not reopen the DES-045/quarry-0dss
-descriptor leak; a resource-invariant test proves the fd count plateaus across
-multiple databases. A full-queue 503 re-arms the event with capped backoff, never
-a silent drop.
+(default~50) collapses to one \texttt{CollectionSyncJob} (DES-034's size-gated
+flush keeps the fragment budget).  Per-file jobs \emph{never} rebuild the FTS
+index --- a lone finalize job runs post-quiescence per \texttt{RouteKey}, so
+the daemon's persistent connection does not reopen the quarry-0dss descriptor
+leak (\texttt{create\_fts\_index(replace=True)} pins deleted-file readers the
+LanceDB Rust core never evicts); a resource-invariant test proves the fd count
+plateaus across multiple databases.
+
+\textbf{Removal lifecycle and orphan sweep (DES-045a).}  Deregister,
+subsumption, and orphan cleanup were hardened under a Z model
+(\texttt{docs/spec/watch\_lifecycle.tex}, fuzz-clean and ProB-checked against
+ten invariants I1--I10).  A collection is marked in a durable
+\texttt{pending\_purge\_collections} table --- in the \emph{same} transaction as
+the \texttt{directories} delete --- only on a non-keep-data deregister or a
+subsume eviction; the periodic reconcile's orphan sweep then purges only
+\emph{marked} collections that still hold chunks, re-checking under its own
+transaction at execution time.  Non-directory collections (captures,
+\texttt{memory-*}, the \texttt{default} \texttt{remember} target, URL-host
+collections) are never marked, so the sweep is \emph{structurally unable} to
+delete them (I9) --- the invariant whose earlier absence, in a model that
+wrongly assumed every collection was a directory registration, would have wiped
+all captures and agent memories on the 5-minute default timer.  A
+\texttt{--keep-data} disable archives the collection's identity
+(\texttt{retained\_collections} with \texttt{original\_directory}); only the
+\emph{same} directory may re-adopt it (I7), and re-adoption triggers a reconcile
+that prunes chunks for files deleted while it was disabled.  A different
+directory always gets a fresh, distinct collection, and the fresh-name picker
+avoids every chunk-bearing name so the auto path is merge-proof (I10).
+
+\textbf{Watch scope (DES-045b).}  The \texttt{ScratchGuard} predicate, consulted
+at every producer seam (initial scan, live watch, reconcile, explicit
+\texttt{quarry sync}), refuses a root that is (a)~an OS temp root
+(\texttt{/tmp}, \texttt{/private/tmp}, \texttt{/var/tmp},
+\texttt{/private/var/tmp}, \texttt{/var/folders}, compared casefolded so a case
+variant on APFS cannot slip past) or (b)~a repo's own scratch, anchored on
+\texttt{<gitroot>/.tmp} for \emph{any} ancestor git repo; below a permitted
+root it skips gitignored paths and an always-skip set (\texttt{.git},
+\texttt{.beads}, \texttt{.venv}, \texttt{node\_modules}, \texttt{\_\_pycache\_\_},
+\texttt{dist}, \texttt{build}, caches).  Resolution is fail-closed \emph{per
+root} --- a \texttt{resolve()} that raises skips that one registration and logs,
+never aborting the scan.  The guard fires at \emph{watch} time, not only at
+register time, so an already-registered temp root is refused on daemon restart
+with no registry edit.  This closes the hole where a stale \texttt{/private/tmp}
+registration made the loop re-index the churning system temp dir and never reach
+quiescence (283 CPU-minutes observed before the guard shipped).
+
+\textbf{CPU/compaction envelope (DES-045c).}  DES-045's ``bounded by
+construction'' bounded fds, memory, and the write-serializer, but LanceDB sizes
+its own tokio \emph{compute} runtime to \texttt{num\_cpus}, and a single finalize
+(\texttt{optimize()} + native FTS rebuild) on that uncapped pool seized every
+core (291--403\,\% CPU observed).  Two structural mitigations bound it: (1)~\
+\texttt{ThreadConfig.apply\_env\_limits()} (\modpath{thread\_config.py}) clamps
+\texttt{LANCE\_CPU\_THREADS}/\texttt{LANCE\_IO\_THREADS} (cap~2) before the first
+\texttt{lancedb.connect} in \texttt{DaemonServer.run()}, via a fail-closed clamp
+with a per-variable floor (a stale \texttt{LANCE\_CPU\_THREADS=32} is forced down
+to the cap, and \texttt{=1} --- which stalls lance's runtime --- is raised to the
+floor of~2, so floor equals ceiling for the LANCE pools); (2)~\texttt{FinalizeThrottle}
+coalesces the finalize to at most one per \texttt{watch\_optimize\_min\_interval\_s}
+(default~30\,s) \emph{per database}, with a trailing timer so FTS still catches
+up after churn settles.  The vector channel is never stale (files index
+immediately); the reconcile is the unthrottled backstop.
 
 \subsection{Surfaces}
 
@@ -473,28 +568,37 @@ a silent drop.
 \toprule
 \textbf{Module} & \textbf{File} & \textbf{Responsibility} \\
 \midrule
-CLI         & \modpath{\_\_main\_\_.py} & Typer CLI with rich
-              formatting.  Synchronous.  All commands: resolve
-              settings $\to$ call core $\to$ format output. \\
-MCP Server  & \modpath{mcp\_server.py}  & FastMCP server.  Read-only
-              tools are synchronous.  Side-effect tools use
-              fire-and-forget. \\
-HTTP Server & \modpath{http\_server.py} & Starlette ASGI app on
-              uvicorn.  REST endpoints + WebSocket \texttt{/mcp}. \\
+CLI         & \modpath{\_\_main\_\_.py} + \modpath{cli\_*.py} & Typer
+              CLI with rich formatting.  A thin \texttt{QuarryClient}
+              client: build request $\to$ call daemon $\to$ format
+              output.  Command groups split into \modpath{cli\_search},
+              \modpath{cli\_ingest}, \modpath{cli\_documents},
+              \modpath{cli\_sync}, \modpath{cli\_project},
+              \modpath{cli\_remote}, \modpath{cli\_maintenance}. \\
+MCP Server  & \modpath{mcp\_server.py}  & \texttt{quarry mcp}: a FastMCP
+              \emph{stdio} server whose eleven tool bodies are thin
+              \texttt{QuarryClient} calls over the daemon's \texttt{/v1}
+              API.  Imports \emph{no} engine --- loads zero
+              LanceDB/ONNX (DES-031 v2.2). \\
+Client tier & \modpath{client/}          & \texttt{QuarryClient} +
+              injectable REST transport, typed \texttt{QuarryError}
+              hierarchy, \texttt{ClientConfig} target/token resolution.
+              Replaces the deleted \texttt{RemoteClient}. \\
+Wire API    & \modpath{api/}             & The \texttt{/v1} contract:
+              one Pydantic request/response model per operation +
+              a uniform \texttt{ErrorBody}.  Drift is an import-time
+              type error (the structural kill of bug class 3). \\
 Hooks       & \modpath{hooks.py}        & Claude Code plugin hooks:
               session-start (auto-register), post-web-fetch
-              (auto-ingest), pre-compact (capture transcript).
-              All fail-open. \\
+              (auto-ingest), pre-compact (capture transcript).  Pure
+              clients (\texttt{QuarryClient}); all fail-open. \\
 Hook Entry  & \modpath{\_hook\_entry.py} & Lightweight hook dispatcher
               that bypasses full CLI import chain.  Dispatches
               via \texttt{sys.argv} with lazy imports
               ($\sim$0.1\,s vs $\sim$1.5\,s for full CLI). \\
-Remote      & \modpath{remote.py}       & Remote server config:
-              mcp-proxy config read/write, TOFU CA cert fetch
-              and storage, connection validation. \\
-Remote client & \modpath{remote\_client.py} & \texttt{RemoteClient} ---
-              authenticated HTTP client the CLI uses to route data
-              commands to a remote daemon over pinned-CA HTTPS. \\
+Remote      & \modpath{remote.py}       & Remote login config:
+              TOFU CA cert fetch and storage, pinned-CA connection
+              validation. \\
 Daemon      & \modpath{service.py}      & \texttt{quarryd} lifecycle
               via \texttt{launchd}/\texttt{systemd}. \\
 \bottomrule
@@ -548,6 +652,7 @@ memory and five cold starts.
 by launchd \texttt{KeepAlive} / systemd \texttt{Restart=always}.
 
 \subsection{Process Boundary and Loopback Authentication (v2.2)}
+\label{sec:proc-boundary}
 
 \texttt{quarryd} (\modpath{daemon/launcher.py}) is a dedicated entry
 point --- the sole engine process, making the client/engine boundary a
@@ -572,9 +677,9 @@ Clients resolve the target through \texttt{ClientConfig}
 \emph{live} from \texttt{serve.token} (it rotates every daemon restart,
 so a stored token is never trusted); for a remote URL the stored bearer
 is kept.  A missing loopback token fails closed with an actionable error
-rather than a bare 401.  \texttt{ClientConfig} is the client tier's first
-piece; the full \texttt{QuarryClient} and \texttt{quarry
-mcp}-as-client land in v2-3/v2-4.
+rather than a bare 401.  \texttt{ClientConfig} feeds the one
+\texttt{QuarryClient} that the CLI, the \texttt{quarry mcp} stdio server,
+hooks, and the library all use; \texttt{RemoteClient} is deleted.
 
 The daemon serves the \textbf{REST API only} under \texttt{/v1} (the
 in-daemon MCP route was removed in PR-1); its request-admission trust model
@@ -625,32 +730,34 @@ socket); a single real-loopback-TLS smoke (slow tier, excluded from the fast
 suite) covers the pinned-CA wire contract end-to-end; and \texttt{install}
 gates on \texttt{/health} \texttt{ready} before exiting~0.
 
-\subsection{mcp-proxy Architecture}
+\subsection{MCP Transport (\texttt{quarry mcp})}
 
-\texttt{quarry install} downloads \texttt{mcp-proxy} (SHA256-verified,
-platform-specific binary) and configures MCP clients to use it.
-The proxy:
-
-\begin{enumerate}
-  \item Reads MCP JSON-RPC from stdin.
-  \item Forwards to \texttt{wss://localhost:8420/mcp} over WebSocket
-    (TLS, pinned CA --- even on localhost).
-  \item Relays responses back to stdout.
-\end{enumerate}
-
-Each WebSocket connection gets its own asyncio Task with a
-\texttt{ContextVar} for database selection (\texttt{\_db\_name}),
-so \texttt{use("work")} in one session does not affect others.
+Quarry's plugin runs \texttt{quarry mcp} directly --- a FastMCP
+\emph{stdio} server (\modpath{mcp\_server.py}) whose eleven tool bodies
+are thin \texttt{QuarryClient} calls over the daemon's \texttt{/v1} REST
+API.  It reads MCP JSON-RPC from stdin, dispatches each tool to the
+resident daemon (reusing its one warm \texttt{ctx.embedder}/\texttt{ctx.database}),
+and relays the response to stdout.  It imports no engine, so
+\texttt{import quarry.mcp\_server} and running \texttt{quarry mcp} load
+zero LanceDB/ONNX.  Database selection is a per-request parameter carried
+in the wire call; the daemon holds no per-connection \texttt{ContextVar}
+because the in-daemon \texttt{/mcp} WebSocket route was removed (DES-031
+v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path (it remains a
+supported tool for other REST-API consumers).
 
 \subsection{CLI and the Daemon}
 
-Under DES-031 v2 (ACCEPTED, in implementation) the CLI is a thin
-client: it builds a request, calls the daemon over the wire protocol
-via \texttt{QuarryClient}, and renders the response --- it does not
-load the embedding model or open LanceDB in-process.  The prior design
-had \texttt{quarry find "margins"} load the model in-process and query
-LanceDB directly; that local-engine path is removed as the data
-commands migrate to \texttt{QuarryClient}.
+The CLI is a thin client: it builds a request, calls the daemon over the
+\texttt{/v1} wire protocol via \texttt{QuarryClient}, and renders the
+response --- it does not load the embedding model or open LanceDB
+in-process.  The prior design had \texttt{quarry find "margins"} load the
+model in-process and query LanceDB directly; that local-engine path is
+removed.  The one sanctioned exception is the host-admin diagnostics
+(\texttt{doctor}/\texttt{install}/\texttt{uninstall}), which probe the
+local engine environment through function-body lazy imports so they can
+report \emph{why} a daemon is unhealthy even when it is down --- an
+explicit, enumerated \texttt{ignore\_imports} list, proven off the hot
+path by the sabotage test.
 
 % ===================================================================
 \section{MCP Tool Surface}
@@ -695,15 +802,17 @@ commands migrate to \texttt{QuarryClient}.
 \end{longtable}
 \end{center}
 
-Bg = background (\texttt{ThreadPoolExecutor}).
+Bg = background (daemon-side; the tool returns a \field{task\_id}).
 
-Background tools use a bounded \texttt{ThreadPoolExecutor(max\_workers=4)}.
-They return an optimistic response immediately.  Settings and database
-connections are snapshotted at the tool boundary and passed into
-background functions --- this avoids a race condition where the mutable
-\texttt{\_db\_name} ContextVar could change between the tool call and
-the background thread's execution.  Exceptions in background threads
-are logged via \texttt{logger.exception()}, not raised.
+Each tool body is a thin \texttt{QuarryClient} call over \texttt{/v1}
+(the MCP server holds no engine).  A background tool posts to the daemon,
+which returns \texttt{202~Accepted} with a \field{task\_id}; the actual
+work runs on the daemon's serialized per-\texttt{RouteKey} queue (DES-042)
+behind the embed \texttt{Semaphore}, and the caller polls
+\texttt{/v1/tasks/\{task\_id\}} or ignores the outcome.  This keeps a
+30-second ingest from blocking the LLM response stream while preventing
+the concurrent-write races the single-writer-per-table invariant closes.
+Read tools return their result inline.
 
 % ===================================================================
 \section{HTTP Server}
@@ -711,56 +820,68 @@ are logged via \texttt{logger.exception()}, not raised.
 
 \subsection{ASGI Application}
 
-Starlette app built by \texttt{build\_app()} factory, served by
-uvicorn.  REST handlers are sync functions --- Starlette auto-detects
-this and runs them in its threadpool.  The \texttt{/mcp} WebSocket
-endpoint is async.
+FastAPI app built by \texttt{build\_app()} (\modpath{daemon/app.py}),
+served by uvicorn.  FastAPI \emph{is} Starlette underneath, so request
+validation \emph{and} the OpenAPI document derive from the same
+\modpath{quarry/api} Pydantic models --- no hand-rolled emitter or route
+registry.  REST handlers are sync functions run in the threadpool; the
+routes live in \modpath{daemon/routes/}.  There is no WebSocket endpoint
+--- the daemon serves the \textbf{REST API only} (the in-daemon
+\texttt{/mcp} route was removed in DES-031 v2.2, PR-1).
 
 Default port: 8420 (\texttt{DEFAULT\_PORT} in \modpath{config.py}),
-overridable with \texttt{-{}-port}.
+overridable with \texttt{-{}-port}.  All engine operations sit under
+\texttt{/v1}; \texttt{/health} and \texttt{/ca.crt} are unversioned.
+\texttt{/health} advertises \field{api\_version}; a major mismatch
+raises \texttt{QuarryVersionError} in the client.
 
 \subsection{Endpoints}
 
 \begin{center}
-\begin{tabular}{llp{5.5cm}ll}
+\begin{tabular}{llp{5.3cm}ll}
 \toprule
 \textbf{Path} & \textbf{Method} & \textbf{Purpose} &
   \textbf{Auth} & \textbf{Model} \\
 \midrule
-\texttt{/health}           & GET    & Server uptime and status         & No  & sync  \\
-\texttt{/ca.crt}           & GET    & CA certificate PEM (TOFU)        & No  & sync  \\
-\texttt{/search}           & GET    & Hybrid search                    & Yes & sync  \\
-\texttt{/show}             & GET    & Document metadata or page text   & Yes & sync  \\
-\texttt{/documents}        & GET    & List documents                   & Yes & sync  \\
-\texttt{/documents}        & DELETE & Delete document (returns 202)    & Yes & async \\
-\texttt{/collections}      & GET    & List collections                 & Yes & sync  \\
-\texttt{/collections}      & DELETE & Delete collection (returns 202)  & Yes & async \\
-\texttt{/registrations}    & GET    & List directory registrations      & Yes & sync  \\
-\texttt{/registrations}    & POST   & Register directory (returns 202) & Yes & async \\
-\texttt{/registrations}    & DELETE & Deregister directory (returns 202) & Yes & async \\
-\texttt{/databases}        & GET    & List named databases             & Yes & sync  \\
-\texttt{/status}           & GET    & Database statistics               & Yes & sync  \\
-\texttt{/use}              & POST   & Switch active database           & Yes & sync  \\
-\texttt{/remember}         & POST   & Ingest inline content (returns 202) & Yes & async \\
-\texttt{/ingest}           & POST   & Ingest URL (returns 202)         & Yes & async \\
-\texttt{/sync}             & POST   & Sync registrations (returns 202) & Yes & async \\
-\texttt{/tasks/\{task\_id\}} & GET  & Poll task status (unified)       & Yes & sync  \\
-\texttt{/sync/\{task\_id\}}  & GET  & Alias for \texttt{/tasks/\{task\_id\}} & Yes & sync \\
-\texttt{/ingest/\{task\_id\}}& GET  & Alias for \texttt{/tasks/\{task\_id\}} & Yes & sync \\
-\texttt{/mcp}              & WS     & MCP JSON-RPC over WebSocket      & Yes & ---   \\
+\texttt{/health}              & GET    & Server state + \field{api\_version} & No  & sync  \\
+\texttt{/ca.crt}              & GET    & CA certificate PEM (TOFU)        & No  & sync  \\
+\texttt{/v1/search}           & GET    & Hybrid search                    & Yes & sync  \\
+\texttt{/v1/show}             & GET    & Document metadata or page text   & Yes & sync  \\
+\texttt{/v1/documents}        & GET    & List documents                   & Yes & sync  \\
+\texttt{/v1/documents}        & DELETE & Delete document (returns 202)    & Yes & async \\
+\texttt{/v1/collections}      & GET    & List collections                 & Yes & sync  \\
+\texttt{/v1/collections}      & DELETE & Delete collection (returns 202)  & Yes & async \\
+\texttt{/v1/registrations}    & GET    & List directory registrations     & Yes & sync  \\
+\texttt{/v1/registrations}    & POST   & Register directory (returns 202) & Yes & async \\
+\texttt{/v1/registrations}    & DELETE & Deregister directory (sync + 202 purge) & Yes & async \\
+\texttt{/v1/databases}        & GET    & List named databases             & Yes & sync  \\
+\texttt{/v1/status}           & GET    & Database statistics              & Yes & sync  \\
+\texttt{/v1/use}              & POST   & Switch active database           & Yes & sync  \\
+\texttt{/v1/remember}         & POST   & Ingest inline content (returns 202) & Yes & async \\
+\texttt{/v1/ingest}           & POST   & Ingest file or URL (returns 202) & Yes & async \\
+\texttt{/v1/capture}          & POST   & Capture web/transcript (returns 202) & Yes & async \\
+\texttt{/v1/captures/push}    & POST   & Push private capture shadow repo & Yes & async \\
+\texttt{/v1/sync}             & POST   & Sync registrations (returns 202) & Yes & async \\
+\texttt{/v1/optimize}         & POST   & Compact + rebuild index (returns 202) & Yes & async \\
+\texttt{/v1/backfill-sessions}& POST   & Backfill session transcripts (returns 202) & Yes & async \\
+\texttt{/v1/tasks/\{task\_id\}} & GET  & Poll task status (unified)       & Yes & sync  \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-See Appendix~\ref{app:concurrency} for the full concurrency matrix
-across HTTP, CLI, and MCP surfaces.
+\texttt{/v1/tasks/\{task\_id\}} is the single, unified poll endpoint ---
+the old \texttt{/sync/\{id\}} and \texttt{/ingest/\{id\}} alias routes
+were removed in the DES-031 v2.2 contract rewrite.  See
+Appendix~\ref{app:concurrency} for the full concurrency matrix across
+HTTP, CLI, and MCP surfaces.
 
 \subsection{Port File}
 
-After binding, the server writes the actual port to
-\texttt{\~{}/.punt-labs/quarry/data/<db>/serve.port}.  This supports
-\texttt{-{}-port 0} (ephemeral assignment).  Removed on shutdown via
-lifespan context.
+After binding, the daemon writes the actual port to
+\texttt{\~{}/.punt-labs/quarry/data/<db>/serve.port}, and (when it has an
+effective key) a mode-0600 \texttt{serve.token} beside it (see
+\S\ref{sec:proc-boundary}).  This supports \texttt{-{}-port 0} (ephemeral
+assignment).  Removed on shutdown via the lifespan context.
 
 % ===================================================================
 \section{Configuration}
@@ -807,9 +928,56 @@ All settings are environment variables read via pydantic-settings.
   Model identifier (display only --- the ONNX model is fixed) \\
 \texttt{EMBEDDING\_DIMENSION} & \texttt{768} &
   Vector dimension (display only --- fixed at 768) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Progressive commit (DES-034)}} \\
+\midrule
+\texttt{SYNC\_FLUSH\_MB}       & \texttt{32} &
+  Flush buffered vectors to LanceDB once they reach this many MB
+  (bounds peak resident vectors; may fire mid-file) \\
+\texttt{EMBED\_WINDOW\_CHUNKS} & \texttt{512} &
+  Chunks embedded per window, so a large document never materializes
+  all its vectors (a kpz throughput seam) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Watch/index loop (DES-045)}} \\
+\midrule
+\texttt{WATCH\_ENABLED}        & \texttt{true} &
+  Run the always-on watch/index loop (installing \texttt{quarryd} is the
+  opt-in; reverses the prior timer posture) \\
+\texttt{WATCH\_DEBOUNCE\_S}    & \texttt{1.0} &
+  Coalesce an edit burst before submitting \\
+\texttt{WATCH\_MAX\_DELAY\_S}  & \texttt{5.0} &
+  Cap on a continuously-rearmed path (anti-starvation) \\
+\texttt{WATCH\_BULK\_THRESHOLD} & \texttt{50} &
+  A delta above this many paths collapses to one bulk
+  \texttt{CollectionSyncJob} \\
+\texttt{WATCH\_USE\_POLLING}   & \texttt{false} &
+  Force watchdog's stat-walk \texttt{PollingObserver} \\
+\texttt{WATCH\_SAFETY\_SCAN\_S} & \texttt{300.0} &
+  Periodic roster reconcile + orphan sweep; picks up new databases and
+  re-submits shed scans (0 = off) \\
+\texttt{WATCH\_OPTIMIZE\_MIN\_INTERVAL\_S} & \texttt{30.0} &
+  \texttt{FinalizeThrottle}: at most one finalize (optimize + FTS
+  rebuild) per interval \emph{per database} (0 = every batch) \\
+\midrule
+\multicolumn{3}{l}{\textbf{Thread limits (process env; DES-032/045c)}} \\
+\midrule
+\texttt{LANCE\_CPU\_THREADS} / \texttt{LANCE\_IO\_THREADS} & \texttt{2} &
+  Clamp LanceDB's tokio compute/IO pools (fail-closed, floor == cap == 2;
+  set before the first \texttt{lancedb.connect}) \\
+\texttt{OMP\_NUM\_THREADS}     & \texttt{min(2, ncpu)} &
+  Cap OpenMP to match the ONNX intra-op limit (floor 1) \\
 \bottomrule
 \end{longtable}
 \end{center}
+
+The LanceDB and OMP caps are applied by \texttt{ThreadConfig}
+(\modpath{thread\_config.py}) in \texttt{DaemonServer.run()} via a
+fail-closed clamp: an inherited or operator value is honored only within
+\texttt{[floor, cap]}; a higher or non-numeric value is forced \emph{down}
+to the cap (a \texttt{setdefault} would yield upward to a stale export and
+void the ceiling) and a below-floor value is raised to the floor.  ONNX
+\texttt{intra\_op\_num\_threads} is \texttt{min(2, ncpu)} on CPU and~1 on
+GPU; \texttt{inter\_op\_num\_threads} is~1 (DES-032).
 
 \subsection{Named Databases}
 
@@ -907,8 +1075,14 @@ whose defaults reproduce the shipped pipeline bit-for-bit.
 \begin{enumerate}
   \item \textbf{Vector similarity} --- ANN search via LanceDB under the
     cosine metric
-  \item \textbf{BM25 full-text search} --- Tantivy index on the
-    \texttt{text} column, created during schema migration
+  \item \textbf{BM25 full-text search} --- LanceDB's \emph{native}
+    inverted index on the \texttt{text} column
+    (\texttt{create\_fts\_index(..., use\_tantivy=False)}, the default),
+    created during schema migration.  There is no separate Tantivy
+    \texttt{IndexWriter} process or thread pool; the index rides the
+    daemon's capped LanceDB runtime (DES-045c).  (Earlier ADRs --- DES-017,
+    DES-023 --- name the backend ``Tantivy''; that name is legacy, the
+    shipped engine is LanceDB-native.)
 \end{enumerate}
 
 Results are fused using Reciprocal Rank Fusion (RRF):
@@ -916,8 +1090,8 @@ Results are fused using Reciprocal Rank Fusion (RRF):
   \text{score}(m) = \sum_{\text{channel}} \frac{1}{60 + \text{rank}_{\text{channel}}(m)}
 \]
 
-\textbf{FTS scoring.}  FTS rows arrive from Tantivy without a vector
-distance.  Rather than displaying a synthetic $1.00$ (which made
+\textbf{FTS scoring.}  FTS rows arrive from the full-text channel without
+a vector distance.  Rather than displaying a synthetic $1.00$ (which made
 irrelevant keyword hits appear as perfect matches), each FTS-only row is
 annotated with its \emph{true} cosine distance against the query vector;
 a row whose stored vector is missing or zero-length is assigned the
@@ -1099,17 +1273,20 @@ gates all HTTP endpoints except \texttt{/health} behind
 The server refuses to bind to a non-loopback address without
 \texttt{-{}-api-key}.
 
-\subsection{WebSocket Security (CSWSH)}
+\subsection{Request Admission (CSRF)}
 
-Origin-based cross-site WebSocket hijacking protection:
+The daemon serves REST only, so there is no WebSocket to hijack; the
+cross-origin threat is a forged browser \texttt{POST}.  Two checks
+compose the admission trust model:
 
 \begin{itemize}
-  \item If an \texttt{Origin} header is present, it must match the
-    CORS allow-list.
-  \item Browsers always send \texttt{Origin}; non-browser clients
-    like \texttt{mcp-proxy} do not.
-  \item Bearer auth is checked before WebSocket accept (close code
-    1008 on failure).
+  \item \texttt{JsonContentTypeGuard} --- an ASGI choke point that
+    rejects any \texttt{POST} without \texttt{Content-Type:
+    application/json}.  A browser cannot send that header cross-origin
+    without a preflight the CORS policy refuses, so a forged
+    cross-origin write is blocked at the door.
+  \item The \texttt{serve.token} / API-key bearer (checked on every
+    \texttt{/v1} request) blocks an unauthorized \emph{local} reader.
 \end{itemize}
 
 \subsection{CORS}
@@ -1126,8 +1303,8 @@ no CORS headers are emitted.
 
 \subsection{TLS and TOFU Certificate Pinning}
 
-The installed service always runs with TLS enabled.  \texttt{quarry
-serve} without \texttt{-{}-tls} is supported for local development but
+The installed service always runs with TLS enabled.  \texttt{quarryd}
+without \texttt{-{}-tls} is supported for local development but
 must not be used for production.  Certificate management uses TOFU
 (Trust On First Use) with self-signed CA pinning (DES-020).
 
@@ -1149,19 +1326,22 @@ and loopback addresses.
     --- system roots excluded.
 \end{enumerate}
 
-\textbf{mcp-proxy:} The \texttt{quarry.toml} profile includes
-\texttt{ca\_cert} pointing to the pinned CA.  mcp-proxy builds a
-custom \texttt{tls.Config} with the pinned CA as the sole root,
-enforcing TLS~1.3 minimum.
+\textbf{Pinned-CA consumers:} \texttt{QuarryClient} builds its TLS
+context from the pinned CA as the sole root (system roots excluded), so
+every daemon RPC --- CLI, \texttt{quarry mcp}, hooks, library --- verifies
+against it.  The \texttt{quarry.toml} profile also records the CA under
+\texttt{ca\_cert}, which \texttt{mcp-proxy} reads (as the sole root, TLS
+1.3 minimum) when it is used by other REST-API consumers; it is no longer
+on quarry's own MCP path (DES-031 v2.2).
 
 \subsection{Log Safety (CWE-532, CWE-117)}
 
 Uvicorn's access log is disabled (\texttt{access\_log=False}),
 eliminating query string leakage at the source.  The search handler
-logs only result count, never the raw query.  WebSocket session keys
-are sanitized before logging: control characters stripped via
-\texttt{\_CONTROL\_CHAR\_RE} and truncated to 64 characters to prevent
-log injection (CWE-117) and log flooding.
+logs only result count, never the raw query.  (The WebSocket
+session-key sanitization the prior design described was removed with the
+in-daemon \texttt{/mcp} route --- there is no longer a WebSocket surface
+to log.)
 
 \subsection{Capture PII Redaction (DES-036)}
 
@@ -1305,19 +1485,24 @@ End-to-end search  & $<$100\,ms    & After model is loaded \\
 \end{tabular}
 \end{center}
 
-\subsection{Fire-and-Forget MCP Pattern}
+\subsection{Fire-and-Forget Writes}
 
-Side-effect MCP tools return immediately and process in a bounded
-thread pool (4 workers).  This is necessary because:
+Side-effect operations return immediately with a \field{task\_id}; the
+work runs on the daemon's serialized per-\texttt{RouteKey} queue
+(DES-042).  This is necessary because:
 
 \begin{enumerate}
   \item MCP tool calls block the LLM's response stream.  A 30-second
-    ingest blocks Claude from responding.
-  \item The bounded pool prevents resource exhaustion under concurrent
-    requests.
-  \item Settings and database connections are snapshotted at the tool
-    boundary, avoiding race conditions with the mutable
-    \texttt{\_db\_name} ContextVar.
+    ingest would block Claude from responding.  The 202 unblocks the
+    caller immediately.
+  \item Bounded, non-blocking admission (503 on a full queue) prevents
+    the resource exhaustion that unbounded \texttt{asyncio.create\_task}
+    ingests caused (the load-90 starvation, quarry-lnog).
+  \item One in-flight \texttt{progressive\_insert} per LanceDB table
+    (single writer per \texttt{RouteKey}) plus the embed
+    \texttt{Semaphore} clamped to~1 eliminate the concurrent
+    delete-then-add lost-update race, without snapshotting mutable
+    per-request state.
 \end{enumerate}
 
 \subsection{Single Table Design}
@@ -1472,10 +1657,13 @@ Tier 2: Orchestration & Mocked I/O & \texttt{test\_pipeline},
   \texttt{test\_sitemap}, \texttt{test\_backends},
   \texttt{test\_sync},
   \texttt{test\_hooks}, \texttt{test\_doctor} (9 files) \\
-Tier 3: Surface wiring & Fully mocked, $<$2\,s &
+Tier 3: Surface wiring & Fully mocked / hermetic in-process ASGI
+  (\texttt{httpx.ASGITransport}), $<$2\,s &
   \texttt{test\_cli}, \texttt{test\_mcp\_server},
-  \texttt{test\_mcp\_websocket}, \texttt{test\_http\_server},
-  \texttt{test\_proxy}, \texttt{test\_service} (6 files) \\
+  \texttt{test\_http\_server}, \texttt{test\_client\_config},
+  \texttt{test\_daemon\_launcher}, \texttt{test\_watch\_loop},
+  \texttt{test\_watch\_reconcile}, \texttt{test\_fs\_watchdog},
+  \texttt{test\_proxy}, \texttt{test\_service} \\
 Integration & Real ONNX + real LanceDB &
   \texttt{test\_integration} (\texttt{@pytest.mark.slow}) \\
 \bottomrule
@@ -1520,10 +1708,13 @@ claude-code-quarry.tex}.
 \label{app:concurrency}
 
 Every quarry operation is exposed on up to three surfaces: the HTTP
-API (daemon), the CLI, and the MCP server (stdio or WebSocket).  The
-concurrency model differs by surface because each has different
-constraints: HTTP connections time out, MCP tool calls block the LLM
-response stream, and CLI commands run in a user's terminal.
+API (\texttt{/v1}, daemon), the CLI, and the MCP server (\texttt{quarry
+mcp} stdio).  The concurrency model differs by surface because each has
+different constraints: HTTP connections time out, MCP tool calls block
+the LLM response stream, and CLI commands run in a user's terminal.
+Under daemon-first every CLI and MCP call is a \texttt{QuarryClient}
+request to the daemon, so the ``local'' and ``remote'' CLI columns below
+differ only in transport target, not in code path.
 
 Table~\ref{tab:concurrency} classifies each operation.  The
 \textbf{Client model} column describes what the caller experiences:
@@ -1583,7 +1774,8 @@ ingest (file)       & ---    & sync & ---  & fire-and-forget \\
 sync                & fire-and-forget & sync & fire-and-forget
                     & fire-and-forget \\
 use (switch db)     & sync   & sync & sync & sync \\
-optimize            & ---    & sync & ---  & ---  \\
+optimize            & fire-and-forget & sync & fire-and-forget & --- \\
+backfill-sessions   & fire-and-forget & sync & fire-and-forget & --- \\
 \end{longtable}
 
 \subsection{Design Rationale}
@@ -1599,18 +1791,22 @@ runs in a background \texttt{asyncio.Task}.  This eliminates the
 15-second CLI timeout as a failure mode for any write operation.
 
 \begin{itemize}
-  \item All mutating endpoints use \texttt{GET /tasks/\{task\_id\}}
-    for status polling.  \texttt{/sync/\{id\}} and
-    \texttt{/ingest/\{id\}} are backwards-compatible aliases.
-  \item \textbf{Sync} rejects concurrent requests with HTTP~409
-    because a second sync against the same registrations would
-    race on LanceDB writes.  All other operations allow concurrency.
+  \item All mutating endpoints use the single unified
+    \texttt{GET /v1/tasks/\{task\_id\}} for status polling; the old
+    \texttt{/sync/\{id\}} and \texttt{/ingest/\{id\}} alias routes were
+    removed in the DES-031 v2.2 contract rewrite.
+  \item \textbf{Sync} no longer returns 409: it enqueues transparently
+    (202 + poll), because the daemon's serialized per-\texttt{RouteKey}
+    queue (DES-042) already prevents concurrent writers to a table.  The
+    409 is retained only for \textbf{optimize} and
+    \textbf{backfill-sessions}, whose whole-table compaction/rebuild
+    must not overlap itself.
   \item Completed and failed tasks are garbage-collected after a
     1-hour TTL on the next task creation.
-  \item \textbf{Optimize} is CLI-only (no HTTP or MCP surface).  It
-    runs LanceDB compaction and index rebuilds, which are
-    CPU-intensive and should not be triggered remotely without
-    explicit intent.
+  \item \textbf{Optimize} and \textbf{backfill-sessions} are exposed on
+    HTTP and the CLI but \emph{not} as MCP tools --- they are
+    whole-database maintenance, run with explicit intent rather than
+    from an agent's tool loop.
 \end{itemize}
 
 \subsection{Task Lifecycle}
