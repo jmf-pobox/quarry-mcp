@@ -720,8 +720,6 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
 
 
-
-
 _SESSION_CONTEXT_TEMPLATE = """\
 ## Memory
 
@@ -891,7 +889,38 @@ def _configure_ethos_ext(
     )
 
 
-def run_install() -> int:  # noqa: C901
+def _install_embedding_model() -> bool:
+    """Download the INT8 model (and FP16 on CUDA); return whether it succeeded.
+
+    The FP16 download is best-effort — its failure is swallowed because
+    first-use falls back to INT8. Only an INT8 failure marks the step failed.
+
+    NOTE: the CUDA probe is an in-process import. If onnxruntime was imported
+    earlier in this process (before ``GpuRuntime.ensure()`` swapped the package),
+    the old native libraries stay loaded and provider detection here may be
+    stale; a fresh ``quarry install`` has not imported it yet, so this is
+    accurate, and the FP16 model is fetched on the next run if needed.
+    """
+    try:
+        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
+
+        OnnxEmbeddingBackend.download_model_files()
+        print("  ✓ snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ✗ Model download failed: {exc}")  # noqa: T201
+        return False
+    try:
+        import onnxruntime as ort  # noqa: PLC0415
+
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            OnnxEmbeddingBackend.download_model_files(model_file="onnx/model_fp16.onnx")
+            print("  ✓ FP16 model cached (for CUDA)")  # noqa: T201
+    except Exception:  # noqa: BLE001, S110
+        pass  # FP16 download is optional -- first-use fallback works
+    return True
+
+
+def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
@@ -931,31 +960,7 @@ def run_install() -> int:  # noqa: C901
 
     # Step 3: embedding model
     print("[3/7] Downloading embedding model...")  # noqa: T201
-    try:
-        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
-
-        OnnxEmbeddingBackend.download_model_files()
-        print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
-        # Also download FP16 model if CUDA is available.
-        # NOTE: This is an in-process import. If onnxruntime was already
-        # imported earlier in this process *before* GpuRuntime.ensure()
-        # swapped the package in step 2, the native shared libraries (.so)
-        # from the old onnxruntime remain loaded and provider detection here
-        # may be stale. In a typical `quarry install` run where onnxruntime
-        # has not yet been imported in-process, this is accurate. The FP16
-        # model will be downloaded on the next run if needed.
-        try:
-            import onnxruntime as ort  # noqa: PLC0415
-
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                OnnxEmbeddingBackend.download_model_files(
-                    model_file="onnx/model_fp16.onnx"
-                )
-                print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201
-        except Exception:  # noqa: BLE001, S110
-            pass  # FP16 download is optional -- first-use fallback works
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
+    if not _install_embedding_model():
         failed = True
 
     # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)

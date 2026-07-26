@@ -16,7 +16,6 @@ from quarry.enable import (
     _CONFIG_TEMPLATE,
     DisableResult,
     EnableResult,
-    _bootstrap_ethos_memory,
     _write_project_config,
     disable_project,
     enable_project,
@@ -25,7 +24,7 @@ from quarry.enabled_marker import EnabledMarker
 from quarry.guidance import REPO_IMPORT_LINE
 from tests.conftest import FakeRegistryClient
 
-_NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
+_NO_ETHOS = "quarry.ethos_memory._GLOBAL_IDENTITIES"
 
 
 class TestT1EnableNewDirectory:
@@ -217,58 +216,6 @@ class TestT6EnablePreservesExistingConfig:
             enable_project(project, client)
 
         assert config_path.read_text() == custom_content
-
-
-class TestT7EnableCreatesEthosExtFiles:
-    def test_creates_quarry_yaml_files(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "claude.yaml").write_text("agent: claude\n")
-        (identities_dir / "rmh.yaml").write_text("agent: rmh\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert failed == []
-        assert "claude" in created
-        assert "rmh" in created
-        assert set(updated) == {"claude", "rmh"}
-        assert already_set == []
-
-        claude_yaml = identities_dir / "claude.ext" / "quarry.yaml"
-        rmh_yaml = identities_dir / "rmh.ext" / "quarry.yaml"
-        assert claude_yaml.exists()
-        assert rmh_yaml.exists()
-        assert "memory_collection: memory-claude" in claude_yaml.read_text()
-        assert "memory_collection: memory-rmh" in rmh_yaml.read_text()
-
-
-class TestT7bExistingQuarryYamlNotModified:
-    def test_wrong_memory_collection_preserved(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "claude.yaml").write_text("agent: claude\n")
-
-        ext_dir = identities_dir / "claude.ext"
-        ext_dir.mkdir()
-        quarry_yaml = ext_dir / "quarry.yaml"
-        quarry_yaml.write_text("memory_collection: wrong-name\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        created, _, _, _, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "claude" not in created
-        assert "memory_collection: wrong-name" in quarry_yaml.read_text()
 
 
 class TestT8EnableSkipsEthosWhenMissing:
@@ -495,69 +442,6 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
         # The parent registration must NOT be deregistered.
         assert client.deregistered == []
         assert client.collections == ["project"]
-
-
-class TestT16BootstrapEthosMemorySkipsBadYaml:
-    def test_skips_bad_yaml_continues(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "alice.yaml").write_text("agent: alice\n")
-        (identities_dir / "bad.yaml").write_text("agent: bad\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        from yaml import YAMLError
-
-        from quarry.doctor import _write_ethos_ext_session_context as original_write
-
-        def selective_raise(quarry_yaml: Path, handle: str) -> str:
-            if handle == "bad":
-                msg = "simulated YAML parse failure"
-                raise YAMLError(msg)
-            return original_write(quarry_yaml, handle)
-
-        monkeypatch.setattr(
-            "quarry.doctor._write_ethos_ext_session_context",
-            selective_raise,
-        )
-
-        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "alice" in created
-        # bad's quarry.yaml file was written (so it's "created"), but the
-        # session_context write raised — it lands in failed, never updated.
-        assert "bad" in created
-        assert "bad" in failed
-        assert "bad" not in updated
-        assert "bad" not in already_set
-
-        assert (identities_dir / "alice.ext" / "quarry.yaml").exists()
-        assert (identities_dir / "bad.ext" / "quarry.yaml").exists()
-
-    def test_non_utf8_identity_file_recorded_not_fatal(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A non-UTF8/corrupt ext quarry.yaml makes the session-context reader raise
-        # UnicodeDecodeError (a ValueError, not OSError). enable must record the
-        # handle in ethos_failed and continue, never crash.
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-        (identities_dir / "alice.yaml").write_text("agent: alice\n")
-        ext_dir = identities_dir / "alice.ext"
-        ext_dir.mkdir()
-        (ext_dir / "quarry.yaml").write_bytes(b"memory_collection: \xff\xfe bad\n")
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        _created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "alice" in failed
-        assert "alice" not in updated
-        assert "alice" not in already_set
 
 
 class TestT17EnableWithOverrideOnChildRaises:

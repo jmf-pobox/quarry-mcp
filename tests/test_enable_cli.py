@@ -41,7 +41,7 @@ def _patch_for_cli(
     """
     fake = FakeRegistryClient() if client is None else client
     with (
-        patch("quarry.enable._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
+        patch("quarry.ethos_memory._GLOBAL_IDENTITIES", tmp_path / "no-ethos"),
         patch.object(TargetResolver, "connect", return_value=fake),
     ):
         yield fake

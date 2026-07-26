@@ -1,11 +1,11 @@
 {
-  "total": 217,
+  "total": 216,
   "by_category": {
-    "noqa": 169,
-    "type_ignore": 8,
+    "noqa": 174,
+    "type_ignore": 7,
     "pylint_disable": 0,
-    "pyright_ignore": 5,
-    "per_file_ignores": 35
+    "pyright_ignore": 1,
+    "per_file_ignores": 34
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -25,7 +25,7 @@
       "noqa": 1
     },
     "src/quarry/cli_project.py": {
-      "noqa": 2
+      "noqa": 4
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
@@ -45,20 +45,18 @@
     "src/quarry/daemon/routes/registrations.py": {
       "noqa": 1
     },
-    "src/quarry/daemon/routes/sync.py": {
-      "noqa": 1
-    },
     "src/quarry/daemon/server.py": {
       "type_ignore": 1
+    },
+    "src/quarry/daemon/watch_reconcile.py": {
+      "noqa": 2
     },
     "src/quarry/db/storage.py": {
       "noqa": 7,
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 70,
-      "type_ignore": 1,
-      "pyright_ignore": 2
+      "noqa": 65
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -67,7 +65,10 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 6,
+      "noqa": 7
+    },
+    "src/quarry/ethos_memory.py": {
+      "noqa": 1,
       "pyright_ignore": 1
     },
     "src/quarry/extractors/image_extractor.py": {
@@ -84,8 +85,7 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 11,
-      "pyright_ignore": 2
+      "noqa": 13
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
@@ -114,6 +114,9 @@
     "src/quarry/proxy.py": {
       "noqa": 2
     },
+    "src/quarry/registrar.py": {
+      "noqa": 2
+    },
     "src/quarry/remote.py": {
       "noqa": 2
     },
@@ -127,6 +130,9 @@
       "noqa": 3,
       "type_ignore": 1
     },
+    "src/quarry/sitemap_web_client.py": {
+      "noqa": 1
+    },
     "src/quarry/sync_finalize.py": {
       "noqa": 1
     },
@@ -134,5 +140,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-21T17:20:41Z"
+  "updated_at": "2026-07-26T02:09:59Z"
 }

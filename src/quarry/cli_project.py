@@ -55,37 +55,12 @@ class ProjectCli:
         # Pass the raw path: enable_project owns normalization
         # (expanduser().resolve()). Resolving here would turn "~/proj" into
         # "./~/proj" before the tilde is ever expanded.
+        from quarry.enable_report import EnableReport  # noqa: PLC0415
+
         result = enable_project(
             directory, self._p.client(), collection_override=collection
         )
-
-        lines = [
-            f"Enabled quarry for {result.directory}",
-            f"  Collection: {result.collection}",
-            f"  Captures: {result.captures_collection}",
-        ]
-        if result.config_path:
-            lines.append(f"  Config: {result.config_path}")
-        if result.guide_deposited:
-            lines.append("  Deposited quarry guide to .punt-labs/quarry/CLAUDE.md")
-        if result.import_registered:
-            lines.append("  Registered @.punt-labs/quarry/CLAUDE.md in CLAUDE.md")
-        if result.legacy_block_stripped:
-            lines.append("  Removed legacy quarry block from CLAUDE.md")
-        if result.ethos_skipped:
-            lines.append("  Ethos: not installed (agent memory skipped)")
-        else:
-            if result.ethos_created:
-                lines.append(f"  Ethos created: {', '.join(result.ethos_created)}")
-            if result.ethos_updated:
-                lines.append(f"  Ethos updated: {', '.join(result.ethos_updated)}")
-            if result.memory_collections:
-                joined = ", ".join(result.memory_collections)
-                lines.append(f"  Memory collections: {joined}")
-        if result.ethos_failed:
-            # session_context never landed for these handles — surface the
-            # partial failure rather than let "Ethos created" imply success.
-            lines.append(f"  Ethos FAILED: {', '.join(result.ethos_failed)}")
+        lines = EnableReport(result).lines()
         self._p.emit(dataclasses.asdict(result), "\n".join(lines))
 
     def _disable(
@@ -106,24 +81,8 @@ class ProjectCli:
         # the shared _cli_errors boundary (empty stdout under --json, exit 1).
         # Pass the raw path: disable_project owns normalization
         # (expanduser().resolve()). Resolving here would mangle "~/proj".
-        result = disable_project(directory, self._p.client(), keep_data=keep_data)
+        from quarry.enable_report import DisableReport  # noqa: PLC0415
 
-        lines = [f"Disabled quarry for {result.directory}"]
-        if result.collection:
-            # A registration was present: report it in both keep-data branches so
-            # --keep-data does not look like only local files were touched.
-            fate = "chunk purge queued" if not keep_data else "kept indexed data"
-            lines.append(
-                f"  Deregistered {result.collection} ({result.removed} files); {fate}"
-            )
-        else:
-            # Idempotent no-op: nothing was registered (never enabled, or a prior
-            # partial disable already deregistered it).
-            lines.append("  Already disabled (no registration)")
-        if result.config_removed:
-            lines.append("  Config file removed")
-        if result.import_pruned:
-            lines.append("  Removed @.punt-labs/quarry/CLAUDE.md from CLAUDE.md")
-        if result.enabled_marker_removed:
-            lines.append("  Removed enabled marker (guide left dormant)")
+        result = disable_project(directory, self._p.client(), keep_data=keep_data)
+        lines = DisableReport(result, keep_data=keep_data).lines()
         self._p.emit(dataclasses.asdict(result), "\n".join(lines))
