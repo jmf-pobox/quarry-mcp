@@ -2,10 +2,13 @@
 
 **Bead:** quarry-ubj1
 **Mission:** m-2026-07-26-001 (design stage)
-**Status:** PROPOSED
+**Status:** RATIFIED (operator ruled on O-1 2026-07-26 — see §7)
 **Owner:** kpz
 **Write-set produced by this design:** `src/quarry/gpu_runtime.py`,
+`src/quarry/gpu_status.py`, `src/quarry/doctor.py`,
 `tests/test_gpu_runtime.py` (implementation stage — not this doc's scope).
+`gpu_status.py` + `doctor.py` are in the set because the operator chose to add
+a distinct `CUDA_UNSUPPORTED` status (O-1).
 
 ---
 
@@ -321,18 +324,26 @@ untouched, so `doctor.py:967-976` and the install display need no changes.
 6. `_cuda_available()`, `_restore_cpu()`, `_pip()`, `_clear_module_cache()`,
    `_gpu_present()`, `_resolve()`, `ensure()` — **unchanged**.
 
-`src/quarry/gpu_status.py`:
+`src/quarry/gpu_status.py` and `src/quarry/doctor.py` (**O-1 resolved — operator
+chose the distinct status, 2026-07-26**):
 
-- **No new hard-failure value needed.** The §4.4 "unsupported CUDA, kept CPU"
-  outcome and the §4.3 "GPU wheel installed but does not import, restored CPU"
-  outcome are both *recovered* (daemon works on CPU) — they reuse
-  `GpuStatus.RESTORED`. This keeps the exhaustive `match` in `GpuStatus.outcome`
-  (lines 38–50) intact with no new arm.
-  - **Open question O-1 (§7)** asks whether the operator wants a *distinct*
-    status value for "unsupported CUDA major" so `quarry doctor` can message it
-    specifically. If yes, that adds one `GpuStatus` member and one `match` arm;
-    it is a display refinement, not a correctness requirement. Recorded as an
-    open question rather than guessed.
+- **Add one `GpuStatus` member, `CUDA_UNSUPPORTED`**, for the §4.4 outcome: a GPU
+  is present but no `onnxruntime-gpu` build can be proven to import (unmappable
+  CUDA major, or no CUDA runtime resolvable at all), so the working CPU runtime
+  is kept. Add its arm to the exhaustive `match` in `GpuStatus.outcome`
+  (lines 38–50) with outcome `"recovered"` (the daemon works on CPU), and its
+  symbol/label.
+- **`doctor.py`** gets a specific branch so `quarry doctor` renders
+  `CUDA_UNSUPPORTED` as *"GPU present but CUDA {major} unsupported — running on
+  CPU"* (naming the detected vs supported majors), distinct from the generic
+  restore message. This is the display refinement O-1 asked about.
+- **Keep `GpuStatus.RESTORED`** for the §4.3 outcome that is genuinely a
+  *rollback*: an `onnxruntime-gpu` wheel was selected and installed, then failed
+  the post-install import re-probe, so CPU was reinstalled. Distinguishing the
+  two ("we never had a valid GPU wheel to install" vs "we installed one and it
+  didn't run") is exactly what the new status buys, and both share the
+  `"recovered"` outcome so the install display still treats them as warnings,
+  not hard failures.
 
 ### 4.7 OO / standards compliance for the touched file (the ratchet)
 
@@ -397,16 +408,17 @@ The mock `run_side_effect` gains an `ldconfig` branch returning a chosen
        guards that detection is not reached).
      - GPU present but `ldconfig` lists no `libcudart` at all (CUDA runtime
        missing): fail-loud branch — no `onnxruntime-gpu` install command issued,
-       CPU `onnxruntime` left in place, result `RESTORED` (recovered/warning), and
-       a warning is logged. Assert the install argv list contains **no**
-       `onnxruntime-gpu` entry.
+       CPU `onnxruntime` left in place, result `CUDA_UNSUPPORTED`
+       (recovered/warning), and a warning is logged. Assert the install argv list
+       contains **no** `onnxruntime-gpu` entry.
 
 5. **Unknown / newer-than-supported CUDA major → fail loud, do not mis-pin.**
    - `ldconfig -p` → `libcudart.so.14` only (a major with no table entry).
    - Assert: **no** `onnxruntime-gpu` install command is issued (crucially, it
      does **not** silently fall back to the 12 or 13 spec), CPU runtime retained,
-     result is the recovered/warning status, warning logged naming detected `{14}`
-     and supported `{12, 13}`.
+     result `CUDA_UNSUPPORTED`, warning logged naming detected `{14}`
+     and supported `{12, 13}`. Also assert `quarry doctor` renders the
+     CUDA-major-specific message for this status.
    - This is the "don't silently mis-pin" guarantee, tested directly.
 
 6. **Selected wheel installs but fails to import (verification catches it).**
@@ -418,7 +430,8 @@ The mock `run_side_effect` gains an `ldconfig` branch returning a chosen
 
 7. **`ldconfig` absent but GPU present.**
    - `shutil.which("ldconfig")` → `None`. Same outcome as case 4b: fail loud, keep
-     CPU, warn. Guards the boundary where the probe tool itself is missing.
+     CPU, warn, result `CUDA_UNSUPPORTED`. Guards the boundary where the probe
+     tool itself is missing.
 
 8. **Regression: unchanged early-exit paths still hold.**
    - `test_no_uv_on_path`, `test_cuda_already_available`,
@@ -479,15 +492,15 @@ TDD as the workflow requires for a bug fix.
 
 ## 7. Open questions (operator input)
 
-- **O-1 — distinct status for "unsupported CUDA major"?** §4.6 reuses
-  `GpuStatus.RESTORED` (recovered/warning) for both "wheel didn't import,
-  restored CPU" and "no supported CUDA major, kept CPU". Functionally correct and
-  keeps the enum's exhaustive `match` minimal. If the operator wants `quarry
-  doctor` to say specifically *"GPU present but CUDA 14 unsupported — running on
-  CPU"* vs the generic restore message, add one `GpuStatus` member (e.g.
-  `CUDA_UNSUPPORTED`) plus its `outcome` arm (`"recovered"`) and symbol. This is a
-  UX refinement, not a correctness change. Default if no answer: reuse `RESTORED`,
-  do not grow the enum.
+- **O-1 — distinct status for "unsupported CUDA major"? — RESOLVED (operator,
+  2026-07-26): ADD `CUDA_UNSUPPORTED`.** The operator chose the distinct status
+  over reusing `RESTORED`. Implementation adds a `GpuStatus.CUDA_UNSUPPORTED`
+  member with `outcome "recovered"` and a `doctor.py` branch rendering *"GPU
+  present but CUDA {major} unsupported — running on CPU"* (naming detected vs
+  supported majors). `CUDA_UNSUPPORTED` is used for the §4.4 fail-loud branch (no
+  mappable CUDA major / no CUDA runtime found); `RESTORED` remains the §4.3
+  rollback outcome (a wheel was installed, then failed the import re-probe). See
+  §4.6 for the exact changes.
 
 - **O-2 — verify the exact CUDA-12 floor.** §4.2 uses `>=1.19.0` as the low edge
   of the CUDA-12 line. The 1.27 *upper* boundary is confirmed by the failing host
