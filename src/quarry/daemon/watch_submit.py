@@ -83,11 +83,13 @@ class FinalizeThrottle:
         self._timers = {}
         return self
 
-    def request(self, database: str, submit: Callable[[], object]) -> None:
+    def request(self, database: str, submit: Callable[[], bool]) -> None:
         """Run *submit* now, or coalesce it into *database*'s trailing timer.
 
-        ``submit`` is a no-argument thunk so the throttle stays ignorant of jobs
-        and route keys.  A disabled interval (<= 0) runs every request inline.
+        ``submit`` is a no-argument thunk returning whether the finalize was
+        ADMITTED (the DES-042 queue can shed it when full), so the throttle stays
+        ignorant of jobs and route keys.  A disabled interval (<= 0) runs every
+        request inline.
         """
         if self._interval <= 0:
             submit()
@@ -109,32 +111,45 @@ class FinalizeThrottle:
             timer.cancel()
         self._timers.clear()
 
-    def mark_finalized(self, database: str) -> None:
-        """Record that *database* was just finalized: cancel any pending trailing
+    def mark_admitted(self, database: str) -> None:
+        """Record an ADMITTED out-of-band finalize: cancel any pending trailing
         timer and stamp the interval clock.
 
         Callers that finalize a database OUTSIDE this throttle — the reconcile and
-        explicit-sync scans, which run an immediate finalize directly — must call
-        this so their finalize and an already-armed trailing finalize for the same
+        explicit-sync scans, which run an immediate finalize directly — call this
+        so their finalize and an already-armed trailing finalize for the same
         database do not both run (a redundant double-compaction).  Cancelling,
         not just dropping, de-queues an overdue timer callback; stamping ``_last``
         makes the next in-window request coalesce behind the finalize that ran.
+
+        Call this ONLY when the finalize was admitted — a shed one must not stamp
+        (it never ran) and must leave any pending trailing timer intact to retry.
         """
+        self._consume_timer(database)
+        self._last[database] = self._loop.time()
+
+    def _fire(self, database: str, submit: Callable[[], bool]) -> None:
+        """Finalize *database* now: run submit, then stamp only if it was admitted.
+
+        Consume any pending trailing timer first: the immediate path fires exactly
+        when a trailing timer is due (both at ``last + interval``), so a debounce
+        flush in that tick would otherwise run this finalize AND leave the overdue
+        timer queued — two finalizes for one interval.
+
+        Stamp the clock only on ADMISSION.  A shed submit (queue full) never ran a
+        finalize, so stamping would push the next attempt out a whole interval;
+        leaving ``_last`` unstamped lets the next ``request`` retry immediately
+        (the reconcile at ``watch_safety_scan_s`` is the eventual backstop).
+        """
+        self._consume_timer(database)
+        if submit():
+            self._last[database] = self._loop.time()
+
+    def _consume_timer(self, database: str) -> None:
+        """Cancel and drop any pending or just-fired trailing timer for *database*."""
         timer = self._timers.pop(database, None)
         if timer is not None:
             timer.cancel()
-        self._last[database] = self._loop.time()
-
-    def _fire(self, database: str, submit: Callable[[], object]) -> None:
-        """Finalize *database* now: stamp the clock, cancel any timer, then submit.
-
-        The immediate path fires exactly when a trailing timer is due (both at
-        ``last + interval``), so without the cancel in ``mark_finalized`` a
-        debounce flush in that tick would run this finalize AND leave the overdue
-        timer queued — two finalizes for one interval.
-        """
-        self.mark_finalized(database)
-        submit()
 
 
 @final
@@ -206,7 +221,7 @@ class WatchSubmitter:
             self._submit_scan_job(batch.key, root, db, settings)
             self._throttle.request(
                 batch.key.database,
-                lambda: self._submit_finalize(batch.key, db, settings),
+                lambda: self._admitted_finalize(batch.key, db, settings),
             )
             return
         failed = self._submit_deltas(batch, db, settings, root)
@@ -220,7 +235,7 @@ class WatchSubmitter:
         # deregistered) collection key is harmless — it is only the routing key.
         self._throttle.request(
             batch.key.database,
-            lambda: self._submit_finalize(batch.key, db, settings),
+            lambda: self._admitted_finalize(batch.key, db, settings),
         )
 
     def submit_scan(self, key: RouteKey, root: Path) -> list[TaskState]:
@@ -233,16 +248,20 @@ class WatchSubmitter:
         The high-frequency bulk-churn path (``on_batch``) throttles its finalize
         instead.  A scan shed by a full queue is recovered by the reconcile.
 
-        This immediate finalize is registered with the throttle (``mark_finalized``)
+        This immediate finalize registers with the throttle (``mark_admitted``)
         so it cancels any trailing finalize already armed for the same database and
         resets that database's interval clock — otherwise a reconcile/sync finalize
         and an armed trailing finalize would both run (a redundant double-compaction).
+        It registers ONLY when the queue admitted the finalize: a shed one never
+        ran, so it must not stamp and must leave a pending trailing timer to retry.
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
         scan = self._submit_scan_job(key, root, db, settings)
-        self._throttle.mark_finalized(key.database)
-        return [scan, self._submit_finalize(key, db, settings)]
+        finalize = self._submit_finalize(key, db, settings)
+        if finalize.status != "failed":
+            self._throttle.mark_admitted(key.database)
+        return [scan, finalize]
 
     def _submit_scan_job(
         self, key: RouteKey, root: Path, db: Database, settings: Settings
@@ -250,6 +269,16 @@ class WatchSubmitter:
         """Submit the bulk re-scan/index job for *key*; return its task state."""
         scan = CollectionSyncJob(db, settings, key.collection, root)
         return self._submit_tracked(key, scan, "sync")
+
+    def _admitted_finalize(
+        self, key: RouteKey, db: Database, settings: Settings
+    ) -> bool:
+        """Submit the coalesced finalize; return True iff the queue admitted it.
+
+        The throttle stamps its interval clock only on admission, so the return
+        must distinguish a shed finalize (queue full) from one that ran.
+        """
+        return self._submit_finalize(key, db, settings).status != "failed"
 
     @staticmethod
     def summarize_scan(
