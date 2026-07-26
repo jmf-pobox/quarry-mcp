@@ -1201,6 +1201,49 @@ This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` ch
 4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
 5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.
 
+### Amendment 2026-07-26 — LanceDB compute-pool cap + compaction throttle (quarry-exz9)
+
+The original DES-032 caps governed ONNX/OMP but **not LanceDB's own tokio
+compute runtime**, which the Rust core sizes to `num_cpus`. With the always-on
+watch loop (DES-045), ordinary dev churn (a `make check` rewriting files across
+the ~20 registered repos) fired a per-collection finalize — `optimize()` plus a
+full `create_fts_index("text", replace=True)` rebuild — and that FTS/compaction
+work seized every core, spiking the daemon to ~291% CPU. A background service
+must stay bounded *while the developer works*, so this is a real defect, not a
+"machine is busy" excuse.
+
+Two structural mitigations:
+
+1. **Cap LanceDB's compute + IO pools.** `ThreadConfig.apply_env_limits()` now
+   clamps `LANCE_CPU_THREADS`/`LANCE_IO_THREADS` (default 2) alongside `OMP_*`,
+   applied in `DaemonServer.run()` immediately before the first `lancedb.connect`
+   in `warm()`. The clamp is **fail-closed**: a lower operator value is honored,
+   a higher or non-numeric inherited value is forced down to the cap (a
+   `setdefault` would yield upward to a stale `LANCE_CPU_THREADS=32` and void the
+   ceiling). Measured (8-core): the tokio/FTS pool tracks the cap, not
+   `num_cpus` (33→14 workers as the cap goes 8→2), so the ceiling holds
+   core-count-independently. The FTS rebuild runs on LanceDB's **native**
+   inverted index (`use_tantivy=False`, the default) — there is no separate
+   uncapped Tantivy `IndexWriter` pool, so no search-engine change was needed.
+2. **Throttle the finalize.** `FinalizeThrottle` coalesces the per-batch
+   finalize to at most one per `watch_optimize_min_interval_s` (default 30 s)
+   **per database**, with a trailing timer so FTS still catches up after churn
+   settles. Freshness is therefore database-granular, not per-collection; the
+   `watch_safety_scan_s` reconcile (300 s) is the unthrottled backstop that
+   re-finalizes every registered collection.
+
+Trade-off (accepted): the cap is process-global, so it collapses DES-032's
+query/sync thread isolation onto one 2-thread lance runtime. Measured search
+latency under a concurrent finalize is comparable-to-better than uncapped (p95
+214 ms vs 264 ms — the cap tames the finalize's own flooding); the cost is on
+baseline flat-scan throughput (p50 70 ms vs 45 ms). Bulk compaction is ~1.65×
+slower (not the naive 4×; it is partly IO-bound). Acceptable for a background
+daemon whose ingest is not latency-critical (DES-034 bounds the working set).
+
+This also corrects a stale reference: DES-017 and DES-023 name the FTS backend
+"Tantivy," but the shipped index is LanceDB's native FTS (`use_tantivy=False`).
+The name is legacy; the engine is native and rides the capped runtime.
+
 ## DES-033: User-Configurable Embedding Thread Count — RESERVED
 
 **Status:** RESERVED (not adopted)
