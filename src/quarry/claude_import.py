@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
-import os
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.atomic_file import AtomicFile
+from quarry.file_lock import FileLock
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
 __all__ = ["ClaudeMdImport"]
@@ -42,15 +39,13 @@ class ClaudeMdImport:
       line uses the host file's existing EOL. Delegated to :class:`AtomicFile`.
     """
 
-    __slots__ = ("_file", "_lock_path")
+    __slots__ = ("_file",)
 
     _file: AtomicFile
-    _lock_path: Path
 
     def __new__(cls, path: Path) -> Self:
         self = super().__new__(cls)
         self._file = AtomicFile(path)
-        self._lock_path = path.parent / f".{path.name}.lock"
         return self
 
     @property
@@ -66,7 +61,7 @@ class ClaudeMdImport:
         the import is never glued to the user's prose.
         """
         self._validate_import_line(import_line)
-        with self._locked():
+        with FileLock(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
             if self._matching_toplevel_indices(lines, import_line):
@@ -84,7 +79,7 @@ class ClaudeMdImport:
         Claude Code imports, so only those are the tool's to remove.
         """
         self._validate_import_line(import_line)
-        with self._locked():
+        with FileLock(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
             hits = set(self._matching_toplevel_indices(lines, import_line))
@@ -160,24 +155,3 @@ class ClaudeMdImport:
         if "\r" in content:
             return "\r"
         return "\n"
-
-    @contextlib.contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Hold an exclusive ``flock`` on the sibling lock file for one mutation.
-
-        The lock serializes independent ``enable`` / ``disable`` invocations that
-        race on the same host file; the atomic rename alone prevents a torn file
-        but not a lost update. The lock file lives beside the target so it shares
-        the directory the atomic rename needs anyway.
-        """
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
-        finally:
-            # flock releases on close; unlock first so a reader waiting on the
-            # same fd wakes even if close is delayed by the interpreter.
-            with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
