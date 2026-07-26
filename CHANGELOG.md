@@ -35,8 +35,36 @@ across `transform`, `index`, and `connector`).
   store. It embeds no engine and is not a standalone install: quarry (the `quarry`
   binary + a running daemon) must be present first, then `quarry install`
   auto-configures Desktop or you double-click the bundle to add it yourself.
+- **infra (install.sh)**: `QUARRY_LOCAL_WHEEL=/path/to/wheel` installs a
+  working-tree wheel instead of the PyPI-pinned release — for offline/air-gapped
+  installs, pre-release testing, and the clean-machine harness. Unset (the
+  default) installs `punt-quarry==<VERSION>` from PyPI as before.
+- **infra (test harness)**: a clean-machine Docker gate, `make test-install-clean`
+  (CI: `.github/workflows/install-harness.yml`, path-filtered to `install.sh` +
+  `tests/harness/**`). It builds a working-tree wheel and runs `install.sh`
+  end-to-end as a fresh, unprivileged user in a pinned `python:3.13-slim`
+  container — no uv, no quarry, no prior state — asserting the CLI-only path
+  across both skip triggers (claude-absent auto-skip and claude-present
+  `--no-plugin`/`QUARRY_NO_PLUGIN=1` operator-driven skip), that no
+  marketplace/plugin step runs, that the "Restart Claude Code" line is absent,
+  and that `quarry version`/`quarry doctor` plus a real `remember`→`find`
+  round-trip work. Closes the gap the mock unit tests and venv wheel test could
+  not: does `install.sh` actually install a working quarry from scratch.
 
 ### Fixed
+
+- **infra (install.sh)**: the CLI-only install could not complete on a headless
+  machine (server, minimal container). `rapidocr` pulls the GUI `opencv-python`,
+  whose `cv2` build dynamically links X11/GL libraries (`libGL.so.1`,
+  `libxcb.so.1`) absent without a desktop; it ships the same `cv2` module as
+  quarry's pinned `opencv-python-headless` and shadows it, so `import cv2` failed
+  to load. That made `quarry install`/`quarry doctor` report required-check
+  failures (`Local OCR`, `Core imports: Failed: cv2`), which aborted `install.sh`
+  under `set -e`. The installer now passes a uv override (`opencv-python;
+  sys_platform == "never"`) that drops the GUI build for the whole resolution,
+  leaving `opencv-python-headless` as the sole `cv2` provider — verified
+  end-to-end on a bare `python:3.13-slim` container (`Local OCR: RapidOCR engine
+  OK`, `Core imports: 8 modules OK`).
 
 - **infra (mcpb)**: restore the Claude Desktop `.mcpb` download. The README link
   (`releases/latest/download/punt-quarry.mcpb`) 404'd because no release ever
