@@ -996,3 +996,42 @@ def test_local_wheel_missing_file_fails_clearly(env: dict[str, str]) -> None:
     assert "QUARRY_LOCAL_WHEEL" in combined, (
         "the failure must name QUARRY_LOCAL_WHEEL so the cause is obvious"
     )
+
+
+def test_overrides_tempfile_cleaned_up_on_failure(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """The uv overrides temp file is removed even when install.sh aborts between
+    the mktemp and the install (Class-1 cleanup via an EXIT/INT/TERM trap).
+
+    A missing QUARRY_LOCAL_WHEEL trips the validation branch, which no longer has
+    a manual ``rm`` — only the trap can clean the temp file. With TMPDIR pointed
+    at a fresh dir, any survivor is a leak.
+    """
+    tmpdir = tmp_path / "ovr-tmp"
+    tmpdir.mkdir()
+    local_env = {
+        **env,
+        "TMPDIR": str(tmpdir),
+        "QUARRY_LOCAL_WHEEL": "/nonexistent/quarry.whl",
+    }
+    result = _run_script(INSTALL_SH, local_env)
+    assert result.returncode != 0, "a missing local wheel must fail the install"
+    leftovers = list(tmpdir.iterdir())
+    assert leftovers == [], f"overrides temp file leaked on abort: {leftovers}"
+
+
+def test_overrides_tempfile_cleaned_up_on_success(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """On a normal install the overrides temp file is removed (rm + trap release)
+    and nothing is left behind in TMPDIR."""
+    tmpdir = tmp_path / "ovr-tmp-ok"
+    tmpdir.mkdir()
+    local_env = {**env, "TMPDIR": str(tmpdir)}
+    result = _run_script(INSTALL_SH, local_env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    leftovers = list(tmpdir.iterdir())
+    assert leftovers == [], f"overrides temp file leaked on success: {leftovers}"

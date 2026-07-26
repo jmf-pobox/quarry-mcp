@@ -15,12 +15,16 @@ on:
     paths:
       - install.sh
       - tests/harness/**
+      # .dockerignore controls the Docker build context — a change that breaks
+      # re-inclusion of install.sh / guide.sh / the staged wheel must run the gate.
+      - .dockerignore
       - .github/workflows/install-harness.yml
   pull_request:
     branches: [main]
     paths:
       - install.sh
       - tests/harness/**
+      - .dockerignore
       - .github/workflows/install-harness.yml
 
 permissions:

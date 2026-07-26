@@ -197,6 +197,14 @@ info "Installing $PACKAGE..."
 # resolution (the marker never matches), leaving `opencv-python-headless` as the
 # sole cv2 provider.  uv --overrides takes a requirements FILE, so write one.
 OPENCV_OVERRIDE="$(mktemp)"
+# Class-1 temp-file cleanup: remove the overrides file on ANY exit from here on
+# -- normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
+# before the install.  A per-branch `rm` would leak on an interrupt or on any
+# command that fails between the mktemp and the install.  The trap is released
+# right after `uv tool install` (below), before Step 8 registers its own EXIT
+# trap for the HTTPS rewrite -- a shell holds only one handler per signal, so the
+# two must not overlap.
+trap 'rm -f "$OPENCV_OVERRIDE"' EXIT INT TERM
 printf '%s\n' 'opencv-python ; sys_platform == "never"' > "$OPENCV_OVERRIDE"
 
 # QUARRY_LOCAL_WHEEL installs a working-tree wheel instead of the PyPI pin --
@@ -206,7 +214,6 @@ printf '%s\n' 'opencv-python ; sys_platform == "never"' > "$OPENCV_OVERRIDE"
 # installer.  Unset (the default) installs "$PACKAGE==$VERSION" from PyPI.
 if [ -n "${QUARRY_LOCAL_WHEEL:-}" ]; then
   if [ ! -f "$QUARRY_LOCAL_WHEEL" ] || [ ! -s "$QUARRY_LOCAL_WHEEL" ]; then
-    rm -f "$OPENCV_OVERRIDE"
     fail "QUARRY_LOCAL_WHEEL set but not a readable, non-empty file: $QUARRY_LOCAL_WHEEL"
   fi
   INSTALL_TARGET="$QUARRY_LOCAL_WHEEL"
@@ -216,11 +223,13 @@ else
 fi
 
 # shellcheck disable=SC2086
-uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" || {
-  rm -f "$OPENCV_OVERRIDE"
+uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" ||
   fail "Failed to install $INSTALL_TARGET"
-}
+
+# Overrides file is no longer needed: remove it and release the trap so Step 8's
+# EXIT trap (registered only on the plugin path) is uncontested.
 rm -f "$OPENCV_OVERRIDE"
+trap - EXIT INT TERM
 ok "$INSTALL_TARGET installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then

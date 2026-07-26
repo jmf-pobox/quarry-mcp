@@ -30,7 +30,10 @@ ARG BASE_DIGEST=sha256:9d7f287598e1a5a978c015ee176d8216435aaf335ed69ac3c38dd1bbb
 # never re-downloads the ~120 MB model — the one slow step, paid once at build.
 FROM python@${BASE_DIGEST} AS modelcache
 ENV HF_HOME=/opt/hf-cache
-RUN pip install --no-cache-dir "huggingface-hub>=0.26.0" \
+# Pinned to quarry's resolved huggingface-hub (uv.lock) so a breaking hub release
+# cannot make the harness flaky while the repo is unchanged — a digest-pinned
+# base image with an unpinned tool is a false floor.
+RUN pip install --no-cache-dir "huggingface-hub==1.4.1" \
  && python - <<'PY'
 from huggingface_hub import hf_hub_download
 
