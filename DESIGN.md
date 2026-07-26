@@ -1221,10 +1221,14 @@ Two structural mitigations:
 1. **Cap LanceDB's compute + IO pools.** `ThreadConfig.apply_env_limits()` now
    clamps `LANCE_CPU_THREADS`/`LANCE_IO_THREADS` (default 2) alongside `OMP_*`,
    applied in `DaemonServer.run()` immediately before the first `lancedb.connect`
-   in `warm()`. The clamp is **fail-closed**: a lower operator value is honored,
-   a higher or non-numeric inherited value is forced down to the cap (a
-   `setdefault` would yield upward to a stale `LANCE_CPU_THREADS=32` and void the
-   ceiling). Measured (8-core): the tokio/FTS pool tracks the cap, not
+   in `warm()`. The clamp is **fail-closed with a per-variable floor**: an
+   inherited/operator value is honored only within `[floor, cap]`; a higher or
+   non-numeric value is forced down to the cap (a `setdefault` would yield upward
+   to a stale `LANCE_CPU_THREADS=32` and void the ceiling), and a below-floor
+   value is raised to the floor. For the LANCE pools floor == cap == 2
+   (`LANCE_CPU_THREADS=1` stalls lance's runtime), so a `1` is raised to `2`,
+   never honored as a "tighter bound"; `OMP_NUM_THREADS` keeps floor 1. Measured
+   (8-core): the tokio/FTS pool tracks the cap, not
    `num_cpus` (33→14 workers as the cap goes 8→2), so the ceiling holds
    core-count-independently. The FTS rebuild runs on LanceDB's **native**
    inverted index (`use_tantivy=False`, the default) — there is no separate
