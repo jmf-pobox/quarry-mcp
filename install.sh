@@ -18,6 +18,11 @@
 #
 # --network: same as default, but binds daemon to 0.0.0.0 instead of localhost.
 # Requires QUARRY_API_KEY.  Prints CA fingerprint and remote-login instructions.
+#
+# QUARRY_LOCAL_WHEEL=/path/to/wheel installs a working-tree wheel instead of the
+# PyPI-pinned release -- for offline/air-gapped installs, pre-release testing,
+# and the clean-machine harness (tests/harness/), which must exercise THIS
+# branch's package, not the shipped version.
 set -eu
 
 # --- Argument parsing ---
@@ -38,7 +43,10 @@ usage() {
     '' \
     'Environment:' \
     '  QUARRY_NO_PLUGIN=1  Same as --no-plugin, for argument-hostile contexts:' \
-    '                      curl -fsSL .../install.sh | QUARRY_NO_PLUGIN=1 sh'
+    '                      curl -fsSL .../install.sh | QUARRY_NO_PLUGIN=1 sh' \
+    '  QUARRY_LOCAL_WHEEL=/path/to/wheel' \
+    '                      Install a working-tree wheel instead of the PyPI pin' \
+    '                      (offline/air-gapped installs, pre-release + harness testing).'
 }
 
 # Parse before any work.  A misspelled flag (--no-plguin) must not be silently
@@ -177,9 +185,57 @@ fi
 
 info "Installing $PACKAGE..."
 
+# The OCR dependency rapidocr declares the FULL `opencv-python`, whose GUI build
+# dynamically links X11/GL system libraries (libGL.so.1, libxcb.so.1, libglib)
+# that headless servers and minimal containers do not carry.  quarry already
+# pins the server-safe `opencv-python-headless`, but BOTH wheels ship the same
+# `cv2` module, so the GUI build shadows the headless one and `import cv2` then
+# fails to load on a headless box.  That failure makes `quarry install` /
+# `quarry doctor` report required-check failures, which aborts this installer
+# under `set -e` -- i.e. a clean-machine install of the CLI is impossible on any
+# box without a desktop.  A uv override drops the GUI build for the whole
+# resolution (the marker never matches), leaving `opencv-python-headless` as the
+# sole cv2 provider.  uv --overrides takes a requirements FILE, so write one.
+#
+# Use an EXPLICIT path template: bare `mktemp` (GNU default) fails on BSD/macOS,
+# where `mktemp` requires a template argument -- under `set -eu` that aborts the
+# installer before `uv tool install`, breaking every macOS install.  An absolute
+# template with trailing X's is portable across BSD and GNU mktemp.
+OPENCV_OVERRIDE="$(mktemp "${TMPDIR:-/tmp}/quarry-opencv-override.XXXXXX")"
+# Class-1 temp-file cleanup: remove the overrides file on ANY exit from here on
+# -- normal completion, a `fail` (which exits), or a SIGINT/SIGTERM in the window
+# before the install.  A per-branch `rm` would leak on an interrupt or on any
+# command that fails between the mktemp and the install.  The trap is released
+# right after `uv tool install` (below), before Step 8 registers its own EXIT
+# trap for the HTTPS rewrite -- a shell holds only one handler per signal, so the
+# two must not overlap.
+trap 'rm -f "$OPENCV_OVERRIDE"' EXIT INT TERM
+printf '%s\n' 'opencv-python ; sys_platform == "never"' > "$OPENCV_OVERRIDE"
+
+# QUARRY_LOCAL_WHEEL installs a working-tree wheel instead of the PyPI pin --
+# for offline / air-gapped installs, pre-release testing, and the clean-machine
+# harness (tests/harness/), which must exercise THIS branch's package, not the
+# already-released $VERSION.  Same spirit as ETHOS_LOCAL_BINARY in ethos's
+# installer.  Unset (the default) installs "$PACKAGE==$VERSION" from PyPI.
+if [ -n "${QUARRY_LOCAL_WHEEL:-}" ]; then
+  if [ ! -f "$QUARRY_LOCAL_WHEEL" ] || [ ! -s "$QUARRY_LOCAL_WHEEL" ]; then
+    fail "QUARRY_LOCAL_WHEEL set but not a readable, non-empty file: $QUARRY_LOCAL_WHEEL"
+  fi
+  INSTALL_TARGET="$QUARRY_LOCAL_WHEEL"
+  info "Installing from local wheel: $QUARRY_LOCAL_WHEEL"
+else
+  INSTALL_TARGET="$PACKAGE==$VERSION"
+fi
+
 # shellcheck disable=SC2086
-uv tool install --force $PYTHON_FLAG "$PACKAGE==$VERSION" || fail "Failed to install $PACKAGE==$VERSION"
-ok "$PACKAGE==$VERSION installed"
+uv tool install --force --overrides "$OPENCV_OVERRIDE" $PYTHON_FLAG "$INSTALL_TARGET" ||
+  fail "Failed to install $INSTALL_TARGET"
+
+# Overrides file is no longer needed: remove it and release the trap so Step 8's
+# EXIT trap (registered only on the plugin path) is uncontested.
+rm -f "$OPENCV_OVERRIDE"
+trap - EXIT INT TERM
+ok "$INSTALL_TARGET installed"
 
 if ! command -v "$BINARY" >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
