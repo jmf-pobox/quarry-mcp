@@ -33,6 +33,7 @@ htmlcov/
 
 # pytest
 .pytest_cache/
+.pytest-work/
 
 # ruff
 .ruff_cache/

@@ -108,10 +108,10 @@ class TableOptimizer:
         table.optimize(cleanup_older_than=timedelta(hours=1))
         logger.info("Optimized table %s (compacted + pruned versions >1h)", TABLE_NAME)
 
-        # Rebuild FTS index -- compaction changes fragment IDs, so the old
-        # Tantivy index has stale references.  replace=True forces a full
-        # rebuild.  This is O(n) in table size but only runs after bulk
-        # sync operations, not on every query.
+        # Rebuild the FTS index -- compaction changes fragment IDs, so the old
+        # index has stale references.  This builds LanceDB's native (Rust) FTS
+        # index on lance's own runtime, bounded by LANCE_CPU_THREADS (DES-032);
+        # replace=True forces a full O(n) rebuild (the watch loop rate-limits it).
         try:
             table.create_fts_index("text", replace=True)
             logger.info("Rebuilt FTS index after optimization")

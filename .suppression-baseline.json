@@ -1,11 +1,10 @@
 {
-  "total": 216,
   "by_category": {
     "noqa": 174,
-    "type_ignore": 7,
+    "per_file_ignores": 34,
     "pylint_disable": 0,
     "pyright_ignore": 1,
-    "per_file_ignores": 34
+    "type_ignore": 7
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -140,5 +139,6 @@
       "noqa": 1
     }
   },
+  "total": 216,
   "updated_at": "2026-07-26T04:50:39Z"
 }
