@@ -164,7 +164,8 @@ Search by meaning:
 | `quarry use <name>` | Switch the active database |
 | `quarry status` | Database dashboard |
 | `quarry doctor` | Health check |
-| `quarry install` / `quarry uninstall` | Set up / remove the daemon service, TLS, MCP config |
+| `quarry install` | Set up the daemon service, TLS certs, and MCP config |
+| `quarry uninstall` | Remove the daemon service (its launchd/systemd unit) |
 | `quarry login <host> --api-key <token>` | Connect to a remote server (TOFU pinning) |
 | `quarry logout` | Disconnect, revert to the local daemon |
 
