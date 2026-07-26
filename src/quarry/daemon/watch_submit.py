@@ -24,7 +24,7 @@ from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from quarry.config import Settings
@@ -43,6 +43,67 @@ _BACKOFF_MAX_S = 30.0
 
 
 @final
+class FinalizeThrottle:
+    """Rate-limit the per-database finalize (optimize + full FTS rebuild).
+
+    A finalize is the heavy tail of every watch batch, so under sustained churn
+    the debouncer flushes one every window and the daemon compacts continuously.
+    This coalesces them per database: the first request runs immediately, any
+    request inside the interval arms a single trailing timer that runs one
+    finalize when the interval elapses — so continuous churn costs one finalize
+    per interval, and a finalize always lands after churn settles (no permanent
+    FTS lag).  All state lives on the event loop, so no lock is needed.
+    """
+
+    __slots__ = ("_interval", "_last", "_loop", "_timers")
+
+    _loop: asyncio.AbstractEventLoop
+    _interval: float
+    _last: dict[str, float]
+    _timers: dict[str, asyncio.TimerHandle]
+
+    def __new__(cls, loop: asyncio.AbstractEventLoop, interval_s: float) -> Self:
+        self = super().__new__(cls)
+        self._loop = loop
+        self._interval = interval_s
+        self._last = {}
+        self._timers = {}
+        return self
+
+    def request(self, database: str, submit: Callable[[], object]) -> None:
+        """Run *submit* now, or coalesce it into *database*'s trailing timer.
+
+        ``submit`` is a no-argument thunk so the throttle stays ignorant of jobs
+        and route keys.  A disabled interval (<= 0) runs every request inline.
+        """
+        if self._interval <= 0:
+            submit()
+            return
+        now = self._loop.time()
+        last = self._last.get(database)
+        if last is None or now - last >= self._interval:
+            self._fire(database, submit)
+            return
+        if database not in self._timers:
+            delay = last + self._interval - now
+            self._timers[database] = self._loop.call_later(
+                delay, self._fire, database, submit
+            )
+
+    def cancel_all(self) -> None:
+        """Cancel every pending trailing finalize (loop shutdown)."""
+        for timer in self._timers.values():
+            timer.cancel()
+        self._timers.clear()
+
+    def _fire(self, database: str, submit: Callable[[], object]) -> None:
+        """Submit one finalize for *database* and stamp the interval clock."""
+        self._timers.pop(database, None)
+        self._last[database] = self._loop.time()
+        submit()
+
+
+@final
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed live events."""
 
@@ -52,6 +113,7 @@ class WatchSubmitter:
         "_dispatcher",
         "_loop",
         "_roster",
+        "_throttle",
         "_timers",
     )
 
@@ -62,6 +124,7 @@ class WatchSubmitter:
     _backoff: dict[RouteKey, float]
     # Pending backoff re-arm timers, tracked so shutdown can cancel them.
     _timers: set[asyncio.TimerHandle]
+    _throttle: FinalizeThrottle
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -73,13 +136,17 @@ class WatchSubmitter:
         self._dispatcher = None
         self._backoff = {}
         self._timers = set()
+        self._throttle = FinalizeThrottle(
+            loop, ctx.settings.watch_optimize_min_interval_s
+        )
         return self
 
     def cancel_pending(self) -> None:
-        """Cancel every outstanding backoff re-arm timer (shutdown)."""
+        """Cancel every outstanding backoff re-arm and trailing-finalize timer."""
         for timer in self._timers:
             timer.cancel()
         self._timers.clear()
+        self._throttle.cancel_all()
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
         """Wire the debouncer used to re-arm shed events (sink is created first)."""
@@ -104,7 +171,14 @@ class WatchSubmitter:
             self._defer(batch.key, failed)
             return
         self._backoff.pop(batch.key, None)  # batch cleared — reset backoff
-        self._submit_finalize(batch.key, db, settings)
+        # Rate-limit the heavy finalize: sustained churn coalesces into one
+        # optimize+FTS-rebuild per interval per database, not one per batch. The
+        # finalize is table-wide, so running under this batch's (possibly later
+        # deregistered) collection key is harmless — it is only the routing key.
+        self._throttle.request(
+            batch.key.database,
+            lambda: self._submit_finalize(batch.key, db, settings),
+        )
 
     def submit_scan(self, key: RouteKey, root: Path) -> list[TaskState]:
         """Submit a bulk scan then its coalesced finalize; return their task states.
