@@ -45,7 +45,15 @@ class FileLock:
     def __enter__(self) -> Self:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        # A blocking flock can raise (EINTR on a signal, ENOLCK on some
+        # filesystems) — __exit__ never runs if __enter__ propagates, so close
+        # the fd here or it leaks for the process lifetime.
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except BaseException:
+            os.close(self._fd)
+            self._fd = -1
+            raise
         return self
 
     def __exit__(

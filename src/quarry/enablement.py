@@ -58,15 +58,18 @@ class Enablement:
         return self
 
     def enable(self) -> EnablementResult:
-        """Deposit the guide, write the marker, register the import.
+        """Deposit the guide, register the import, then write the marker.
 
         The deposit and the marker are unconditional (wholesale-overwrite
         determinism, § 2.2); the register reports whether it changed the host
-        CLAUDE.md.
+        CLAUDE.md. Register (flock + read + atomic temp+rename) runs before the
+        near-infallible marker touch so a register failure leaves neither
+        present, never the marker-without-import state the § 2.11 biconditional
+        forbids — the marker is the commit point.
         """
         self._guidance.deposit()
-        self._marker.write()
         import_registered = self._import.register(REPO_IMPORT_LINE)
+        self._marker.write()
         return EnablementResult(
             guide_deposited=True,
             enabled_marker_written=True,

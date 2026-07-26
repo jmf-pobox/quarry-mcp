@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
 from quarry.guidance import REPO_IMPORT_LINE
@@ -33,6 +36,22 @@ def test_enable_is_idempotent(tmp_path: Path) -> None:
     assert first.import_registered is True
     assert second.import_registered is False
     assert (tmp_path / "CLAUDE.md").read_text().count(REPO_IMPORT_LINE) == 1
+
+
+def test_enable_leaves_no_marker_when_register_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.11: a register() failure leaves neither marker nor import behind."""
+
+    def boom(self: ClaudeMdImport, import_line: str) -> bool:
+        raise OSError("register failed")
+
+    monkeypatch.setattr(ClaudeMdImport, "register", boom)
+
+    with pytest.raises(OSError, match="register failed"):
+        Enablement(tmp_path).enable()
+
+    assert not EnabledMarker(tmp_path).is_present()
 
 
 def test_disable_prunes_import_and_marker_leaves_guide(tmp_path: Path) -> None:

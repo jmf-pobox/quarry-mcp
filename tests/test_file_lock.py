@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import multiprocessing
+import os
 import time
 from pathlib import Path
+
+import pytest
 
 from quarry.file_lock import FileLock
 
@@ -22,6 +26,39 @@ def test_reentrant_sequential_acquire(tmp_path: Path) -> None:
         pass
     with FileLock(target):
         pass
+
+
+def test_enter_closes_fd_when_flock_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raising flock closes the fd __enter__ opened, so it does not leak."""
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def spy_open(path: str, flags: int, mode: int = 0o777) -> int:
+        fd = real_open(path, flags, mode)
+        opened.append(fd)
+        return fd
+
+    def spy_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    def boom(fd: int, operation: int) -> None:
+        raise OSError("flock interrupted")
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "close", spy_close)
+    monkeypatch.setattr(fcntl, "flock", boom)
+
+    lock = FileLock(tmp_path / "CLAUDE.md")
+    with pytest.raises(OSError, match="flock interrupted"):
+        lock.__enter__()
+
+    assert opened, "expected __enter__ to open the lock fd"
+    assert closed == opened, "the opened fd must be closed, not leaked"
 
 
 def _increment_under_lock(target_str: str, counter_str: str) -> None:
