@@ -29,6 +29,7 @@ from quarry.daemon.tasks import task_terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
+from quarry.scratch_paths import ScratchGuard
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -53,6 +54,7 @@ class WatchLoop:
     __slots__ = (
         "_ctx",
         "_dispatcher",
+        "_guard",
         "_loop",
         "_reconciler",
         "_roster",
@@ -71,12 +73,14 @@ class WatchLoop:
     _loop: asyncio.AbstractEventLoop | None
     _safety_task: asyncio.Task[None] | None
     _started: bool
+    _guard: ScratchGuard
 
     def __new__(
         cls, ctx: DaemonContext, *, source: FsEventSource | None = None
     ) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
+        self._guard = ScratchGuard()
         # A test injects a synthetic source; production builds a watchdog observer
         # lazily in start() so importing the loop never starts a thread.
         self._source = source
@@ -250,6 +254,15 @@ class WatchLoop:
         if self._roster is None or self._submitter is None:
             return
         resolved = root.resolve()
+        # A system-temp root (``/private/tmp`` was in the operator's registry) is
+        # never watched or scanned: watching it OCR-storms everything the OS drops
+        # in temp and thrashes the reconcile.  One predicate, shared with the
+        # indexer (scratch *below* a real root is pruned by the discovery walk).
+        if self._guard.refuses_root(resolved):
+            logger.info(
+                "watch: skipping temp/scratch root %s (%s)", resolved, collection
+            )
+            return
         key = RouteKey(database, collection)
         # A re-registration makes the collection live again — cancel any stale
         # orphan-purge immediately so drain never wipes the fresh chunks.

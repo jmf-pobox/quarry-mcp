@@ -6,6 +6,7 @@
     ".punt-labs/quarry/captures/",
     ".venv/",
     ".tmp/",
+    ".pytest-work/",
     "dist/",
     "node_modules/"
   ],

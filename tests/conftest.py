@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from collections.abc import Generator, Iterable, Iterator
 from pathlib import Path
 from typing import Self, final
@@ -27,6 +28,22 @@ from quarry.types import LanceDB
 from tests.inproc_daemon import InProcessDaemon
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+# Tests build simulated project roots via ``tmp_path``.  The workspace exports
+# ``TMPDIR=$PWD/.tmp``, so pytest would place those roots under the repo's own
+# ``.tmp`` scratch — which the watcher/indexer now refuses (DES-045).  Redirect
+# pytest's temp base to a non-scratch sibling (``<repo>/.pytest-work``) so a
+# test's project root is indexable while the daemon still refuses real ``.tmp``
+# and OS-temp roots.  Overriding ``tempfile.tempdir`` (not ``--basetemp``)
+# preserves pytest's ``pytest-of-<user>/pytest-<n>`` rotation and concurrency.
+_PYTEST_TMP_BASE = Path(__file__).resolve().parent.parent / ".pytest-work"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Move pytest's temp base off the repo's ``.tmp`` scratch tree (DES-045)."""
+    del config
+    _PYTEST_TMP_BASE.mkdir(exist_ok=True)
+    tempfile.tempdir = str(_PYTEST_TMP_BASE)
 
 
 @pytest.fixture(scope="session")

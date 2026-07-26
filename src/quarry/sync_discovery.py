@@ -6,24 +6,23 @@ import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Final, Self
+from typing import TYPE_CHECKING, Final, Self, final
 
 import pathspec
 
+from quarry.scratch_paths import ScratchGuard
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
 
+# Glob-style ignores the pathspec engine handles.  Scratch/VCS/build/cache
+# *directory names* (``node_modules``, ``.venv``, ``dist``, ``*.egg-info``…) are
+# NOT listed here: :class:`~quarry.scratch_paths.ScratchGuard` prunes them by
+# name in the walk, so keeping them here too would be duplicated bookkeeping.
 _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
-    "__pycache__/",
     "*.pyc",
-    "node_modules/",
-    ".venv/",
-    "venv/",
-    ".tox/",
-    ".nox/",
-    ".eggs/",
-    "*.egg-info/",
-    "dist/",
-    "build/",
     ".DS_Store",
     # Defense-in-depth for the captures dir.  The walk already prunes every
     # dot-prefixed directory (``.punt-labs``) before patterns are matched, so
@@ -36,22 +35,34 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
 _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 
 
+@final
 class FileDiscovery:
     """Discover indexable files under a directory, respecting ignore rules."""
 
-    __slots__ = ("_directory", "_root_resolved")
+    __slots__ = ("_directory", "_excluded", "_guard", "_root_resolved")
 
     _directory: Path
     _root_resolved: Path | None
+    _guard: ScratchGuard
+    _excluded: bool
 
     def __new__(cls, directory: Path) -> Self:
         self = super().__new__(cls)
         self._directory = directory
+        self._guard = ScratchGuard()
         try:
             self._root_resolved = directory.resolve(strict=True)
         except (OSError, RuntimeError):
             logger.warning("Cannot resolve registered root: %s", directory)
             self._root_resolved = None
+        # A system-temp root (``/private/tmp``) is never a document tree: watching
+        # it OCR-storms everything the OS drops in temp.  Refused up front so both
+        # the bulk scan and the live path treat it as empty.
+        self._excluded = self._root_resolved is not None and self._guard.refuses_root(
+            self._root_resolved
+        )
+        if self._excluded:
+            logger.debug("Skipping system-temp root: %s", self._root_resolved)
         return self
 
     @property
@@ -61,8 +72,9 @@ class FileDiscovery:
     def discover(self, extensions: frozenset[str]) -> list[Path]:
         """Recursively find files matching *extensions* under the directory.
 
-        Respects ``.gitignore`` (at every level), ``.quarryignore``, and
-        hardcoded ignore patterns (``venv/``, ``node_modules/``, etc.).
+        Respects ``.gitignore`` (at every level), ``.quarryignore``, the
+        :class:`ScratchGuard` always-skip names (``venv``, ``node_modules``,
+        ``htmlcov``…), and the glob patterns in ``_DEFAULT_IGNORE_PATTERNS``.
         Skips dotfiles, macOS resource forks (``._*``), and files inside
         hidden directories (``.Trash``, ``.git``, etc.).
 
@@ -71,44 +83,63 @@ class FileDiscovery:
 
         Returns absolute paths, sorted for deterministic order.
         """
-        if self._root_resolved is None:
+        if self._root_resolved is None or self._excluded:
             return []
 
         root_spec = self.load_ignore_spec()
         result: list[Path] = []
-
         for dirpath_str, dirnames, filenames in os.walk(self._directory):
             dirpath = Path(dirpath_str)
-            rel_dir = dirpath.relative_to(self._directory)
             local_spec = (
                 self._read_local_ignore(dirpath) if dirpath != self._directory else None
             )
-
-            # Prune hidden and ignored directories (in-place for os.walk)
-            dirnames[:] = sorted(
-                d
-                for d in dirnames
-                if not d.startswith(".")
-                and not root_spec.match_file(str(rel_dir / d) + "/")
-                and (local_spec is None or not local_spec.match_file(d + "/"))
+            dirnames[:] = self._keep_dirs(dirpath, dirnames, root_spec, local_spec)
+            result.extend(
+                self._keep_files(dirpath, filenames, extensions, root_spec, local_spec)
             )
-
-            for filename in sorted(filenames):
-                if filename.startswith((".", "._")):
-                    continue
-                filepath = dirpath / filename
-                if filepath.suffix.lower() not in extensions:
-                    continue
-                rel_path = str(filepath.relative_to(self._directory))
-                if root_spec.match_file(rel_path):
-                    continue
-                if local_spec is not None and local_spec.match_file(filename):
-                    continue
-                if filepath.is_symlink() and not self._symlink_inside_root(filepath):
-                    continue
-                result.append(filepath.absolute())
-
         return result
+
+    def _keep_dirs(
+        self,
+        dirpath: Path,
+        dirnames: list[str],
+        root_spec: pathspec.PathSpec,
+        local_spec: pathspec.PathSpec | None,
+    ) -> list[str]:
+        """Return the child dirs to descend: not hidden, scratch, or ignored."""
+        rel_dir = dirpath.relative_to(self._directory)
+        return sorted(
+            d
+            for d in dirnames
+            if not d.startswith(".")
+            and not self._guard.is_skip_name(d)
+            and not root_spec.match_file(str(rel_dir / d) + "/")
+            and (local_spec is None or not local_spec.match_file(d + "/"))
+        )
+
+    def _keep_files(
+        self,
+        dirpath: Path,
+        filenames: list[str],
+        extensions: frozenset[str],
+        root_spec: pathspec.PathSpec,
+        local_spec: pathspec.PathSpec | None,
+    ) -> Iterator[Path]:
+        """Yield the absolute path of each indexable file directly in *dirpath*."""
+        for filename in sorted(filenames):
+            filepath = dirpath / filename
+            if filename.startswith((".", "._")):
+                continue
+            if filepath.suffix.lower() not in extensions:
+                continue
+            rel_path = str(filepath.relative_to(self._directory))
+            if root_spec.match_file(rel_path):
+                continue
+            if local_spec is not None and local_spec.match_file(filename):
+                continue
+            if filepath.is_symlink() and not self._symlink_inside_root(filepath):
+                continue
+            yield filepath.absolute()
 
     def is_indexable(self, path: Path, extensions: frozenset[str]) -> bool:
         """Return whether *path* would be indexed by :meth:`discover` (live == bulk).
@@ -119,7 +150,7 @@ class FileDiscovery:
         path-escape leak), the suffix must be supported, no path segment may be
         hidden, and neither the root nor any per-directory ignore spec may match.
         """
-        if self._root_resolved is None:
+        if self._root_resolved is None or self._excluded:
             return False
         try:
             resolved = path.resolve(strict=True)
@@ -137,6 +168,8 @@ class FileDiscovery:
             return False
         parts = rel.parts
         if any(part.startswith((".", "._")) for part in parts):
+            return False
+        if self._guard.skips_below_root(rel):
             return False
         if self.load_ignore_spec().match_file(str(rel)):
             return False
@@ -169,11 +202,17 @@ class FileDiscovery:
         the file is already gone and cannot be resolved.  A false accept is a
         harmless no-op; the disk-vs-registry reconcile is the robust backstop.
         """
-        if self._root_resolved is None or path.suffix.lower() not in extensions:
+        if (
+            self._root_resolved is None
+            or self._excluded
+            or path.suffix.lower() not in extensions
+        ):
             return False
         try:
             rel = path.relative_to(self._directory)
         except ValueError:
+            return False
+        if self._guard.skips_below_root(rel):
             return False
         return not any(part.startswith((".", "._")) for part in rel.parts)
 

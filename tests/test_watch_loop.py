@@ -1027,3 +1027,124 @@ def test_reconcile_drain_reshed_keeps_pending(tmp_path: Path) -> None:
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def _build_with_root(
+    tmp_path: Path, *, queue: _RecordingQueue, root: Path, collection: str
+) -> DaemonContext:
+    """Build a fake daemon context with *root* pre-registered under *collection*.
+
+    Models an ENTRY ALREADY IN THE REGISTRY (the operator's stale ``/private/tmp``)
+    so a restart's ``start()`` must refuse to watch it — not merely reject a new
+    registration.
+    """
+    data = tmp_path / "data"
+    (data / "testdb").mkdir(parents=True)
+    settings = Settings(
+        quarry_root=data,
+        lancedb_path=data / "testdb" / "lancedb",
+        registry_path=data / "testdb" / "registry.db",
+        watch_enabled=True,
+        watch_debounce_s=0.03,
+        watch_max_delay_s=0.3,
+        watch_bulk_threshold=5,
+        watch_safety_scan_s=0.0,
+    )
+    _register(settings, root, collection)
+    ctx = SimpleNamespace(
+        settings=settings,
+        ingest_queue=queue,
+        tasks=TaskRegistry(),
+        database=_FakeDatabase(),
+        database_name="testdb",
+    )
+    return cast("DaemonContext", ctx)
+
+
+def test_registered_system_temp_root_is_never_watched_on_restart(
+    tmp_path: Path,
+) -> None:
+    """A registry entry for /private/tmp is refused at start (restart-safe).
+
+    The operator's real registry holds ``/private/tmp``; on restart the daemon
+    must refuse to WATCH it, or it OCR-storms everything the OS drops in temp.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 0  # the OS-temp tree is never observed
+        assert queue.submitted == []  # no scan, no finalize for a temp root
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_registered_repo_scratch_root_is_never_watched(tmp_path: Path) -> None:
+    """A registry entry for a repo's own ``.tmp`` scratch is refused at start."""
+
+    async def _run() -> None:
+        (tmp_path / ".git").mkdir()  # mark tmp_path as a git repo root
+        scratch_root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
+        scratch_root.mkdir(parents=True)
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=scratch_root.resolve(), collection="scratch"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert source.watch_count == 0
+        assert queue.submitted == []
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_burst_on_registered_temp_root_produces_no_work(tmp_path: Path) -> None:
+    """A churn storm on a refused temp root fans out to zero queue jobs.
+
+    Bounded work for a refused tree is zero: the observer never watches it, so a
+    fixture burst cannot fan out to a full OCR+embed per file per event.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        root = Path("/private/tmp")
+        ctx = _build_with_root(tmp_path, queue=queue, root=root, collection="systmp")
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        for i in range(20):  # a churn storm on the refused tree
+            source.emit(root, _fs(root / f"scan{i}.png"))
+        await asyncio.sleep(0.15)
+        assert queue.submitted == []  # bounded == zero: nothing enqueued
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_skips_a_registered_temp_root(tmp_path: Path) -> None:
+    """The periodic reconcile never enumerates or re-scans a temp root."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx = _build_with_root(
+            tmp_path, queue=queue, root=Path("/private/tmp"), collection="systmp"
+        )
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        assert queue.submitted == []  # the temp root is not enumerated for scan
+        assert source.watch_count == 0
+        await loop.stop()
+
+    asyncio.run(_run())
