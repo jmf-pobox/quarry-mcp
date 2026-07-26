@@ -27,7 +27,7 @@ def test_enable_biconditional_marker_iff_import(tmp_path: Path) -> None:
     Enablement(tmp_path).enable()
     marker_present = EnabledMarker(tmp_path).is_present()
     import_present = REPO_IMPORT_LINE in (tmp_path / "CLAUDE.md").read_text()
-    assert marker_present == import_present == True  # noqa: E712
+    assert marker_present and import_present
 
 
 def test_enable_is_idempotent(tmp_path: Path) -> None:
@@ -70,7 +70,24 @@ def test_disable_biconditional_marker_iff_import(tmp_path: Path) -> None:
     Enablement(tmp_path).disable()
     marker_present = EnabledMarker(tmp_path).is_present()
     import_present = REPO_IMPORT_LINE in (tmp_path / "CLAUDE.md").read_text()
-    assert marker_present == import_present == False  # noqa: E712
+    assert not marker_present and not import_present
+
+
+def test_disable_removes_marker_before_prune_can_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.11: a prune() failure during disable leaves marker-absent, never present."""
+    Enablement(tmp_path).enable()
+
+    def boom(self: ClaudeMdImport, import_line: str) -> bool:
+        raise OSError("prune failed")
+
+    monkeypatch.setattr(ClaudeMdImport, "prune", boom)
+
+    with pytest.raises(OSError, match="prune failed"):
+        Enablement(tmp_path).disable()
+
+    assert not EnabledMarker(tmp_path).is_present()
 
 
 def test_disable_is_idempotent(tmp_path: Path) -> None:

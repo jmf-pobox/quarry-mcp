@@ -77,9 +77,16 @@ class Enablement:
         )
 
     def disable(self) -> DisablementResult:
-        """Prune the import line and delete the marker; leave the guide dormant."""
-        import_pruned = self._import.prune(REPO_IMPORT_LINE)
+        """Remove the marker, then prune the import; leave the guide dormant.
+
+        The remove runs before the fallible prune (flock + read + atomic
+        temp+rename) so a prune failure leaves marker-absent + import-present —
+        the recoverable state — never the marker-present + import-absent state
+        the § 2.11 biconditional forbids. This mirrors ``enable``, where the
+        near-infallible marker is likewise the commit point.
+        """
         enabled_marker_removed = self._marker.remove()
+        import_pruned = self._import.prune(REPO_IMPORT_LINE)
         return DisablementResult(
             import_pruned=import_pruned,
             enabled_marker_removed=enabled_marker_removed,

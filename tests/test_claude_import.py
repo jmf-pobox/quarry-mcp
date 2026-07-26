@@ -151,6 +151,26 @@ def test_register_ignores_copy_after_closed_fence(tmp_path: Path) -> None:
     assert ClaudeMdImport(path).register(IMPORT) is False
 
 
+def test_prune_sees_both_imports_across_indented_fence(tmp_path: Path) -> None:
+    """An indented ``` is code, not a fence: both top-level imports still prune."""
+    path = tmp_path / "CLAUDE.md"
+    path.write_text(f"{IMPORT}\n    ```\n{IMPORT}\n")
+    assert ClaudeMdImport(path).prune(IMPORT) is True
+    # Both top-level copies removed; the indented example line survives.
+    assert path.read_text() == "    ```\n"
+
+
+def test_prune_leaves_import_in_backtick_fence_holding_tilde_line(
+    tmp_path: Path,
+) -> None:
+    """A ~~~ line does not close a ```-fence: the inside import is shielded."""
+    path = tmp_path / "CLAUDE.md"
+    path.write_text(f"```\n~~~\n{IMPORT}\n```\n{IMPORT}\n")
+    assert ClaudeMdImport(path).prune(IMPORT) is True
+    # Only the top-level copy after the fence is removed; the fenced one stays.
+    assert path.read_text() == f"```\n~~~\n{IMPORT}\n```\n"
+
+
 # ── boundary validation ──────────────────────────────────────────────
 
 
@@ -194,6 +214,10 @@ def test_concurrent_registers_do_not_lose_updates(tmp_path: Path) -> None:
         p.start()
     for p in procs:
         p.join(timeout=30)
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+        assert p.exitcode == 0, "a child did not finish cleanly"
     text = path.read_text()
     for ln in lines:
         assert ln in text, f"lost update: {ln} missing"

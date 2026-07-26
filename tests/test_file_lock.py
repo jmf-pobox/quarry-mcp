@@ -85,4 +85,8 @@ def test_lock_prevents_lost_updates(tmp_path: Path) -> None:
         p.start()
     for p in procs:
         p.join(timeout=60)
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+        assert p.exitcode == 0, "a child did not finish cleanly"
     assert counter.read_text() == "200"

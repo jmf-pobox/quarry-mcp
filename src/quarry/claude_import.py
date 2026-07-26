@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.atomic_file import AtomicFile
+from quarry.fence import FenceScanner
 from quarry.file_lock import FileLock
 
 if TYPE_CHECKING:
@@ -111,41 +112,23 @@ class ClaudeMdImport:
             msg = f"import line must begin with '@': {import_line!r}"
             raise ValueError(msg)
 
-    @classmethod
-    def _matching_toplevel_indices(
-        cls, lines: list[str], import_line: str
-    ) -> list[int]:
-        """Return indices of *lines* that equal *import_line* net of terminator.
+    @staticmethod
+    def _matching_toplevel_indices(lines: list[str], import_line: str) -> list[int]:
+        """Return indices of *lines* equal to *import_line* net of terminator.
 
-        A line inside a fenced or indented code block is never a match. Fenced
-        state is tracked by counting fence delimiters (§ 2.4): a line is inside
-        a fenced block when the number of preceding delimiters is odd.
+        A line shielded by a Markdown code fence or an indented code block is
+        never a match — only a top-level ``@``-import is a Claude Code import
+        (§ 2.4). :class:`FenceScanner` tracks fence state across the scan,
+        honouring CommonMark's same-character close and indentation rules.
         """
+        scanner = FenceScanner()
         hits: list[int] = []
-        fence_count = 0
         for i, raw in enumerate(lines):
-            body = raw.rstrip("\r\n")
-            stripped = body.lstrip(" \t")
-            inside_fenced = fence_count % 2 == 1
-            is_fence = cls._is_fence_delimiter(stripped)
-            if is_fence:
-                fence_count += 1
-            indented = raw.startswith(("\t", "    "))
-            if inside_fenced or is_fence or indented:
+            if scanner.shields(raw):
                 continue
-            if body == import_line:
+            if raw.rstrip("\r\n") == import_line:
                 hits.append(i)
         return hits
-
-    @staticmethod
-    def _is_fence_delimiter(stripped: str) -> bool:
-        """Return whether *stripped* (leading whitespace removed) opens/closes a fence.
-
-        A fence delimiter's first non-whitespace characters are three or more
-        backticks or three or more tildes, optionally followed by an info string
-        (§ 2.4) — the run need not be the whole line.
-        """
-        return stripped.startswith(("```", "~~~"))
 
     @staticmethod
     def _host_eol(content: str) -> str:
