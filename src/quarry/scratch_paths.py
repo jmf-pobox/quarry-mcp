@@ -21,12 +21,19 @@ Two rejections:
   (``node_modules``, ``htmlcov``, ``dist``, ``*.egg-info``…) are pruned by name
   — :meth:`ScratchGuard.skips_below_root`.
 
-The repo-``.tmp`` case is anchored on the enclosing git repository, never on a
-bare ``.tmp`` component appearing anywhere in the path: a legitimate checkout
-can itself live under an ancestor named ``.tmp`` (a git worktree, a backup dir),
-and refusing it would be wrong.  ``<repo>/.tmp`` *below* a watched repo root is
-already pruned by the caller's dot-prune and ``.gitignore`` rules; this guard
-adds the root-level refusal plus the non-dot cache names those rules miss.
+The repo-``.tmp`` case is anchored on the enclosing git repository, checking
+*every* ancestor rather than a bare ``.tmp`` component anywhere in the path: a
+root under ANY ancestor repo's ``.tmp`` is refused.  Checking every ancestor is
+load-bearing — it is exactly what closes the nested-repo bypass, where a git
+repo checked out under ``<outer>/.tmp`` would otherwise shadow the outer repo
+and let a root still inside ``<outer>/.tmp`` be watched (a first-``.git``-wins
+check has that hole).  A checkout or worktree living under a repo's own ``.tmp``
+is therefore refused too; that over-refusal is the accepted, fail-closed
+tradeoff and must NOT be "relaxed" to re-permit it — doing so reopens the
+bypass.  Only a ``.tmp`` with no enclosing ``.git`` at all is permitted.
+``<repo>/.tmp`` *below* a watched repo root is also pruned by the caller's
+dot-prune and ``.gitignore`` rules; this guard adds the root-level refusal plus
+the non-dot cache names those rules miss.
 """
 
 from __future__ import annotations

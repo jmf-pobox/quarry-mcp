@@ -62,10 +62,12 @@ def test_nested_repo_under_outer_scratch_is_refused(tmp_path: Path) -> None:
 
 
 def test_project_root_is_not_refused(tmp_path: Path) -> None:
-    """A normal project root — even under a ``.tmp`` ANCESTOR — is not refused.
+    """A project dir that is not inside any repo's ``.tmp`` is not refused.
 
-    A checkout can legitimately live under a ``.tmp`` ancestor (a git worktree);
-    only a repo's OWN ``.tmp`` (a direct child of its git root) is scratch.
+    ``<repo>/src/docs`` is ordinary source, not scratch, so it is watched.  (A
+    dir under a repo's OWN ``.tmp`` — including a checkout or worktree living
+    there — IS refused; that over-refusal is the accepted tradeoff that closes
+    the nested-repo bypass, exercised by ``test_nested_repo...``.)
     """
     (tmp_path / ".git").mkdir()
     project = tmp_path / "src" / "docs"
