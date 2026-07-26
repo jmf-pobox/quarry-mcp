@@ -106,10 +106,21 @@ def mock_bin(tmp_path: Path) -> Path:
         + "exit 0\n",
     )
 
-    # uv -- subcommands used by the script.
+    # uv -- subcommands used by the script.  When `--overrides FILE` is present
+    # (the opencv-headless override on `uv tool install`), dump FILE's contents
+    # as `uv-override <line>` so tests can assert what was passed through.
     _write_mock(
         bin_dir / "uv",
-        log_header + "exit 0\n",
+        log_header
+        + 'prev=""\n'
+        + 'for a in "$@"; do\n'
+        + '  if [ "$prev" = "--overrides" ] && [ -f "$a" ]; then\n'
+        + "    while IFS= read -r ovl; do"
+        + ' printf "uv-override %s\\n" "$ovl" >> "$LOG_FILE"; done < "$a"\n'
+        + "  fi\n"
+        + '  prev="$a"\n'
+        + "done\n"
+        + "exit 0\n",
     )
 
     # quarry -- the install script does two things with ``quarry``:
@@ -161,7 +172,19 @@ def mock_bin(tmp_path: Path) -> Path:
     # head / sed / id -- real utilities from the host; we add them to the
     # mock PATH so scripts don't pick up something unexpected.  Symlink to
     # the real binaries.
-    for util in ("head", "sed", "id", "printf", "sleep", "grep", "basename"):
+    for util in (
+        "head",
+        "sed",
+        "id",
+        "printf",
+        "sleep",
+        "grep",
+        "basename",
+        # mktemp + rm back install.sh's uv-overrides temp file (the opencv
+        # headless override written before `uv tool install`).
+        "mktemp",
+        "rm",
+    ):
         real = shutil.which(util)
         if real is not None:
             (bin_dir / util).symlink_to(real)
@@ -901,3 +924,75 @@ def test_install_health_gate_discriminates_ready_from_starting() -> None:
     assert _matches('{"state": "ready", "version": "1.19.0"}')
     assert not _matches('{"state":"starting"}')
     assert not _matches('{"status":"ok"}')
+
+
+# ---------------------------------------------------------------------------
+# opencv-headless override + QUARRY_LOCAL_WHEEL (clean-machine install path)
+# ---------------------------------------------------------------------------
+
+
+def test_opencv_headless_override_passed_to_uv_tool_install(
+    env: dict[str, str],
+) -> None:
+    """install.sh drops the GUI ``opencv-python`` via a uv override.
+
+    rapidocr (a transitive dep) declares the full ``opencv-python``, whose GUI
+    build dynamically links X11/GL libraries (libGL.so.1, libxcb.so.1) that
+    headless servers and minimal containers lack.  It ships the same ``cv2``
+    module as quarry's pinned ``opencv-python-headless`` and shadows it, so
+    ``import cv2`` then fails to load -- which makes ``quarry install`` /
+    ``quarry doctor`` report required-check failures and aborts the installer
+    under ``set -e``.  The installer writes a uv overrides file with a
+    never-matching marker so the GUI build is never resolved.
+    """
+    result = _run_script(INSTALL_SH, env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    log = _read_log(env)
+    _index_of(log, "uv tool install --force --overrides")
+    assert _any_line_contains(log, "uv-override opencv-python"), (
+        "the override file must name opencv-python (the GUI build to drop)"
+    )
+    assert _any_line_contains(log, 'sys_platform == "never"'), (
+        "the opencv-python override must use a never-matching marker to drop it"
+    )
+
+
+def test_local_wheel_override_installs_wheel_not_pypi(
+    env: dict[str, str], tmp_path: Path
+) -> None:
+    """QUARRY_LOCAL_WHEEL installs the given wheel instead of the PyPI pin.
+
+    This is the hook the clean-machine harness uses to exercise a working-tree
+    wheel; without it install.sh could only ever validate the released version.
+    """
+    wheel = tmp_path / "punt_quarry-9.9.9-py3-none-any.whl"
+    wheel.write_bytes(b"PK\x03\x04 not a real wheel, only non-empty for the check")
+    local_env = {**env, "QUARRY_LOCAL_WHEEL": str(wheel)}
+
+    result = _run_script(INSTALL_SH, local_env)
+    assert result.returncode == 0, (
+        f"install.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    log = _read_log(local_env)
+    # The wheel path is the uv tool install target ...
+    assert _any_line_contains(log, str(wheel)), (
+        "the local wheel path must be the uv tool install target"
+    )
+    # ... and the PyPI pin is NOT used as a fallback.
+    assert not _any_line_contains(log, "punt-quarry=="), (
+        "must not fall back to the PyPI pin when QUARRY_LOCAL_WHEEL is set"
+    )
+
+
+def test_local_wheel_missing_file_fails_clearly(env: dict[str, str]) -> None:
+    """A QUARRY_LOCAL_WHEEL pointing at a missing file fails with a clear message,
+    not an obscure uv error."""
+    local_env = {**env, "QUARRY_LOCAL_WHEEL": "/nonexistent/quarry.whl"}
+    result = _run_script(INSTALL_SH, local_env)
+    assert result.returncode != 0, "a missing local wheel must fail the install"
+    combined = result.stdout + result.stderr
+    assert "QUARRY_LOCAL_WHEEL" in combined, (
+        "the failure must name QUARRY_LOCAL_WHEEL so the cause is obvious"
+    )
