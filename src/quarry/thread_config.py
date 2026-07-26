@@ -12,9 +12,10 @@ these on ordinary file churn, spiking to 300-400% CPU.  ``LANCE_CPU_THREADS``
 governs those pools: their sizes track the cap, not the core count (measured
 lance-cpu/tokio 6/33 uncapped, 3/14 at cap 2 on 8 cores), so a small cap bounds
 lance no matter how many cores are present.  The cap is applied fail-closed — an
-inherited value is honored only if it is a tighter (lower) bound; a higher one is
-clamped down (see ``_cap_env``), so a stale ``LANCE_CPU_THREADS=32`` export cannot
-lift the ceiling.  Two is the floor — one stalls lance's runtime.
+inherited value is honored only inside ``[floor, cap]``; a higher one is clamped
+down and a below-floor one raised up (see ``_cap_env``), so neither a stale
+``LANCE_CPU_THREADS=32`` export nor a ``=1`` can escape the bound.  The LANCE
+floor is 2 because 1 stalls lance's runtime; OMP floors at 1 (it does not stall).
 """
 
 from __future__ import annotations
@@ -88,11 +89,18 @@ class ThreadConfig:
         runtime, so a later set is ignored.
         """
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-        omp = self._cap_env("OMP_NUM_THREADS", self._omp_threads)
+        # OMP floors at 1 — it does not stall at a single thread.
+        omp = self._cap_env("OMP_NUM_THREADS", self._omp_threads, floor=1)
         # LanceDB's tokio compute pool (compaction, FTS rebuild) — the ceiling
-        # that stops the daemon seizing every core on watch-loop churn.
-        lance_cpu = self._cap_env("LANCE_CPU_THREADS", self._lance_threads)
-        self._cap_env("LANCE_IO_THREADS", self._lance_threads)
+        # that stops the daemon seizing every core on watch-loop churn.  It ALSO
+        # floors at 2: LANCE_CPU_THREADS=1 stalls lance's runtime, so an inherited
+        # or operator "1" must be raised, not honored as a "tighter" bound.
+        lance_cpu = self._cap_env(
+            "LANCE_CPU_THREADS", self._lance_threads, floor=self._lance_threads
+        )
+        self._cap_env(
+            "LANCE_IO_THREADS", self._lance_threads, floor=self._lance_threads
+        )
         # Log the EFFECTIVE (post-clamp) values, not the intended ones — an
         # operator preset below the cap is honored, so the two can differ.
         logger.info(
@@ -105,25 +113,34 @@ class ThreadConfig:
         return self
 
     @staticmethod
-    def _cap_env(name: str, cap: int) -> str:
-        """Clamp ``name`` to at most ``cap`` fail-closed; return the effective value.
+    def _cap_env(name: str, cap: int, *, floor: int) -> str:
+        """Clamp ``name`` into ``[floor, cap]`` fail-closed; return the effective value.
 
         ``setdefault`` yields upward: a stale export or dev-shell ``OMP_NUM_THREADS=32``
         would survive as-is and the daemon would run at 32, defeating the ceiling.
-        Clamp instead — honor a LOWER operator value (an intentional tightening),
-        overwrite a HIGHER one down to the cap, and warn only on that downward
-        clamp.  A non-numeric preset is replaced by the cap (fail closed).
+        Clamp instead — honor an in-range operator value (a legitimate tightening),
+        force a higher one down to ``cap`` and raise a lower one up to ``floor``,
+        warning on either adjustment.  ``floor`` matters for the LANCE vars: a value
+        of 1 STALLS lance's runtime, so ``floor=2`` there turns an inherited "1"
+        into a warning-and-raise, never a silently-hung daemon.  A non-numeric
+        preset is replaced by ``cap`` (fail closed).
         """
         preset = os.environ.get(name)
-        if preset is not None and preset.isdigit() and 1 <= int(preset) <= cap:
-            return preset  # operator asked for a tighter bound; honor it
-        os.environ[name] = str(cap)
-        if preset is not None and preset != str(cap):
+        if preset is not None and preset.isdigit():
+            value = int(preset)
+            if floor <= value <= cap:
+                return preset  # in [floor, cap] — a legitimate operator choice
+            effective = min(max(value, floor), cap)  # clamp toward the nearer bound
+        else:
+            effective = cap  # absent or non-numeric — fail closed to the intended cap
+        os.environ[name] = str(effective)
+        if preset is not None and preset != str(effective):
             logger.warning(
-                "%s preset to %r not honored (exceeds the DES-032 cap or is "
-                "invalid); clamping to %d",
+                "%s preset to %r not honored (outside [%d, %d] or invalid); using %d",
                 name,
                 preset,
+                floor,
                 cap,
+                effective,
             )
-        return str(cap)
+        return str(effective)

@@ -101,16 +101,41 @@ class TestApplyEnvLimits:
         assert os.environ.get("OMP_NUM_THREADS") == "2"
         assert os.environ.get("LANCE_CPU_THREADS") == "2"
 
-    def test_honors_operator_override_below_cap(
+    def test_honors_omp_override_below_cap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A LOWER inherited value is an intentional tightening — honor it.
+        # OMP floors at 1 (it does not stall), so a lower inherited value is an
+        # intentional tightening — honor it.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("OMP_NUM_THREADS", "1")
-        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
         ThreadConfig(is_gpu=False).apply_env_limits()
         assert os.environ.get("OMP_NUM_THREADS") == "1"
-        assert os.environ.get("LANCE_CPU_THREADS") == "1"
+
+    def test_lance_below_floor_is_raised_to_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # LANCE_CPU_THREADS=1 stalls lance's runtime, so a below-floor preset must
+        # be RAISED to 2 (the floor), never honored as a "tighter" bound — else an
+        # inherited/operator "1" would start a silently-hung daemon.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        monkeypatch.setenv("LANCE_IO_THREADS", "1")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_lance_below_floor_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("LANCE_CPU_THREADS preset to '1'" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
 
     def test_non_numeric_preset_clamps_to_cap(
         self, monkeypatch: pytest.MonkeyPatch
@@ -140,7 +165,7 @@ class TestApplyEnvLimits:
         warnings = [
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
         ]
-        assert any("clamping to 2" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
         assert any("'7'" in m for m in warnings)
 
     def test_logs_effective_clamped_omp(
@@ -232,7 +257,7 @@ class TestLanceThreadCap:
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
         ]
         assert any("LANCE_CPU_THREADS preset to '6'" in m for m in warnings)
-        assert any("clamping to 2" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
 
     def test_info_line_reports_lance_cap(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -255,15 +280,15 @@ class TestLanceThreadCap:
         assert os.environ.get("LANCE_CPU_THREADS") == "2"
         assert os.environ.get("LANCE_IO_THREADS") == "2"
 
-    def test_info_line_reports_effective_not_intended_lance(
+    def test_info_line_reports_effective_raised_lance_not_preset(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A below-cap operator preset is honored; the info line must report that
-        # effective value (1), not the intended cap (2).
+        # A below-floor LANCE preset is raised to 2; the info line must report the
+        # EFFECTIVE value in force (2), not the rejected preset (1).
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("LANCE_CPU_THREADS", "1")
         with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
         rendered = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
-        assert any("LANCE_CPU=1" in line for line in rendered)
-        assert not any("LANCE_CPU=2" in line for line in rendered)
+        assert any("LANCE_CPU=2" in line for line in rendered)
+        assert not any("LANCE_CPU=1" in line for line in rendered)
