@@ -73,10 +73,22 @@ Download the installer:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/a3c10f9/install.sh -o install.sh
 ```
 
-Check its digest and read it, then run it:
+Check its digest:
 
 ```bash
 shasum -a 256 install.sh
+```
+
+Read it:
+
+```bash
+cat install.sh
+```
+
+Run it:
+
+```bash
+sh install.sh
 ```
 
 </details>

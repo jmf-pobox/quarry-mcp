@@ -84,12 +84,13 @@ across `transform`, `index`, and `connector`).
   re-OCR/re-index the macOS system temp dir — which every process writes to —
   continuously, pinning CPU for hours. A single `ScratchGuard` now refuses OS-temp
   roots (`/tmp`, `/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`,
-  compared casefolded so a case variant can't slip past on APFS), a repo's own
-  `<gitroot>/.tmp` (anchored on any ancestor git repo), and skips `.gitignore`d
-  paths plus a VCS/build/cache always-skip set — applied at initial scan, live
-  watch, reconcile, and explicit `quarry sync`, fail-closed per root, and refusing
-  an already-registered temp root at watch time (so a stale registration cannot
-  storm on restart). (quarry-dpww; DES-045b.)
+  compared casefolded so a case variant can't slip past on APFS) and a repo's own
+  `<gitroot>/.tmp` (anchored on any ancestor git repo) — applied at initial scan,
+  live watch, reconcile, and explicit `quarry sync`, fail-closed per root, and
+  refusing an already-registered temp root at watch time (so a stale registration
+  cannot storm on restart). Below a permitted root, the scan also skips
+  `.gitignore`d paths (via `FileDiscovery`'s pathspec matching) and a
+  VCS/build/cache always-skip set. (quarry-dpww; DES-045b.)
 
 - **index (daemon)**: `quarryd` now stays bounded under continuous dev load.
   LanceDB's compaction and full-text-index rebuild ran on a tokio pool the Rust
@@ -97,7 +98,8 @@ across `transform`, `index`, and `connector`).
   indexing could spike the daemon to 3-4× a core (291-403% observed) on an
   otherwise-quiet machine. The daemon now caps `LANCE_CPU_THREADS` /
   `LANCE_IO_THREADS` (a fail-closed clamp with a floor of 2 — a lower or inherited
-  value is clamped into range, a `1` is raised since it stalls LanceDB) alongside
+  value is clamped into range, and a `1` is raised to `2` because `1` stalls
+  LanceDB's runtime) alongside
   the existing ONNX/OMP limits, so the compaction/FTS work is bounded
   core-count-independently; and the per-collection finalize (optimize + FTS
   rebuild) is coalesced to at most one per `watch_optimize_min_interval_s`
