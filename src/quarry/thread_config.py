@@ -26,10 +26,11 @@ from typing import Protocol, Self
 logger = logging.getLogger(__name__)
 
 _MAX_CPU_THREADS = 2
-# LanceDB's compute pool floors at 2: LANCE_CPU_THREADS=1 stalls the runtime
-# (observed 0% CPU / no progress on a compaction loop), so a one-core machine's
-# lance work is not bounded below 2 — acceptable, one core cannot seize many.
-_MAX_LANCE_THREADS = 2
+# LanceDB's compute pool is a FIXED 2, not min(2, ncpu): LANCE_CPU_THREADS=1
+# stalls lance's runtime (observed 0% CPU / no progress on a compaction loop), so
+# a one-core host must still get 2 — deriving min(2, ncpu) there would hand it 1
+# and deadlock. 2 is both floor and ceiling, independent of core count.
+_LANCE_THREADS = 2
 _NCPU_NONE = 4  # fallback when os.cpu_count() returns None
 
 
@@ -56,9 +57,10 @@ class ThreadConfig:
         self._omp_threads = min(_MAX_CPU_THREADS, self._ncpu)
         # GPU does the GEMMs (1 feeder thread); CPU caps at 2 (DES-027 arena).
         self._intra_op_threads = 1 if is_gpu else min(_MAX_CPU_THREADS, self._ncpu)
-        # LanceDB's compute pool is provider-independent (the daemon holds the
-        # connection whether or not the GPU embeds), so cap it the same way.
-        self._lance_threads = min(_MAX_LANCE_THREADS, self._ncpu)
+        # LanceDB's compute pool is a fixed 2, provider- AND core-count-independent
+        # (the daemon holds the connection whether or not the GPU embeds; 1 stalls
+        # lance, so a one-core host still gets 2).
+        self._lance_threads = _LANCE_THREADS
         return self
 
     @classmethod
@@ -89,13 +91,15 @@ class ThreadConfig:
         omp = self._cap_env("OMP_NUM_THREADS", self._omp_threads)
         # LanceDB's tokio compute pool (compaction, FTS rebuild) — the ceiling
         # that stops the daemon seizing every core on watch-loop churn.
-        self._cap_env("LANCE_CPU_THREADS", self._lance_threads)
+        lance_cpu = self._cap_env("LANCE_CPU_THREADS", self._lance_threads)
         self._cap_env("LANCE_IO_THREADS", self._lance_threads)
+        # Log the EFFECTIVE (post-clamp) values, not the intended ones — an
+        # operator preset below the cap is honored, so the two can differ.
         logger.info(
-            "Thread config: intra_op=%d, inter_op=1, OMP=%s, LANCE_CPU=%d (ncpu=%d)",
+            "Thread config: intra_op=%d, inter_op=1, OMP=%s, LANCE_CPU=%s (ncpu=%d)",
             self._intra_op_threads,
             omp,
-            self._lance_threads,
+            lance_cpu,
             self._ncpu,
         )
         return self

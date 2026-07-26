@@ -242,3 +242,28 @@ class TestLanceThreadCap:
         with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
         assert any("LANCE_CPU=2" in r.getMessage() for r in caplog.records)
+
+    def test_single_core_still_gets_two_not_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # LANCE_CPU_THREADS=1 stalls lance's runtime, so a one-core host must NOT
+        # derive min(2, ncpu)=1 — the lance count is a fixed 2 regardless of ncpu.
+        monkeypatch.setattr("os.cpu_count", lambda: 1)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        monkeypatch.delenv("LANCE_IO_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_info_line_reports_effective_not_intended_lance(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A below-cap operator preset is honored; the info line must report that
+        # effective value (1), not the intended cap (2).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        rendered = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert any("LANCE_CPU=1" in line for line in rendered)
+        assert not any("LANCE_CPU=2" in line for line in rendered)

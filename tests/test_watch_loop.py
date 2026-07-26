@@ -171,7 +171,12 @@ def _register(settings: Settings, directory: Path, collection: str) -> None:
 
 
 def _build(
-    tmp_path: Path, *, queue: _RecordingQueue, bulk: int = 5, enabled: bool = True
+    tmp_path: Path,
+    *,
+    queue: _RecordingQueue,
+    bulk: int = 5,
+    enabled: bool = True,
+    optimize_interval: float = 30.0,
 ) -> tuple[DaemonContext, Path]:
     """Return a fake daemon context and the resolved watched root for 'col'."""
     data = tmp_path / "data"
@@ -187,6 +192,7 @@ def _build(
         watch_max_delay_s=0.3,
         watch_bulk_threshold=bulk,
         watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
+        watch_optimize_min_interval_s=optimize_interval,
     )
     _register(settings, watched.resolve(), "col")
     ctx = SimpleNamespace(
@@ -266,6 +272,63 @@ def test_burst_above_threshold_collapses_to_one_scan(tmp_path: Path) -> None:
         await asyncio.sleep(0.15)
         assert len(queue.jobs(CollectionSyncJob)) == 1
         assert queue.jobs(FileIndexJob) == []
+
+    asyncio.run(_run())
+
+
+def test_sustained_bulk_churn_coalesces_finalize(tmp_path: Path) -> None:
+    """Bulk churn (branch switch/rebase) must not finalize every window.
+
+    The bulk path indexes each burst but throttles the heavy finalize just like
+    the per-file delta path — otherwise sustained bulk batches storm optimize+FTS
+    and defeat the CPU envelope this change enforces.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue, bulk=5, optimize_interval=0.5)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        # Burst 1: > threshold distinct files → one bulk scan + the first finalize.
+        for i in range(6):
+            source.emit(root, _fs(_write(root, f"a{i}.md")))
+        await asyncio.sleep(0.15)
+        assert len(queue.jobs(CollectionSyncJob)) == 1
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1  # first fires immediately
+        # Burst 2 within the throttle interval → indexed, finalize COALESCED.
+        for i in range(6):
+            source.emit(root, _fs(_write(root, f"b{i}.md")))
+        await asyncio.sleep(0.15)
+        assert len(queue.jobs(CollectionSyncJob)) == 2  # both bursts re-scanned
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1  # not 2 — coalesced
+        # After the interval, the single coalesced trailing finalize lands.
+        await asyncio.sleep(0.6)
+        assert len(queue.jobs(CollectionFinalizeJob)) == 2
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_reconcile_refinalizes_for_fts_self_heal(tmp_path: Path) -> None:
+    """The periodic reconcile re-finalizes every collection (the FTS self-heal).
+
+    The throttle can route a trailing finalize before a collection's file jobs,
+    leaving its FTS briefly stale; the reconcile's IMMEDIATE (un-throttled)
+    finalize is the bounded backstop that clears it. Prove that backstop is real.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        assert len(queue.jobs(CollectionFinalizeJob)) >= 1
+        await loop.stop()
 
     asyncio.run(_run())
 

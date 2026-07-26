@@ -51,8 +51,21 @@ class FinalizeThrottle:
     This coalesces them per database: the first request runs immediately, any
     request inside the interval arms a single trailing timer that runs one
     finalize when the interval elapses — so continuous churn costs one finalize
-    per interval, and a finalize always lands after churn settles (no permanent
-    FTS lag).  All state lives on the event loop, so no lock is needed.
+    per interval, and a finalize always lands after churn settles.  All state
+    lives on the event loop, so no lock is needed.
+
+    Granularity is the DATABASE, not the collection.  The trailing timer is armed
+    on the first requesting collection's routing key, so it may run on that
+    collection's FIFO before a *different* collection's in-flight file-index jobs
+    complete.  The rebuild is table-wide, so it still reindexes every collection's
+    already-committed chunks; only files a collection indexes *after* this
+    finalize lag in FTS.  That lag self-heals within one bounded window: the
+    periodic reconcile (``watch_safety_scan_s``, default 300 s) re-scans every
+    registered collection with an IMMEDIATE (un-throttled) finalize.  The vector
+    channel is never stale — files index immediately — so hybrid search degrades
+    to vector-only for the lagging collection until the next finalize, never
+    silently wrong.  With ``watch_safety_scan_s = 0`` the reconcile backstop is
+    off and FTS lag clears only on that collection's next churn.
     """
 
     __slots__ = ("_interval", "_last", "_loop", "_timers")
@@ -97,8 +110,18 @@ class FinalizeThrottle:
         self._timers.clear()
 
     def _fire(self, database: str, submit: Callable[[], object]) -> None:
-        """Submit one finalize for *database* and stamp the interval clock."""
-        self._timers.pop(database, None)
+        """Submit one finalize for *database* and stamp the interval clock.
+
+        Cancel any pending trailing timer, don't just drop it: the immediate path
+        fires exactly when a trailing timer is due (both trigger at ``last +
+        interval``), so a debounce flush landing in that tick would run the
+        immediate finalize AND leave the overdue timer callback queued — two
+        finalizes for one interval.  ``cancel`` de-queues the callback; a bare
+        ``pop`` would not.
+        """
+        timer = self._timers.pop(database, None)
+        if timer is not None:
+            timer.cancel()
         self._last[database] = self._loop.time()
         submit()
 
@@ -164,7 +187,16 @@ class WatchSubmitter:
         db = self._roster.database_of(batch.key.database)
         settings = self._roster.settings_of(batch.key.database)
         if batch.bulk:
-            self.submit_scan(batch.key, root)
+            # Index the burst now, but THROTTLE the heavy finalize. A sustained
+            # bulk-churn workflow (branch switch, large rebase) trips the bulk
+            # threshold every debounce window; an immediate finalize each time
+            # would storm optimize+FTS and defeat the CPU envelope. Coalesce it
+            # per database exactly like the delta path below.
+            self._submit_scan_job(batch.key, root, db, settings)
+            self._throttle.request(
+                batch.key.database,
+                lambda: self._submit_finalize(batch.key, db, settings),
+            )
             return
         failed = self._submit_deltas(batch, db, settings, root)
         if failed:
@@ -181,18 +213,28 @@ class WatchSubmitter:
         )
 
     def submit_scan(self, key: RouteKey, root: Path) -> list[TaskState]:
-        """Submit a bulk scan then its coalesced finalize; return their task states.
+        """Submit a bulk scan + an IMMEDIATE finalize; return their task states.
 
-        A scan shed by a full queue is recovered by the periodic reconcile, which
-        re-scans every registered collection, so no retry state is tracked here.
+        Immediate — not throttled — because every caller is one-shot or the
+        backstop: the initial watch scan, an explicit ``quarry sync`` whose
+        umbrella awaits the finalize task, and the periodic reconcile (whose
+        finalize is the FTS self-heal and must always run, never coalesce away).
+        The high-frequency bulk-churn path (``on_batch``) throttles its finalize
+        instead.  A scan shed by a full queue is recovered by the reconcile.
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
-        scan = CollectionSyncJob(db, settings, key.collection, root)
         return [
-            self._submit_tracked(key, scan, "sync"),
+            self._submit_scan_job(key, root, db, settings),
             self._submit_finalize(key, db, settings),
         ]
+
+    def _submit_scan_job(
+        self, key: RouteKey, root: Path, db: Database, settings: Settings
+    ) -> TaskState:
+        """Submit the bulk re-scan/index job for *key*; return its task state."""
+        scan = CollectionSyncJob(db, settings, key.collection, root)
+        return self._submit_tracked(key, scan, "sync")
 
     @staticmethod
     def summarize_scan(
