@@ -1,0 +1,65 @@
+name: Install harness
+
+# Clean-machine gate: builds a working-tree wheel and runs install.sh end-to-end
+# inside a fresh container (tests/harness/), asserting the CLI-only (--no-plugin)
+# path across both skip triggers + a remember->find round-trip. This is the gate
+# that turns "does install.sh work from scratch" from a manual hope into CI.
+#
+# Path-filtered so it runs only when the installer or the harness changes — the
+# full run builds an image and installs quarry three times, so it is heavier than
+# the unit suite and does not belong on every push.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - install.sh
+      - tests/harness/**
+      # .dockerignore controls the Docker build context — a change that breaks
+      # re-inclusion of install.sh / guide.sh / the staged wheel must run the gate.
+      - .dockerignore
+      - .github/workflows/install-harness.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - install.sh
+      - tests/harness/**
+      - .dockerignore
+      - .github/workflows/install-harness.yml
+
+permissions:
+  contents: read
+
+jobs:
+  clean-machine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # shellcheck catches install-script logic-adjacent syntax bugs that the
+      # mock unit tests cannot; the container harness catches the rest.
+      - name: shellcheck installer + harness scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -x install.sh tests/harness/*.sh
+
+      # uv (cached) + Python back the host-side `uv build` in the orchestrator.
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      # Docker is preinstalled on ubuntu-latest (BuildKit default). The harness
+      # builds a working-tree wheel, builds the clean-machine image (base pinned
+      # by digest, embedding model pre-seeded in a cached build stage), and runs
+      # install.sh from scratch inside it.
+      #
+      # Fast-follow (not blocking): export the image's model/apt layers to the
+      # GitHub Actions cache via docker/build-push-action + type=gha so a cold
+      # run skips the ~120 MB model download. Deferred here to avoid pinning
+      # third-party action SHAs that cannot be verified in this environment.
+      - name: Clean-machine install harness
+        run: make test-install-clean
