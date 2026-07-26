@@ -31,6 +31,17 @@ class FenceScanner:
         self._length = 0
         return self
 
+    @property
+    def is_open(self) -> bool:
+        """Return whether a fence is open — the next line would sit inside it.
+
+        True after the scan when the file ends without closing its last fence
+        (CommonMark closes it implicitly at EOF, so every trailing line is code).
+        A caller appending a top-level line must refuse in that state: the line
+        would land inside the code block, inert rather than top-level.
+        """
+        return bool(self._char)
+
     def shields(self, raw: str) -> bool:
         """Return whether *raw* is code, not a top-level line, advancing fence state."""
         indented = raw.startswith(("\t", "    "))

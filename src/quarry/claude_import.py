@@ -65,8 +65,21 @@ class ClaudeMdImport:
         with FileLock(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
-            if self._matching_toplevel_indices(lines, import_line):
+            hits, fence_open = self._scan_toplevel(lines, import_line)
+            if hits:
                 return False
+            if fence_open:
+                # The host ends inside an unterminated code fence, so an appended
+                # line would land inside that block — inert, not a top-level
+                # import. Refuse rather than write an import Claude Code cannot
+                # resolve: enable() runs register before the marker, so raising
+                # here leaves neither present, never the marker-without-effective-
+                # import state the § 2.11 biconditional forbids.
+                msg = (
+                    f"cannot register import: {self._file.path} ends inside an "
+                    "unterminated code fence"
+                )
+                raise ValueError(msg)
             eol = self._host_eol(content)
             if content and not content.endswith(("\n", "\r")):
                 content += eol
@@ -83,7 +96,8 @@ class ClaudeMdImport:
         with FileLock(self._file.path):
             content = self._file.read()
             lines = content.splitlines(keepends=True)
-            hits = set(self._matching_toplevel_indices(lines, import_line))
+            matches, _ = self._scan_toplevel(lines, import_line)
+            hits = set(matches)
             if not hits:
                 return False
             kept = [line for i, line in enumerate(lines) if i not in hits]
@@ -113,22 +127,26 @@ class ClaudeMdImport:
             raise ValueError(msg)
 
     @staticmethod
-    def _matching_toplevel_indices(lines: list[str], import_line: str) -> list[int]:
-        """Return indices of *lines* equal to *import_line* net of terminator.
+    def _scan_toplevel(lines: list[str], import_line: str) -> tuple[list[int], bool]:
+        """Return top-level matches of *import_line* and the EOF fence state.
 
-        A line shielded by a Markdown code fence or an indented code block is
-        never a match — only a top-level ``@``-import is a Claude Code import
-        (§ 2.4). :class:`FenceScanner` tracks fence state across the scan,
-        honouring CommonMark's same-character close and indentation rules.
+        The first element lists the indices of *lines* equal to *import_line* net
+        of terminator; a line shielded by a Markdown code fence or an indented
+        code block is never a match, because only a top-level ``@``-import is a
+        Claude Code import (§ 2.4). The second element is whether the scan ends
+        inside an unterminated fence — the state ``register`` must refuse, since
+        an appended line would then be code, not a top-level import.
+
+        :class:`FenceScanner` tracks fence state across the scan, honouring
+        CommonMark's same-character close and indentation rules.
         """
         scanner = FenceScanner()
-        hits: list[int] = []
-        for i, raw in enumerate(lines):
-            if scanner.shields(raw):
-                continue
-            if raw.rstrip("\r\n") == import_line:
-                hits.append(i)
-        return hits
+        hits = [
+            i
+            for i, raw in enumerate(lines)
+            if not scanner.shields(raw) and raw.rstrip("\r\n") == import_line
+        ]
+        return hits, scanner.is_open
 
     @staticmethod
     def _host_eol(content: str) -> str:

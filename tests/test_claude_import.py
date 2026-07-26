@@ -190,6 +190,36 @@ def test_prune_leaves_import_after_info_string_line_inside_fence(
     assert path.read_text() == f"```\n```note\n{IMPORT}\n```\n"
 
 
+# ── unterminated fence: refuse to append an inert import ─────────────
+
+
+def test_register_refuses_when_host_ends_in_open_fence(tmp_path: Path) -> None:
+    """§2.11: an unterminated trailing fence would shield an appended import.
+
+    Appending inside the still-open fence yields an import Claude Code cannot
+    resolve, so ``register`` must raise rather than write an inert line (which
+    ``enable`` would then falsely certify with the marker).
+    """
+    path = tmp_path / "CLAUDE.md"
+    path.write_bytes(f"# rules\n\n```\nexample\n{IMPORT}\n".encode())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="unterminated code fence"):
+        ClaudeMdImport(path).register(IMPORT)
+    # The host is left byte-for-byte untouched — no inert import appended.
+    assert path.read_bytes() == before
+
+
+def test_register_idempotent_despite_trailing_open_fence(tmp_path: Path) -> None:
+    """A real top-level import BEFORE an unterminated fence still short-circuits.
+
+    Presence is decided first, so an already-effective import returns False and
+    never reaches the open-fence guard.
+    """
+    path = tmp_path / "CLAUDE.md"
+    path.write_text(f"{IMPORT}\n\n```\nunclosed example\n")
+    assert ClaudeMdImport(path).register(IMPORT) is False
+
+
 # ── boundary validation ──────────────────────────────────────────────
 
 

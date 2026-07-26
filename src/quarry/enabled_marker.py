@@ -19,8 +19,11 @@ class EnabledMarker:
     deletes it. This is a distinct signal from directory presence — the
     vendored guide persists after ``disable`` (the dormant state, § 2.9), so
     directory presence cannot mean "enabled." Both hook gates and ``punt
-    audit`` read this one file, and the § 2.11 biconditional couples it to the
-    repo import line: marker present ⟺ ``@.punt-labs/quarry/CLAUDE.md`` present.
+    audit`` read this one file. Per § 2.11 the marker is a commit point:
+    :class:`quarry.enablement.Enablement` writes it only after the repo
+    ``@.punt-labs/quarry/CLAUDE.md`` import is effective, so marker present ⇒
+    import present. The reverse can differ mid-operation (import written, marker
+    not) — the recoverable state a re-run reconciles.
     """
 
     __slots__ = ("_path",)

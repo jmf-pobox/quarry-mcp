@@ -66,3 +66,28 @@ def test_trailing_whitespace_after_closer_still_closes() -> None:
     """Spaces/tabs after the closing marker are allowed (CommonMark §4.5)."""
     flags = _shield_flags("```\nbody\n```   \nafter\n")
     assert flags == [True, True, True, False]
+
+
+def _fence_open_at_eof(text: str) -> bool:
+    """Return whether *text* ends inside an unterminated fence."""
+    scanner = FenceScanner()
+    for line in text.splitlines(keepends=True):
+        scanner.shields(line)
+    return scanner.is_open
+
+
+def test_is_open_false_before_any_line() -> None:
+    assert FenceScanner().is_open is False
+
+
+def test_is_open_false_after_a_closed_fence() -> None:
+    assert _fence_open_at_eof("```\nbody\n```\nafter\n") is False
+
+
+def test_is_open_true_after_an_unterminated_fence() -> None:
+    """A fence opened but never closed leaves the scanner open at EOF."""
+    assert _fence_open_at_eof("# rules\n\n```\nnever closed\n") is True
+
+
+def test_is_open_false_on_plain_prose() -> None:
+    assert _fence_open_at_eof("alpha\nbeta\n") is False

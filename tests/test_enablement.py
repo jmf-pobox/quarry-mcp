@@ -56,6 +56,22 @@ def test_enable_leaves_no_marker_when_register_raises(
     assert not EnabledMarker(tmp_path).is_present()
 
 
+def test_enable_leaves_no_marker_when_host_ends_in_open_fence(tmp_path: Path) -> None:
+    """§2.11: enabling a CLAUDE.md that ends in an unterminated fence fails closed.
+
+    The import would land inside the open fence — inert — so register raises and
+    the marker is never written, leaving neither an inert import nor a marker
+    that would falsely advertise enablement.
+    """
+    (tmp_path / "CLAUDE.md").write_text("# rules\n\n```\nnever closed\n")
+
+    with pytest.raises(ValueError, match="unterminated code fence"):
+        Enablement(tmp_path).enable()
+
+    assert not EnabledMarker(tmp_path).is_present()
+    assert REPO_IMPORT_LINE not in (tmp_path / "CLAUDE.md").read_text()
+
+
 def test_disable_prunes_import_and_marker_leaves_guide(tmp_path: Path) -> None:
     Enablement(tmp_path).enable()
     result = Enablement(tmp_path).disable()
