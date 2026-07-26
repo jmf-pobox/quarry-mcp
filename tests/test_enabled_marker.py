@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
@@ -31,6 +32,27 @@ def test_write_is_idempotent(tmp_path: Path) -> None:
     marker.path.write_text("sentinel")  # content is irrelevant to the signal
     marker.write()
     assert marker.path.read_text() == "sentinel"
+
+
+def test_write_present_does_not_bump_mtime(tmp_path: Path) -> None:
+    """Re-enabling a present marker is a true no-op: the mtime is left as-is."""
+    marker = EnabledMarker(tmp_path)
+    marker.write()
+    past = 1_000_000_000  # fixed past timestamp; a touch would bump it to now
+    os.utime(marker.path, (past, past))
+    marker.write()
+    assert marker.path.stat().st_mtime == past
+
+
+def test_write_uses_mode_0644_under_restrictive_umask(tmp_path: Path) -> None:
+    """The creation-path chmod forces 0644 even when the umask would mask it."""
+    old_umask = os.umask(0o077)
+    try:
+        marker = EnabledMarker(tmp_path)
+        marker.write()
+    finally:
+        os.umask(old_umask)
+    assert stat.S_IMODE(marker.path.stat().st_mode) == 0o644
 
 
 def test_remove_deletes_marker_only(tmp_path: Path) -> None:

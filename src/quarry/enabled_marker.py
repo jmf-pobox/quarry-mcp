@@ -44,14 +44,19 @@ class EnabledMarker:
         return self._path.is_file()
 
     def write(self) -> None:
-        """Create the marker, making its ``.punt-labs/quarry/`` parents as needed.
+        """Create the marker at mode ``0644``; do nothing if it already exists.
 
-        Idempotent: touching an existing marker is a no-op that leaves its
-        content untouched. The marker carries no data — its existence is the
-        whole signal — so it is created empty at mode ``0644``.
+        A present marker is left untouched — no mtime bump — so re-enabling is a
+        true idempotent no-op. On the creation path the mode is set by an explicit
+        ``chmod``: ``touch``'s create mode is masked by the process umask, so a
+        restrictive umask would otherwise yield ``0600`` instead of the ``0644``
+        both the hook gates and ``punt audit`` expect.
         """
+        if self._path.is_file():
+            return
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.touch(mode=0o644, exist_ok=True)
+        self._path.touch()
+        self._path.chmod(0o644)
 
     def remove(self) -> bool:
         """Delete the marker; return whether a marker was present to remove.
