@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -251,3 +252,27 @@ class TestCorsOrigins:
         assert mock_serve.call_args[0][1].cors_origins == frozenset(
             {"http://a", "http://b"}
         )
+
+
+class TestServeAppliesThreadCaps:
+    """serve() must cap LanceDB threads BEFORE run() connects (the CPU ceiling)."""
+
+    def test_serve_sets_lance_cpu_cap_before_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.config import Settings
+        from quarry.daemon.server import DaemonServer, ServeConfig
+
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        # run() is where the first lancedb.connect happens; capture the env as it
+        # stood when run() was entered, proving the cap was set beforehand.
+        seen: dict[str, str | None] = {}
+
+        def fake_run(self: DaemonServer) -> None:
+            seen["lance_cpu"] = os.environ.get("LANCE_CPU_THREADS")
+
+        monkeypatch.setattr(DaemonServer, "run", fake_run)
+        config = ServeConfig(api_key="k")
+        DaemonServer.serve(Settings(), config)
+        assert seen["lance_cpu"] == "2"

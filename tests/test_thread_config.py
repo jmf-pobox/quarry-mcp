@@ -127,3 +127,65 @@ class TestApplyEnvLimits:
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         config = ThreadConfig(is_gpu=False)
         assert config.apply_env_limits() is config
+
+
+class TestLanceThreadCap:
+    """The LanceDB compute-pool ceiling — the daemon's structural CPU bound."""
+
+    def test_caps_lance_cpu_threads_at_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On 8 cores lance would otherwise size its compute pool to 8 and flood
+        # every core during compaction; the cap holds it at 2 (300-400% -> ~2x).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_caps_lance_io_threads_at_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_IO_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_lance_cap_is_provider_independent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The daemon holds the LanceDB connection regardless of GPU embedding, so
+        # the compute cap must apply on GPU too (unlike ONNX intra_op).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        ThreadConfig(is_gpu=True).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_preserves_operator_lance_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "4")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "4"
+
+    def test_divergent_lance_preset_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "6")
+        with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("LANCE_CPU_THREADS preset to 6" in m for m in warnings)
+        assert any("may be defeated" in m for m in warnings)
+
+    def test_info_line_reports_lance_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        assert any("LANCE_CPU=2" in r.getMessage() for r in caplog.records)

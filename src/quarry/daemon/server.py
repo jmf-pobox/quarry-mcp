@@ -28,6 +28,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
+from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -130,6 +131,12 @@ class DaemonServer:
         the caller (the ``quarryd`` entry point) owns option parsing and this
         method stays a two-argument seam rather than a wide parameter list.
         """
+        # Cap LanceDB's compute pool (and OMP) BEFORE the first lancedb.connect
+        # in warm(): lance reads LANCE_CPU_THREADS once when it builds its tokio
+        # compute runtime, so this is the daemon's structural CPU ceiling (DES-032).
+        # is_gpu=False — the lance/OMP caps are provider-independent; the embedding
+        # backend builds its own provider-specific ONNX config.
+        ThreadConfig(is_gpu=False).apply_env_limits()
         cls(settings, config).run()
 
     def run(self) -> None:
