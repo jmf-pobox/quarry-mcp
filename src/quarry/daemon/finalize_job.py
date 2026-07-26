@@ -40,12 +40,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class CollectionFinalizeJob:
-    """Rebuild the FTS index and optimize one database's table, once per batch.
+    """Rebuild the FTS index and optimize one database's table.
 
     ``collection`` is only the routing key — the rebuild is table-wide — so the
     job serializes behind that collection's file jobs on the per-``(database,
-    collection)`` FIFO worker, guaranteeing the FTS reflects every just-indexed
-    file.
+    collection)`` FIFO worker.  Freshness is therefore DB-granularity, not
+    per-collection: the watch loop rate-limits this finalize per database
+    (``FinalizeThrottle``), so a just-indexed file's vector channel is searchable
+    immediately while its FTS coverage lands with the next finalize for that
+    database — the trailing finalize after churn settles, or, as a backstop, the
+    periodic reconcile that re-scans every registered collection (unthrottled).
     """
 
     database: Database

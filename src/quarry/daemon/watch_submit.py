@@ -24,7 +24,7 @@ from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from quarry.config import Settings
@@ -43,6 +43,116 @@ _BACKOFF_MAX_S = 30.0
 
 
 @final
+class FinalizeThrottle:
+    """Rate-limit the per-database finalize (optimize + full FTS rebuild).
+
+    A finalize is the heavy tail of every watch batch, so under sustained churn
+    the debouncer flushes one every window and the daemon compacts continuously.
+    This coalesces them per database: the first request runs immediately, any
+    request inside the interval arms a single trailing timer that runs one
+    finalize when the interval elapses — so continuous churn costs one finalize
+    per interval, and a finalize always lands after churn settles.  All state
+    lives on the event loop, so no lock is needed.
+
+    Granularity is the DATABASE, not the collection.  The trailing timer is armed
+    on the first requesting collection's routing key, so it may run on that
+    collection's FIFO before a *different* collection's in-flight file-index jobs
+    complete.  The rebuild is table-wide, so it still reindexes every collection's
+    already-committed chunks; only files a collection indexes *after* this
+    finalize lag in FTS.  That lag self-heals within one bounded window: the
+    periodic reconcile (``watch_safety_scan_s``, default 300 s) re-scans every
+    registered collection with an IMMEDIATE (un-throttled) finalize.  The vector
+    channel is never stale — files index immediately — so hybrid search degrades
+    to vector-only for the lagging collection until the next finalize, never
+    silently wrong.  With ``watch_safety_scan_s = 0`` the reconcile backstop is
+    off and FTS lag clears only on that collection's next churn.
+    """
+
+    __slots__ = ("_interval", "_last", "_loop", "_timers")
+
+    _loop: asyncio.AbstractEventLoop
+    _interval: float
+    _last: dict[str, float]
+    _timers: dict[str, asyncio.TimerHandle]
+
+    def __new__(cls, loop: asyncio.AbstractEventLoop, interval_s: float) -> Self:
+        self = super().__new__(cls)
+        self._loop = loop
+        self._interval = interval_s
+        self._last = {}
+        self._timers = {}
+        return self
+
+    def request(self, database: str, submit: Callable[[], bool]) -> None:
+        """Run *submit* now, or coalesce it into *database*'s trailing timer.
+
+        ``submit`` is a no-argument thunk returning whether the finalize was
+        ADMITTED (the DES-042 queue can shed it when full), so the throttle stays
+        ignorant of jobs and route keys.  A disabled interval (<= 0) runs every
+        request inline.
+        """
+        if self._interval <= 0:
+            submit()
+            return
+        now = self._loop.time()
+        last = self._last.get(database)
+        if last is None or now - last >= self._interval:
+            self._fire(database, submit)
+            return
+        if database not in self._timers:
+            delay = last + self._interval - now
+            self._timers[database] = self._loop.call_later(
+                delay, self._fire, database, submit
+            )
+
+    def cancel_all(self) -> None:
+        """Cancel every pending trailing finalize (loop shutdown)."""
+        for timer in self._timers.values():
+            timer.cancel()
+        self._timers.clear()
+
+    def mark_admitted(self, database: str) -> None:
+        """Record an ADMITTED out-of-band finalize: cancel any pending trailing
+        timer and stamp the interval clock.
+
+        Callers that finalize a database OUTSIDE this throttle — the reconcile and
+        explicit-sync scans, which run an immediate finalize directly — call this
+        so their finalize and an already-armed trailing finalize for the same
+        database do not both run (a redundant double-compaction).  Cancelling,
+        not just dropping, de-queues an overdue timer callback; stamping ``_last``
+        makes the next in-window request coalesce behind the finalize that ran.
+
+        Call this ONLY when the finalize was admitted — a shed one must not stamp
+        (it never ran) and must leave any pending trailing timer intact to retry.
+        """
+        self._consume_timer(database)
+        self._last[database] = self._loop.time()
+
+    def _fire(self, database: str, submit: Callable[[], bool]) -> None:
+        """Finalize *database* now: run submit, then stamp only if it was admitted.
+
+        Consume any pending trailing timer first: the immediate path fires exactly
+        when a trailing timer is due (both at ``last + interval``), so a debounce
+        flush in that tick would otherwise run this finalize AND leave the overdue
+        timer queued — two finalizes for one interval.
+
+        Stamp the clock only on ADMISSION.  A shed submit (queue full) never ran a
+        finalize, so stamping would push the next attempt out a whole interval;
+        leaving ``_last`` unstamped lets the next ``request`` retry immediately
+        (the reconcile at ``watch_safety_scan_s`` is the eventual backstop).
+        """
+        self._consume_timer(database)
+        if submit():
+            self._last[database] = self._loop.time()
+
+    def _consume_timer(self, database: str) -> None:
+        """Cancel and drop any pending or just-fired trailing timer for *database*."""
+        timer = self._timers.pop(database, None)
+        if timer is not None:
+            timer.cancel()
+
+
+@final
 class WatchSubmitter:
     """Submit watch-derived IngestUnits to the queue, re-arming shed live events."""
 
@@ -52,6 +162,7 @@ class WatchSubmitter:
         "_dispatcher",
         "_loop",
         "_roster",
+        "_throttle",
         "_timers",
     )
 
@@ -62,6 +173,7 @@ class WatchSubmitter:
     _backoff: dict[RouteKey, float]
     # Pending backoff re-arm timers, tracked so shutdown can cancel them.
     _timers: set[asyncio.TimerHandle]
+    _throttle: FinalizeThrottle
 
     def __new__(
         cls, ctx: DaemonContext, roster: WatchRoster, loop: asyncio.AbstractEventLoop
@@ -73,13 +185,17 @@ class WatchSubmitter:
         self._dispatcher = None
         self._backoff = {}
         self._timers = set()
+        self._throttle = FinalizeThrottle(
+            loop, ctx.settings.watch_optimize_min_interval_s
+        )
         return self
 
     def cancel_pending(self) -> None:
-        """Cancel every outstanding backoff re-arm timer (shutdown)."""
+        """Cancel every outstanding backoff re-arm and trailing-finalize timer."""
         for timer in self._timers:
             timer.cancel()
         self._timers.clear()
+        self._throttle.cancel_all()
 
     def bind(self, dispatcher: DebouncedDispatcher) -> None:
         """Wire the debouncer used to re-arm shed events (sink is created first)."""
@@ -97,28 +213,72 @@ class WatchSubmitter:
         db = self._roster.database_of(batch.key.database)
         settings = self._roster.settings_of(batch.key.database)
         if batch.bulk:
-            self.submit_scan(batch.key, root)
+            # Index the burst now, but THROTTLE the heavy finalize. A sustained
+            # bulk-churn workflow (branch switch, large rebase) trips the bulk
+            # threshold every debounce window; an immediate finalize each time
+            # would storm optimize+FTS and defeat the CPU envelope. Coalesce it
+            # per database exactly like the delta path below.
+            self._submit_scan_job(batch.key, root, db, settings)
+            self._throttle.request(
+                batch.key.database,
+                lambda: self._admitted_finalize(batch.key, db, settings),
+            )
             return
         failed = self._submit_deltas(batch, db, settings, root)
         if failed:
             self._defer(batch.key, failed)
             return
         self._backoff.pop(batch.key, None)  # batch cleared — reset backoff
-        self._submit_finalize(batch.key, db, settings)
+        # Rate-limit the heavy finalize: sustained churn coalesces into one
+        # optimize+FTS-rebuild per interval per database, not one per batch. The
+        # finalize is table-wide, so running under this batch's (possibly later
+        # deregistered) collection key is harmless — it is only the routing key.
+        self._throttle.request(
+            batch.key.database,
+            lambda: self._admitted_finalize(batch.key, db, settings),
+        )
 
     def submit_scan(self, key: RouteKey, root: Path) -> list[TaskState]:
-        """Submit a bulk scan then its coalesced finalize; return their task states.
+        """Submit a bulk scan + an IMMEDIATE finalize; return their task states.
 
-        A scan shed by a full queue is recovered by the periodic reconcile, which
-        re-scans every registered collection, so no retry state is tracked here.
+        Immediate — not throttled — because every caller is one-shot or the
+        backstop: the initial watch scan, an explicit ``quarry sync`` whose
+        umbrella awaits the finalize task, and the periodic reconcile (whose
+        finalize is the FTS self-heal and must always run, never coalesce away).
+        The high-frequency bulk-churn path (``on_batch``) throttles its finalize
+        instead.  A scan shed by a full queue is recovered by the reconcile.
+
+        This immediate finalize registers with the throttle (``mark_admitted``)
+        so it cancels any trailing finalize already armed for the same database and
+        resets that database's interval clock — otherwise a reconcile/sync finalize
+        and an armed trailing finalize would both run (a redundant double-compaction).
+        It registers ONLY when the queue admitted the finalize: a shed one never
+        ran, so it must not stamp and must leave a pending trailing timer to retry.
         """
         db = self._roster.database_of(key.database)
         settings = self._roster.settings_of(key.database)
+        scan = self._submit_scan_job(key, root, db, settings)
+        finalize = self._submit_finalize(key, db, settings)
+        if finalize.status != "failed":
+            self._throttle.mark_admitted(key.database)
+        return [scan, finalize]
+
+    def _submit_scan_job(
+        self, key: RouteKey, root: Path, db: Database, settings: Settings
+    ) -> TaskState:
+        """Submit the bulk re-scan/index job for *key*; return its task state."""
         scan = CollectionSyncJob(db, settings, key.collection, root)
-        return [
-            self._submit_tracked(key, scan, "sync"),
-            self._submit_finalize(key, db, settings),
-        ]
+        return self._submit_tracked(key, scan, "sync")
+
+    def _admitted_finalize(
+        self, key: RouteKey, db: Database, settings: Settings
+    ) -> bool:
+        """Submit the coalesced finalize; return True iff the queue admitted it.
+
+        The throttle stamps its interval clock only on admission, so the return
+        must distinguish a shed finalize (queue full) from one that ran.
+        """
+        return self._submit_finalize(key, db, settings).status != "failed"
 
     @staticmethod
     def summarize_scan(

@@ -29,6 +29,7 @@ from quarry.daemon.tasks import task_terminal
 from quarry.daemon.watch_reconcile import ReconcilerDeps, WatchReconciler
 from quarry.daemon.watch_roster import WatchRoster
 from quarry.daemon.watch_submit import WatchSubmitter
+from quarry.scratch_paths import ScratchGuard
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -53,6 +54,7 @@ class WatchLoop:
     __slots__ = (
         "_ctx",
         "_dispatcher",
+        "_guard",
         "_loop",
         "_reconciler",
         "_roster",
@@ -71,12 +73,14 @@ class WatchLoop:
     _loop: asyncio.AbstractEventLoop | None
     _safety_task: asyncio.Task[None] | None
     _started: bool
+    _guard: ScratchGuard
 
     def __new__(
         cls, ctx: DaemonContext, *, source: FsEventSource | None = None
     ) -> Self:
         self = super().__new__(cls)
         self._ctx = ctx
+        self._guard = ScratchGuard()
         # A test injects a synthetic source; production builds a watchdog observer
         # lazily in start() so importing the loop never starts a thread.
         self._source = source
@@ -218,7 +222,14 @@ class WatchLoop:
             WatchSubmitter.summarize_scan(umbrella, children, timed_out=timed_out)
 
     def _submit_all_scans(self) -> list[TaskState]:
-        """Scan+finalize every active-DB registration (runs even if observer off)."""
+        """Scan+finalize every active-DB registration (runs even if observer off).
+
+        Applies the temp/scratch guard explicitly: ``request_scan`` (an on-demand
+        ``quarry sync``) reaches the queue here, NOT through ``_begin_collection``,
+        so a registered ``/private/tmp`` would otherwise be scanned on demand even
+        though the live watch refuses it.  Refused (and unresolvable) roots are
+        skipped here too, via the same fail-closed helper.
+        """
         roster, submitter = self._roster, self._submitter
         if roster is None or submitter is None:  # start() never ran
             return []
@@ -226,7 +237,10 @@ class WatchLoop:
         roster.ensure_database(name)
         children: list[TaskState] = []
         for collection, root in roster.registrations(name):
-            children.extend(submitter.submit_scan(RouteKey(name, collection), root))
+            resolved = self._resolve_watchable(root, collection)
+            if resolved is None:
+                continue
+            children.extend(submitter.submit_scan(RouteKey(name, collection), resolved))
         return children
 
     # -- internals ----------------------------------------------------------
@@ -245,11 +259,38 @@ class WatchLoop:
         for collection, root in registrations:
             self._begin_collection(name, collection, root)
 
+    def _resolve_watchable(self, root: Path, collection: str) -> Path | None:
+        """Resolve *root* for watching, or return ``None`` to skip it (fail closed).
+
+        ``None`` is a control sentinel meaning "do not watch this root": either
+        the resolved path is a temp/scratch tree (``/private/tmp`` was in the
+        operator's registry; watching it OCR-storms the OS temp dir), OR
+        ``resolve()`` raised (ELOOP symlink cycle, permission) — a root the
+        daemon cannot resolve is not one it should walk.  Both fail closed so a
+        single bad registration skips-and-continues, never aborting an on-demand
+        sync or the roster start (Class-2 exception boundary).
+        """
+        try:
+            resolved = root.resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "watch: skipping unresolvable root %s (%s): %s", root, collection, exc
+            )
+            return None
+        if self._guard.refuses_root(resolved):
+            logger.info(
+                "watch: skipping temp/scratch root %s (%s)", resolved, collection
+            )
+            return None
+        return resolved
+
     def _begin_collection(self, database: str, collection: str, root: Path) -> None:
         """Schedule *collection*'s tree and submit its initial scan + finalize."""
         if self._roster is None or self._submitter is None:
             return
-        resolved = root.resolve()
+        resolved = self._resolve_watchable(root, collection)
+        if resolved is None:
+            return
         key = RouteKey(database, collection)
         # A re-registration makes the collection live again — cancel any stale
         # orphan-purge immediately so drain never wipes the fresh chunks.
