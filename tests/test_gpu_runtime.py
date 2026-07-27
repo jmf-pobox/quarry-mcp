@@ -655,3 +655,43 @@ class TestGpuRuntimeEnsure:
         install_specs = _pip_install_specs(calls)
         # The CPU wheel was restored despite the GPU install raising.
         assert "onnxruntime>=1.18.0" in install_specs
+
+    def test_restore_oserror_returns_restore_failed(self) -> None:
+        """An ``OSError`` from the CPU-restore subprocess returns RESTORE_FAILED.
+
+        Same boundary race as ``_swap``: after the GPU install fails, the swap
+        calls ``_restore_cpu``, whose own ``uv pip install`` of the CPU wheel can
+        raise ``OSError`` (the ``uv`` binary removed between the ``shutil.which``
+        check and exec, or a signal). The guard inside ``_restore_cpu`` must
+        absorb it and end on the defined ``RESTORE_FAILED`` status — the state
+        that already means "GPU install failed AND CPU restore failed" — instead
+        of propagating out of ``_swap``/``ensure``. This covers BOTH ``_swap``
+        call sites at once because they both route through ``_restore_cpu``.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
+            if _is_provider_check(cmd):
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            # GPU install fails (rc 1), routing to _restore_cpu; the CPU-restore
+            # install then raises OSError at the subprocess boundary.
+            if "install" in cmd and "onnxruntime-gpu>=1.19.0,<1.27.0" in cmd:
+                return MagicMock(returncode=1)
+            if "install" in cmd and "onnxruntime>=1.18.0" in cmd:
+                raise OSError("uv binary vanished during CPU restore")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The OSError did not propagate; the defined status is RESTORE_FAILED.
+        assert result == GpuStatus.RESTORE_FAILED
+        # The CPU restore WAS attempted (distinguishing from CUDA_UNSUPPORTED).
+        assert "onnxruntime>=1.18.0" in _pip_install_specs(calls)

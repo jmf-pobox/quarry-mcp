@@ -248,8 +248,24 @@ class GpuRuntime:
         return self._restore_cpu()
 
     def _restore_cpu(self) -> GpuStatus:
-        """Reinstall CPU onnxruntime after a failed GPU swap."""
-        cpu_restore = self._pip("install", _ORT_CPU_SPEC)
+        """Reinstall CPU onnxruntime after a failed GPU swap.
+
+        The restore is the last-resort path: every ``_swap`` failure branch and
+        the ``_verify_install`` import-failure branch route through here to end
+        on a defined :class:`GpuStatus`. ``subprocess.run`` can itself raise
+        ``OSError`` at the boundary — the same race that motivates the guard in
+        ``_swap`` (the ``uv`` binary removed between the ``shutil.which`` check
+        and exec, or a signal). Catching it here — narrowly, only around the
+        subprocess boundary — is the single point that guarantees the contract:
+        every path out of ``_swap``/``ensure`` yields a status, never an
+        exception. ``RESTORE_FAILED`` already means "GPU install failed AND CPU
+        restore failed", which is exactly this state.
+        """
+        try:
+            cpu_restore = self._pip("install", _ORT_CPU_SPEC)
+        except OSError as exc:
+            logger.error("CPU onnxruntime restore raised %s — restore failed", exc)
+            return GpuStatus.RESTORE_FAILED
         self._clear_module_cache()
         if cpu_restore.returncode != 0:
             logger.error(
