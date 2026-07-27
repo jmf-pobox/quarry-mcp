@@ -274,12 +274,18 @@ class TestT11DisableRemovesConfig:
         assert result.config_removed is True
         assert not config_path.exists()
 
-    def test_symlinked_ancestor_config_removal_spares_external(
+    def test_symlinked_ancestor_config_removal_does_not_strand_import(
         self, tmp_path: Path
     ) -> None:
-        """disable must not unlink a config.md outside the repo via a symlink."""
+        """A symlinked-ancestor config-remove must not abort disable and strand.
+
+        The config-remove refusal is caught so disable continues to prune the
+        @-import a prior deregister already acted on — and never unlinks the
+        config.md outside the repo via the symlink.
+        """
         project = tmp_path / "myproject"
         project.mkdir()
+        (project / "CLAUDE.md").write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
         external = tmp_path / "external"
         (external / "quarry").mkdir(parents=True)
         planted = external / "quarry" / "config.md"
@@ -287,13 +293,14 @@ class TestT11DisableRemovesConfig:
         (project / ".punt-labs").symlink_to(external)
         client = FakeRegistryClient([("myproject", project)])
 
-        with (
-            patch(_NO_ETHOS, tmp_path / "no-ethos"),
-            pytest.raises(ValueError, match="ancestor"),
-        ):
-            disable_project(project, client)
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = disable_project(project, client)
 
-        assert planted.exists()
+        # The import was pruned (not stranded), the external config survives,
+        # and the refused config-remove is reported as not-removed.
+        assert REPO_IMPORT_LINE not in (project / "CLAUDE.md").read_text()
+        assert result.config_removed is False
+        assert planted.read_text() == "external config\n"
 
 
 class TestT12DisableKeepData:

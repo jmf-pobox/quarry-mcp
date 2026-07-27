@@ -217,3 +217,48 @@ def test_write_atomic_removes_temp_when_fdopen_raises(tmp_path: Path) -> None:
 
     # No temp file (or leaf) is left behind after the failed atomic write.
     assert list(parent.iterdir()) == []
+
+
+def test_create_exclusive_leaves_no_partial_leaf_and_retry_works(
+    tmp_path: Path,
+) -> None:
+    """A fill failure unlinks the leaf so the next create_exclusive is not fooled.
+
+    A stranded partial leaf would read as an existing regular file — the
+    idempotent no-op — leaving a truncated marker/config on every retry.
+    """
+    target = _target(tmp_path)
+    leaf = tmp_path.joinpath(*_RELATIVE)
+
+    with (
+        patch("quarry.safe_paths.os.fdopen", side_effect=OSError("fill failed")),
+        pytest.raises(OSError, match="fill failed"),
+    ):
+        target.create_exclusive("CONTENT", mode=0o644)
+
+    assert not leaf.exists()  # no partial leaf stranded
+
+    # A real retry now creates the file with the full content, not a no-op.
+    assert target.create_exclusive("CONTENT", mode=0o644) is True
+    assert leaf.read_text() == "CONTENT"
+
+
+def test_remove_creates_no_artifact_and_leaves_file_on_unlink_error(
+    tmp_path: Path,
+) -> None:
+    """remove creates nothing; an unlink error propagates, leaving the file intact.
+
+    remove has no partially-created artifact to clean (it only stats + unlinks),
+    so its Class-1 obligation is simply to not corrupt state on failure.
+    """
+    target = _target(tmp_path)
+    target.create_exclusive("keep\n", mode=0o644)
+    leaf = tmp_path.joinpath(*_RELATIVE)
+
+    with (
+        patch("quarry.safe_paths.os.unlink", side_effect=OSError("unlink failed")),
+        pytest.raises(OSError, match="unlink failed"),
+    ):
+        target.remove()
+
+    assert leaf.read_text() == "keep\n"  # untouched, no partial state

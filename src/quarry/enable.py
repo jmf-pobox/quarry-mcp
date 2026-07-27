@@ -206,10 +206,16 @@ def disable_project(
     # Clean local capture config whether or not a registration was present, and
     # BEFORE the best-effort captures purge below — a retry always reaches here.
     # Route through SafeRepoPath so a symlinked .punt-labs ancestor cannot make
-    # this unlink escape the repo (it is refused, never followed).
-    config_removed = SafeRepoPath(
-        directory, (".punt-labs", "quarry", "config.md")
-    ).remove()
+    # this unlink escape the repo (it is refused, never followed). Catch that
+    # refusal so it cannot abort disable before Enablement.disable prunes the
+    # @-import a prior deregister already acted on — the config there is not a
+    # real in-repo file, so treating it as absent and continuing is correct.
+    try:
+        config_removed = SafeRepoPath(
+            directory, (".punt-labs", "quarry", "config.md")
+        ).remove()
+    except ValueError:
+        config_removed = False
 
     # Prune the @-import line and delete the enabled marker (§ 2.3). The vendored
     # guide is left in place — disable is non-destructive of vendored content

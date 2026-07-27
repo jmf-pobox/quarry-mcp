@@ -85,7 +85,16 @@ class SafeRepoPath:
                     return False
                 msg = f"path is not a regular file: {self.path}"
                 raise ValueError(msg) from None
-            self._fill_and_close(fd, text, mode)
+            try:
+                self._fill_and_close(fd, text, mode)
+            except BaseException:
+                # A write/fsync/fchmod failure leaves the just-created leaf on
+                # disk; unlink it so the next create_exclusive does not see an
+                # "existing regular file" and skip as a no-op, stranding the
+                # retry with a truncated marker or config. Mirrors write_atomic.
+                with contextlib.suppress(OSError):
+                    os.unlink(leaf, dir_fd=parent_fd)
+                raise
             return True
 
     def write_atomic(self, text: str, *, mode: int) -> None:
