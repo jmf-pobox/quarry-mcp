@@ -1,10 +1,11 @@
 {
+  "total": 212,
   "by_category": {
-    "noqa": 174,
-    "per_file_ignores": 34,
+    "noqa": 170,
+    "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
-    "type_ignore": 7
+    "per_file_ignores": 34
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -55,7 +56,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 65
+      "noqa": 61
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -139,6 +140,5 @@
       "noqa": 1
     }
   },
-  "total": 216,
-  "updated_at": "2026-07-26T04:50:39Z"
+  "updated_at": "2026-07-27T03:48:27Z"
 }
