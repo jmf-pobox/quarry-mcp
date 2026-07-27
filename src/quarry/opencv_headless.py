@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 from typing import Self, final
@@ -45,8 +46,12 @@ class HeadlessOpenCv:
         return f"{_PACKAGE} is the cv2 provider"
 
     def remediation(self) -> str:
-        """Return the shell command :meth:`enforce` runs, for an operator hint."""
-        return " ".join(self._reinstall_command())
+        """Return the command :meth:`enforce` runs as a copy-pastable shell string.
+
+        ``shlex.join`` quotes each argv element, so an interpreter path containing
+        spaces yields a command that pastes and runs correctly.
+        """
+        return shlex.join(self._reinstall_command())
 
     def _reinstall_command(self) -> list[str]:
         """Return the force-reinstall argv, preferring uv (tool venvs lack pip).

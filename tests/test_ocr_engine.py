@@ -51,3 +51,24 @@ def test_get_raises_actionable_error_when_cv2_unavailable(
     monkeypatch.setattr(importlib, "import_module", fake)
     with pytest.raises(OcrUnavailableError, match="opencv-python-headless"):
         OcrEngine.get()
+
+
+def test_unavailable_probe_runs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A headless box must probe cv2 once, then re-raise the cached error on every
+    # later call instead of re-attempting the failing native load per document.
+    calls = 0
+
+    def counting_probe() -> OcrAvailability:
+        nonlocal calls
+        calls += 1
+        return OcrAvailability(available=False, reason="headless: no cv2")
+
+    monkeypatch.setattr(
+        "quarry.ingestion.ocr_availability.OcrAvailability.probe", counting_probe
+    )
+    with pytest.raises(OcrUnavailableError):
+        OcrEngine.get()
+    with pytest.raises(OcrUnavailableError):
+        OcrEngine.get()
+
+    assert calls == 1

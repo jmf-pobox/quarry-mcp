@@ -26,7 +26,9 @@ class InferenceDiagnostics:
         """Report local OCR (RapidOCR) availability.
 
         A headless box where cv2 will not load warns with an actionable message
-        (run the printed ``pip install`` fix) rather than failing the run.
+        naming the exact force-reinstall command to run — uv-aware and targeting
+        this environment (``uv pip install --python <env> --force-reinstall
+        --no-deps`` when uv is present) — rather than failing the run.
         """
         availability = OcrAvailability.probe()
         if not availability.is_available:
