@@ -61,6 +61,21 @@ def test_enter_closes_fd_when_flock_raises(
     assert closed == opened, "the opened fd must be closed, not leaked"
 
 
+def test_reentrant_nested_acquire_same_process(tmp_path: Path) -> None:
+    """A nested acquire of the same lock in one process shares the flock, not deadlocks.
+
+    Enablement holds the lock while ClaudeMdImport.register re-acquires it; two
+    independent fds on one file would deadlock (flock treats them as separate
+    holders even in one process), so the lock counts the depth and locks once.
+    """
+    target = tmp_path / "CLAUDE.md"
+    with FileLock(target), FileLock(target):
+        assert (tmp_path / ".CLAUDE.md.lock").is_file()
+    # Fully released: the path can be acquired cleanly again.
+    with FileLock(target):
+        pass
+
+
 def _increment_under_lock(target_str: str, counter_str: str) -> None:
     target = Path(target_str)
     counter = Path(counter_str)

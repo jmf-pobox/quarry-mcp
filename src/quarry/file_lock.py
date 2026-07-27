@@ -5,7 +5,8 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
-from typing import TYPE_CHECKING, Self, final
+import threading
+from typing import TYPE_CHECKING, ClassVar, Self, final
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,31 +30,56 @@ class FileLock:
     ``CLAUDE.md``) so it shares the directory the atomic rename needs anyway,
     and is created — never removed — so a waiter and a holder always ``flock``
     the same inode.
+
+    **Reentrant within a process.** A nested acquisition of the same lock path
+    (``Enablement`` holds the lock across its whole enable/disable sequence while
+    ``ClaudeMdImport.register`` re-acquires it for the import edit) shares the one
+    ``flock`` rather than opening a second descriptor. ``flock`` treats two
+    independent opens of one file as independent holders even inside a single
+    process, so a naive nested acquire would deadlock against the outer hold;
+    counting the depth and locking once avoids that. Cross-process serialization
+    is unaffected — another process blocks on the real ``flock`` until this
+    process releases its outermost acquisition. (The depth registry is keyed by
+    path for bookkeeping only; the intended nesting is sequential within one
+    thread.)
     """
 
-    __slots__ = ("_fd", "_lock_path")
+    __slots__ = ("_lock_path",)
 
     _lock_path: Path
-    _fd: int
+
+    # Process-wide reentrancy registry, keyed by the lock file's path. ``_guard``
+    # serializes the bookkeeping only; the blocking ``flock`` is taken outside it
+    # so a wait never stalls another path's acquisition.
+    _guard: ClassVar[threading.Lock] = threading.Lock()
+    _fd_by_path: ClassVar[dict[str, int]] = {}
+    _depth_by_path: ClassVar[dict[str, int]] = {}
 
     def __new__(cls, target: Path) -> Self:
         self = super().__new__(cls)
         self._lock_path = target.parent / f".{target.name}.lock"
-        self._fd = -1
         return self
 
     def __enter__(self) -> Self:
+        key = str(self._lock_path)
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        with FileLock._guard:
+            if FileLock._depth_by_path.get(key, 0) > 0:
+                # Already held by this process: reenter, sharing the one flock.
+                FileLock._depth_by_path[key] += 1
+                return self
+        fd = os.open(key, os.O_CREAT | os.O_RDWR, 0o644)
         # A blocking flock can raise (EINTR on a signal, ENOLCK on some
-        # filesystems) — __exit__ never runs if __enter__ propagates, so close
-        # the fd here or it leaks for the process lifetime.
+        # filesystems); close the fd here or it leaks for the process lifetime,
+        # since __exit__ never runs when __enter__ propagates.
         try:
-            fcntl.flock(self._fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX)
         except BaseException:
-            os.close(self._fd)
-            self._fd = -1
+            os.close(fd)
             raise
+        with FileLock._guard:
+            FileLock._fd_by_path[key] = fd
+            FileLock._depth_by_path[key] = 1
         return self
 
     def __exit__(
@@ -62,10 +88,20 @@ class FileLock:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        key = str(self._lock_path)
+        with FileLock._guard:
+            depth = FileLock._depth_by_path.get(key, 0)
+            if depth > 1:
+                # An inner (reentrant) exit: keep the flock for the outer holder.
+                FileLock._depth_by_path[key] = depth - 1
+                return
+            fd = FileLock._fd_by_path.pop(key, -1)
+            FileLock._depth_by_path.pop(key, None)
+        if fd < 0:
+            return
         # flock releases on close; unlock first so a waiter wakes even if the
         # interpreter delays the close. Suppress an unlock error so the real
         # exception (if any) from the body propagates unmasked.
         with contextlib.suppress(OSError):
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-        os.close(self._fd)
-        self._fd = -1
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)

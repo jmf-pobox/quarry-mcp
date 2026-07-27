@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
+from quarry.file_lock import FileLock
 from quarry.guidance import REPO_IMPORT_LINE
 
 
@@ -114,3 +116,61 @@ def test_disable_is_idempotent(tmp_path: Path) -> None:
     second = Enablement(tmp_path).disable()
     assert second.import_pruned is False
     assert second.enabled_marker_removed is False
+
+
+# ── concurrency: enable/disable are atomic, never stranding the marker ─
+
+
+def _churn_enable_disable(dir_str: str, iterations: int) -> None:
+    enablement = Enablement(Path(dir_str))
+    for _ in range(iterations):
+        enablement.enable()
+        enablement.disable()
+
+
+def _sample_invariant(
+    dir_str: str, samples: int, out: multiprocessing.Queue[int]
+) -> None:
+    root = Path(dir_str)
+    claude = root / "CLAUDE.md"
+    marker = EnabledMarker(root)
+    violations = 0
+    for _ in range(samples):
+        # Sample marker and import together UNDER the lock, so no enable/disable
+        # is mid-flight: the snapshot is a committed state, never a torn one.
+        with FileLock(claude):
+            marker_present = marker.is_present()
+            text = claude.read_text() if claude.exists() else ""
+        if marker_present and REPO_IMPORT_LINE not in text:
+            violations += 1
+    out.put(violations)
+
+
+def test_concurrent_enable_disable_never_strands_marker(tmp_path: Path) -> None:
+    """§2.11 under concurrency: no observer ever sees marker-present + import-absent.
+
+    Churners hammer enable/disable while a sampler reads both signals under the
+    shared FileLock. Because enable (register+marker) and disable (marker+prune)
+    each commit atomically under that lock, a locked observer only ever sees a
+    consistent state. Without the marker inside the lock, a churner's marker
+    write could land between another's prune and this read — the forbidden state.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    out: multiprocessing.Queue[int] = ctx.Queue()
+    churners = [
+        ctx.Process(target=_churn_enable_disable, args=(str(tmp_path), 50))
+        for _ in range(3)
+    ]
+    sampler = ctx.Process(target=_sample_invariant, args=(str(tmp_path), 500, out))
+    for p in churners:
+        p.start()
+    sampler.start()
+    for p in churners:
+        p.join(timeout=60)
+    sampler.join(timeout=60)
+    for p in (*churners, sampler):
+        if p.is_alive():
+            p.terminate()
+        assert p.exitcode == 0, "a child did not finish cleanly"
+    violations = out.get(timeout=5)
+    assert violations == 0, f"marker-present + import-absent observed {violations}x"

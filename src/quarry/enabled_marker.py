@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
@@ -43,34 +45,64 @@ class EnabledMarker:
         return self._path
 
     def is_present(self) -> bool:
-        """Return whether the marker exists (quarry is enabled here)."""
-        return self._path.is_file()
+        """Return whether a regular-file marker exists (quarry is enabled here).
+
+        Uses ``lstat`` and refuses to follow a final-component symlink: in an
+        untrusted repo the marker path could be a planted symlink to a file
+        elsewhere, and a follow would let that external target spoof the enabled
+        signal. Only a genuine regular file — the shape ``write`` creates — is
+        "enabled."
+        """
+        try:
+            return stat.S_ISREG(os.lstat(self._path).st_mode)
+        except OSError:
+            return False
 
     def write(self) -> bool:
-        """Create the marker at mode ``0644``; return whether it was created.
+        """Create the marker at mode ``0644`` without following a symlink.
 
-        A present marker is left untouched — no mtime bump — and ``False`` is
-        returned, so re-enabling is a true idempotent no-op the caller can
-        report as such. On the creation path the mode is set by an explicit
-        ``chmod``: ``touch``'s create mode is masked by the process umask, so a
-        restrictive umask would otherwise yield ``0600`` instead of the ``0644``
-        both the hook gates and ``punt audit`` expect; that path returns
-        ``True``.
+        Returns whether the marker was created. A present regular marker is left
+        untouched — no mtime bump — and ``False`` is returned, so re-enabling is
+        a true idempotent no-op the caller can report as such.
+
+        ``O_CREAT | O_EXCL | O_NOFOLLOW`` is the security boundary (untrusted
+        repo): ``O_EXCL`` refuses to open anything that already exists and
+        ``O_NOFOLLOW`` refuses a final-component symlink, so a planted symlink
+        (even a dangling one) can never make ``touch`` write *through* it to an
+        arbitrary path outside the repo. ``fchmod`` on the returned descriptor
+        forces ``0644`` independent of the umask — ``O_CREAT``'s mode is masked,
+        so a restrictive umask would otherwise yield ``0600``. An existing
+        symlink is refused with ``ValueError`` rather than followed; an existing
+        regular marker is the idempotent no-op.
         """
-        if self._path.is_file():
-            return False
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.touch()
-        self._path.chmod(0o644)
+        try:
+            fd = os.open(
+                self._path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                0o644,
+            )
+        except FileExistsError:
+            if self._path.is_symlink():
+                msg = f"refusing to follow symlink at marker path: {self._path}"
+                raise ValueError(msg) from None
+            return False
+        try:
+            os.fchmod(fd, 0o644)
+        finally:
+            os.close(fd)
         return True
 
     def remove(self) -> bool:
-        """Delete the marker; return whether a marker was present to remove.
+        """Delete the marker; return whether a regular-file marker was removed.
 
-        Leaves the rest of ``.punt-labs/quarry/`` in place — ``disable`` removes
-        only the signal it wrote, never the dormant vendored guide (§ 2.9).
+        Uses the same no-follow presence check as :meth:`write`: a symlink at
+        the marker path is not the signal quarry wrote, so it is left untouched
+        rather than followed or unlinked. Leaves the rest of
+        ``.punt-labs/quarry/`` in place — ``disable`` removes only the signal it
+        wrote, never the dormant vendored guide (§ 2.9).
         """
-        if not self._path.is_file():
+        if not self.is_present():
             return False
         self._path.unlink()
         return True
