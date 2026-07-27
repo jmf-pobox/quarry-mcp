@@ -79,18 +79,85 @@ class TestApplyEnvLimits:
         ThreadConfig(is_gpu=False).apply_env_limits()
         assert os.environ.get("OMP_NUM_THREADS") == "1"
 
-    def test_preserves_operator_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # setdefault must not clobber an explicit operator setting.
+    def test_clamps_operator_override_above_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A HIGHER inherited value (stale export, dev shell) must clamp DOWN to the
+        # cap — setdefault would have let 7 survive and defeat the ceiling.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("OMP_NUM_THREADS", "7")
         ThreadConfig(is_gpu=False).apply_env_limits()
-        assert os.environ.get("OMP_NUM_THREADS") == "7"
+        assert os.environ.get("OMP_NUM_THREADS") == "2"
 
-    def test_divergent_preset_warns_mitigation_defeated(
+    def test_inherited_thirtytwo_clamps_to_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The exact scenario djb named: a shell exports 32, the daemon must not
+        # inherit it. Clamp to the DES-032 cap of 2.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("OMP_NUM_THREADS", "32")
+        monkeypatch.setenv("LANCE_CPU_THREADS", "32")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("OMP_NUM_THREADS") == "2"
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_honors_omp_override_below_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # OMP floors at 1 (it does not stall), so a lower inherited value is an
+        # intentional tightening — honor it.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("OMP_NUM_THREADS", "1")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("OMP_NUM_THREADS") == "1"
+
+    def test_lance_below_floor_is_raised_to_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # LANCE_CPU_THREADS=1 stalls lance's runtime, so a below-floor preset must
+        # be RAISED to 2 (the floor), never honored as a "tighter" bound — else an
+        # inherited/operator "1" would start a silently-hung daemon.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        monkeypatch.setenv("LANCE_IO_THREADS", "1")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_lance_below_floor_warns(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A preset above the cap means the oversubscription fix is not in force;
-        # the logs must say so rather than claim the intended budget is active.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("LANCE_CPU_THREADS preset to '1'" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
+
+    def test_non_numeric_preset_clamps_to_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A junk preset must fail closed to the cap, not survive as-is.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "garbage")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_zero_preset_clamps_to_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 0 means "auto/unbounded" to lance — never honor it as a lower value.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "0")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_downward_clamp_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A too-high preset means the ceiling was almost defeated; the logs must
+        # record the clamp rather than silently accept the inherited value.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("OMP_NUM_THREADS", "7")
         with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
@@ -98,32 +165,134 @@ class TestApplyEnvLimits:
         warnings = [
             r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
         ]
-        assert any("may be defeated" in m for m in warnings)
-        assert any("preset to 7" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
+        assert any("'7'" in m for m in warnings)
 
-    def test_logs_effective_not_intended_omp(
+    def test_logs_effective_clamped_omp(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # The info line must report the value actually in the environment (7),
-        # not the value ThreadConfig wanted to set (2).
+        # The info line reports the value actually in force (the clamped 2), not
+        # the rejected preset.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.setenv("OMP_NUM_THREADS", "7")
         with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
         rendered = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
-        assert any("OMP=7" in line for line in rendered)
-        assert not any("OMP=2" in line for line in rendered)
+        assert any("OMP=2" in line for line in rendered)
+        assert not any("OMP=7" in line for line in rendered)
+
+    def test_honored_lower_override_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # OMP=1 is inside [1, 2] — honored, so no "not honored" warning fires.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("OMP_NUM_THREADS", "1")
+        with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        assert not any(
+            "OMP_NUM_THREADS preset" in r.getMessage() for r in caplog.records
+        )
 
     def test_no_warning_when_cap_applied(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        # No preset → the cap is applied with no adjustment, so nothing warns.
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
         with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
             ThreadConfig(is_gpu=False).apply_env_limits()
-        assert not any("may be defeated" in r.getMessage() for r in caplog.records)
+        assert not any("not honored" in r.getMessage() for r in caplog.records)
 
     def test_apply_returns_self(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("os.cpu_count", lambda: 8)
         config = ThreadConfig(is_gpu=False)
         assert config.apply_env_limits() is config
+
+
+class TestLanceThreadCap:
+    """The LanceDB compute-pool ceiling — the daemon's structural CPU bound."""
+
+    def test_caps_lance_cpu_threads_at_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On 8 cores lance would otherwise size its compute pool to 8 and flood
+        # every core during compaction; the cap holds it at 2 (300-400% -> ~2x).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_caps_lance_io_threads_at_two(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_IO_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_lance_cap_is_provider_independent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The daemon holds the LanceDB connection regardless of GPU embedding, so
+        # the compute cap must apply on GPU too (unlike ONNX intra_op).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        ThreadConfig(is_gpu=True).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_clamps_lance_override_above_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A higher inherited LANCE_CPU_THREADS must clamp down — the daemon must
+        # not seize 4 cores because a shell exported 4.
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "4")
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+
+    def test_divergent_lance_preset_warns(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "6")
+        with caplog.at_level(logging.WARNING, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("LANCE_CPU_THREADS preset to '6'" in m for m in warnings)
+        assert any("using 2" in m for m in warnings)
+
+    def test_info_line_reports_lance_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        assert any("LANCE_CPU=2" in r.getMessage() for r in caplog.records)
+
+    def test_single_core_still_gets_two_not_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # LANCE_CPU_THREADS=1 stalls lance's runtime, so a one-core host must NOT
+        # derive min(2, ncpu)=1 — the lance count is a fixed 2 regardless of ncpu.
+        monkeypatch.setattr("os.cpu_count", lambda: 1)
+        monkeypatch.delenv("LANCE_CPU_THREADS", raising=False)
+        monkeypatch.delenv("LANCE_IO_THREADS", raising=False)
+        ThreadConfig(is_gpu=False).apply_env_limits()
+        assert os.environ.get("LANCE_CPU_THREADS") == "2"
+        assert os.environ.get("LANCE_IO_THREADS") == "2"
+
+    def test_info_line_reports_effective_raised_lance_not_preset(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A below-floor LANCE preset is raised to 2; the info line must report the
+        # EFFECTIVE value in force (2), not the rejected preset (1).
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        monkeypatch.setenv("LANCE_CPU_THREADS", "1")
+        with caplog.at_level(logging.INFO, logger="quarry.thread_config"):
+            ThreadConfig(is_gpu=False).apply_env_limits()
+        rendered = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert any("LANCE_CPU=2" in line for line in rendered)
+        assert not any("LANCE_CPU=1" in line for line in rendered)

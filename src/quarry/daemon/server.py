@@ -28,6 +28,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
+from quarry.thread_config import ThreadConfig
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -146,6 +147,12 @@ class DaemonServer:
                 api_key=self._config.api_key,
                 cors_origins=self._config.cors_origins,
             )
+            # Clamp LanceDB's compute pool (and OMP) immediately before warm()'s
+            # first lancedb.connect — adjacent to the connect it guards, so no
+            # alternate caller of run() can connect uncapped.  lance reads
+            # LANCE_CPU_THREADS once when it builds its runtime, so a later set is
+            # ignored; is_gpu=False since the lance/OMP caps are provider-independent.
+            ThreadConfig(is_gpu=False).apply_env_limits()
             ctx.warm()  # Build cached resources single-threaded before serving.
 
             app = build_app(ctx, lifespan=self._lifespan)

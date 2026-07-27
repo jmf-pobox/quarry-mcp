@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -251,3 +252,39 @@ class TestCorsOrigins:
         assert mock_serve.call_args[0][1].cors_origins == frozenset(
             {"http://a", "http://b"}
         )
+
+
+class TestRunClampsThreadsBeforeWarm:
+    """run() must clamp LanceDB threads immediately before warm()'s connect."""
+
+    def test_run_clamps_stale_high_lance_cpu_before_warm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from quarry.config import Settings
+        from quarry.daemon.context import DaemonContext
+        from quarry.daemon.server import DaemonServer, ServeConfig
+
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        # A stale high export is exactly what the daemon must not inherit.
+        monkeypatch.setenv("LANCE_CPU_THREADS", "32")
+
+        seen: dict[str, str | None] = {}
+
+        class _StopBeforeServeError(Exception):
+            pass
+
+        def fake_warm(self: DaemonContext) -> None:
+            # warm() is where the first lancedb.connect happens; capture the env
+            # as it stands here, then abort before uvicorn binds.
+            seen["lance_cpu"] = os.environ.get("LANCE_CPU_THREADS")
+            raise _StopBeforeServeError
+
+        monkeypatch.setattr(DaemonServer, "_acquire_run_dir_lock", lambda self: None)
+        monkeypatch.setattr(DaemonServer, "_release_run_dir_lock", lambda self: None)
+        monkeypatch.setattr(DaemonContext, "warm", fake_warm)
+
+        server = DaemonServer(Settings(), ServeConfig(api_key="k"))
+        with pytest.raises(_StopBeforeServeError):
+            server.run()
+        # Clamped down from the inherited 32 to the cap, before warm connected.
+        assert seen["lance_cpu"] == "2"

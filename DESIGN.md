@@ -1201,6 +1201,57 @@ This decision depends on DES-027's `narenas:1,tcache:false`. If `MALLOC_CONF` ch
 4. **Process isolation** — Separate ONNX worker process. Eliminates all contention but adds IPC complexity. Disproportionate when session isolation achieves the same result in-process.
 5. **User-configurable thread count** — Adding an `embedding_threads` field to `Settings`. Rejected for this PR because auto-detection covers all known hardware configurations correctly. Future work (DES-033) if edge cases emerge.
 
+### Amendment 2026-07-26 — LanceDB compute-pool cap + compaction throttle (quarry-exz9)
+
+The original DES-032 caps governed ONNX/OMP but **not LanceDB's own tokio
+compute runtime**, which the Rust core sizes to `num_cpus`. With the always-on
+watch loop (DES-045), each per-collection finalize — `optimize()` plus a full
+`create_fts_index("text", replace=True)` rebuild — ran on that uncapped pool and
+seized every core, spiking the daemon to ~291% CPU whenever a finalize fired.
+The trigger is the daemon's **own** periodic maintenance (the finalize behind an
+index update and the `watch_safety_scan_s` reconcile re-finalizing collections),
+not developer activity — an earlier draft of this entry wrongly attributed the
+spike to `make check` file churn; in fact a `make check` writes only
+gitignored/excluded paths and does not touch the index. Whatever the trigger, a
+background service must stay bounded, so the CPU envelope is capped by
+construction rather than left to the compaction cadence.
+
+Two structural mitigations:
+
+1. **Cap LanceDB's compute + IO pools.** `ThreadConfig.apply_env_limits()` now
+   clamps `LANCE_CPU_THREADS`/`LANCE_IO_THREADS` (default 2) alongside `OMP_*`,
+   applied in `DaemonServer.run()` immediately before the first `lancedb.connect`
+   in `warm()`. The clamp is **fail-closed with a per-variable floor**: an
+   inherited/operator value is honored only within `[floor, cap]`; a higher or
+   non-numeric value is forced down to the cap (a `setdefault` would yield upward
+   to a stale `LANCE_CPU_THREADS=32` and void the ceiling), and a below-floor
+   value is raised to the floor. For the LANCE pools floor == cap == 2
+   (`LANCE_CPU_THREADS=1` stalls lance's runtime), so a `1` is raised to `2`,
+   never honored as a "tighter bound"; `OMP_NUM_THREADS` keeps floor 1. Measured
+   (8-core): the tokio/FTS pool tracks the cap, not
+   `num_cpus` (33→14 workers as the cap goes 8→2), so the ceiling holds
+   core-count-independently. The FTS rebuild runs on LanceDB's **native**
+   inverted index (`use_tantivy=False`, the default) — there is no separate
+   uncapped Tantivy `IndexWriter` pool, so no search-engine change was needed.
+2. **Throttle the finalize.** `FinalizeThrottle` coalesces the per-batch
+   finalize to at most one per `watch_optimize_min_interval_s` (default 30 s)
+   **per database**, with a trailing timer so FTS still catches up after churn
+   settles. Freshness is therefore database-granular, not per-collection; the
+   `watch_safety_scan_s` reconcile (300 s) is the unthrottled backstop that
+   re-finalizes every registered collection.
+
+Trade-off (accepted): the cap is process-global, so it collapses DES-032's
+query/sync thread isolation onto one 2-thread lance runtime. Measured search
+latency under a concurrent finalize is comparable-to-better than uncapped (p95
+214 ms vs 264 ms — the cap tames the finalize's own flooding); the cost is on
+baseline flat-scan throughput (p50 70 ms vs 45 ms). Bulk compaction is ~1.65×
+slower (not the naive 4×; it is partly IO-bound). Acceptable for a background
+daemon whose ingest is not latency-critical (DES-034 bounds the working set).
+
+This also corrects a stale reference: DES-017 and DES-023 name the FTS backend
+"Tantivy," but the shipped index is LanceDB's native FTS (`use_tantivy=False`).
+The name is legacy; the engine is native and rides the capped runtime.
+
 ## DES-033: User-Configurable Embedding Thread Count — RESERVED
 
 **Status:** RESERVED (not adopted)
@@ -1912,7 +1963,12 @@ latency + CPU walking large trees — the interim behavior being retired).
 
 **Consequences.** Continuous freshness with no human action, bounded by
 construction: embed-gate=1 (CPU), DES-034 windows (memory), coalesced FTS (fds),
-per-`(database,collection)` FIFO (single writer). The explicit-sync 409 is
+per-`(database,collection)` FIFO (single writer). **This "bounded by
+construction" claim proved incomplete — see DES-045b (an unrestricted watch
+*scope* let a `/private/tmp` registration storm the system temp dir) and
+DES-045c (LanceDB's own compute pool was uncapped); both surfaced only when the
+installed daemon was measured under real load, not in the idle path this claim
+was reasoned from.** The explicit-sync 409 is
 dropped in favor of transparent enqueue (202 + poll; the 409 stays for
 `optimize`/`backfill`). `watch_enabled` defaults on (installing `quarryd` is
 already the opt-in to a background engine; reverses the prior uae opt-in
@@ -2048,3 +2104,116 @@ caution against false confidence: the original model *proved the sweep safe by
 omitting the non-directory collection class entirely* — a model is only as sound
 as its abstraction. The corrected model
 adds that class, and I9 (with a negative control) now pins it.
+
+### DES-045b: Watch scope — refuse temp/scratch/VCS/gitignored roots
+
+**Status:** Accepted (2026-07-26) · **Bead:** quarry-dpww · **PR:** #396
+
+**Context.** DES-045 watches "the registered directories of *every* database in
+the on-disk roster." Its trust invariant covered *how* a root is opened (only via
+the roster; no network-steerable path), but placed no floor on *what* a root may
+be. The operator's default registry held a `/private/tmp` registration (collection
+`tmp`) — a legitimate roster entry by construction — so the loop watched the macOS
+system temp directory, which every process on the box writes to continuously. The
+watcher never reached quiescence: it re-indexed whatever landed in `/tmp`, pinning
+1.5-2 cores for hours (283 CPU-minutes observed before the operator killed it).
+DES-045's "bounded by construction" bounded fds, memory, and the write-serializer,
+but a watch *root* that is itself churning scratch defeats every downstream bound
+because the producer never stops.
+
+**Decision.** One `ScratchGuard` predicate (`scratch_paths.py`), consulted at every
+producer seam — initial scan (`FileDiscovery`), live watch
+(`WatchLoop._begin_collection`), the periodic reconcile
+(`WatchReconciler._sync_enumerated`), and explicit `quarry sync`
+(`_submit_all_scans`) — refuses a root that is (a) an OS temp root (`/tmp`,
+`/private/tmp`, `/var/tmp`, `/private/var/tmp`, `/var/folders`), compared casefolded
+so a case variant on case-insensitive APFS (`/private/TMP`) cannot slip past, or
+(b) a repo's own scratch, anchored on `<gitroot>/.tmp` for **any** ancestor git
+repo (not the innermost `.git`, which a nested repo under `<outer>/.tmp` would
+otherwise shadow); and, below a permitted root, skips gitignored paths plus an
+always-skip set (`.git`, `.beads`, `.venv`, `node_modules`, `__pycache__`, `dist`,
+`build`, caches). Resolution is fail-closed **per root** — a `resolve()` that raises
+(symlink loop, permission) skips that one registration and logs, never aborting the
+scan. The guard fires at *watch* time, not only at register time, so an
+already-registered temp root — the operator's stale `/private/tmp` — is refused on
+daemon restart without the registry being edited first.
+
+**Consequence.** The watch loop can never index scratch/temp/VCS/gitignored content
+on any surface, whether the temp root was registered before or after the guard
+shipped. Verified on the live daemon: it logs `watch: skipping temp/scratch root
+/private/tmp (systmp)` and stays idle where it previously stormed. The stale
+registration is left in place (harmless — refused) and cleared by a one-time manual
+step, not migration code (there is one user; a migration path protects users who do
+not exist).
+
+**Rejected alternatives.** *Killing the daemon on a CPU timer* (the first instinct)
+— treats the symptom, discards the evidence, and would also kill a legitimate
+catch-up index; a stack dump of the hot process is the diagnosis, a threshold is
+not. *Deregistering `/private/tmp` and calling it fixed* — leaves the class open
+(any future temp-root registration re-storms) and relies on remembering. *A bare
+`.tmp`-segment match anywhere in the path* — false-refuses a legitimate checkout
+that merely lives under a `.tmp` ancestor (an agent worktree at `<repo>/.tmp/wt`);
+the git-anchored form is location-independent. *Trusting the observer's
+hidden-segment reject alone* — it excludes dot-dirs below a root but does not refuse
+a temp/scratch *root*, the actual hole.
+
+### DES-045c: CPU/compaction envelope under continuous load
+
+**Status:** Accepted (2026-07-26) · **Bead:** quarry-exz9 · **PR:** #397
+
+**Context.** With DES-045b closing the scope hole, the daemon still spiked to
+291-403% CPU. A stack sample of the live process — not a guess from a CPU number —
+put the CPU in LanceDB's own `LanceDBBackgroundEventLoop` and tokio compute workers
+running a finalize (`optimize()` plus a native `create_fts_index` rebuild).
+LanceDB's Rust core sizes that tokio compute runtime to `num_cpus`, and DES-032's
+caps never governed it (they bounded ONNX/OMP only), so a single finalize seized
+every core. DES-045's "coalesced FTS" bounded *fds* (the quarry-0dss reader-eviction
+leak) but not *CPU*. The trigger is the daemon's **own** periodic maintenance — the
+finalize behind an index update, and the `watch_safety_scan_s` reconcile
+re-finalizing collections — not developer activity. (An earlier account of this
+work blamed `make check` churn; that was wrong — a `make check` writes only
+gitignored/excluded paths and does not touch the index. The trigger is internal;
+the defect is that the internal work was unbounded.)
+
+**Decision.** Bound the CPU envelope structurally, independent of trigger.
+*Cap LanceDB's pools:* `ThreadConfig.apply_env_limits()` (DES-032's home) sets
+`LANCE_CPU_THREADS`/`LANCE_IO_THREADS` before the first `lancedb.connect` in
+`DaemonServer.run()`, via a **fail-closed clamp with a per-variable floor** — an
+inherited/operator value is honored only within `[floor, cap]`, a higher or
+non-numeric value is forced down to the cap (a `setdefault` would yield upward to a
+stale `LANCE_CPU_THREADS=32` and void the ceiling), and a below-floor value is
+*raised* to the floor. The LANCE floor is 2 because `=1` stalls lance's runtime at
+0% progress (floor equals ceiling at 2); OMP keeps floor 1. Measured (8-core): the
+tokio/FTS pool tracks the cap, not `num_cpus` (33→14 workers as the cap goes 8→2),
+so the ceiling holds core-count-independently; the FTS index is LanceDB native (no
+separate uncapped Tantivy `IndexWriter` pool), so no search-engine change was
+needed. *Throttle the finalize:* `FinalizeThrottle` coalesces the finalize to at
+most one per `watch_optimize_min_interval_s` (default 30 s) **per database**,
+covering the bulk path (a branch switch/rebase trips the bulk threshold and would
+otherwise finalize every debounce window, defeating the cap), with a trailing timer
+that is *cancelled*, not merely dropped, on the immediate path so a due timer cannot
+double-fire. Freshness is database-granular; the vector channel is never stale
+(files index immediately) and the reconcile is the unthrottled backstop.
+
+**Consequence.** The daemon stays bounded under continuous load, not only when idle.
+Trade-off (accepted): the cap is process-global, collapsing DES-032's query/sync
+thread isolation onto one runtime — measured search latency under a concurrent
+finalize is comparable-to-better than uncapped (the cap tames the finalize's own
+flooding), and bulk compaction is ~1.65× slower (not the naive 4×; it is partly
+IO-bound), acceptable for a background daemon whose ingest is not latency-critical
+(DES-034 bounds the working set). The load-bearing verification is
+install→restart→**sample the installed daemon under real load** — not the idle case
+and not a green test suite: DES-045's original "bounded by construction" was
+asserted from the idle path and held two holes (DES-045b and this entry) that only
+surfaced when the running daemon was watched on a loaded machine. Read that claim as
+"bounded where measured," not "bounded everywhere."
+
+**Rejected alternatives.** *Blaming the developer's `make check`* (see Context) —
+factually wrong and a category error; the daemon must bound its own maintenance
+regardless of what runs alongside it. *Exempting the query connection from the cap*
+— `LANCE_CPU_THREADS` is process-global, not per-connection, so it is not
+expressible, and the latency measurement shows it is not warranted. *Throttling the
+compaction cadence without the thread cap* — leaves a single finalize able to seize
+every core; the cap is the ceiling, the throttle is the duty-cycle, and both are
+needed. *Raising `narenas` to reduce contention instead of capping threads* —
+addressed in DES-032; increases jemalloc retention (DES-027) and does not bound CPU.
