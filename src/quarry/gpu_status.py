@@ -20,6 +20,7 @@ class GpuStatus(StrEnum):
     NO_GPU = "no NVIDIA GPU"
     CUDA_PRESENT = "CUDA already available"
     INSTALLED = "onnxruntime-gpu installed"
+    CUDA_UNSUPPORTED = "GPU present but CUDA unsupported — running on CPU"
     RESTORED = "onnxruntime-gpu install failed, CPU restored"
     RESTORE_FAILED = "onnxruntime-gpu install failed, CPU restore also failed"
 
@@ -29,16 +30,19 @@ class GpuStatus(StrEnum):
 
         ``"failure"`` is reserved for :attr:`RESTORE_FAILED`, where the GPU
         wheel install failed *and* the CPU restore failed so the daemon cannot
-        start. :attr:`RESTORED` is ``"recovered"`` — the swap fell back to a
-        working CPU runtime, a warning rather than a failure. Everything else
-        is ``"success"``. The match is exhaustive: a new enum member fails
-        type-checking until it is classified here, so none can silently fall
-        into the wrong bucket.
+        start. :attr:`RESTORED` and :attr:`CUDA_UNSUPPORTED` are ``"recovered"``
+        — each leaves a working CPU runtime, a warning rather than a failure.
+        They differ in cause: ``RESTORED`` means a GPU wheel was installed and
+        then failed the import re-probe (rolled back); ``CUDA_UNSUPPORTED``
+        means no importable ``onnxruntime-gpu`` build exists for the host CUDA,
+        so none was ever installed. Everything else is ``"success"``. The match
+        is exhaustive: a new enum member fails type-checking until it is
+        classified here, so none can silently fall into the wrong bucket.
         """
         match self:
             case GpuStatus.RESTORE_FAILED:
                 return "failure"
-            case GpuStatus.RESTORED:
+            case GpuStatus.RESTORED | GpuStatus.CUDA_UNSUPPORTED:
                 return "recovered"
             case (
                 GpuStatus.NO_UV
@@ -69,3 +73,19 @@ class GpuStatus(StrEnum):
                 return "⚠"  # warning -- daemon works
             case "success":
                 return "✓"  # check
+
+    @property
+    def install_detail(self) -> str:
+        """Return an extra install-line clause for this status, or ``""``.
+
+        Only :attr:`CUDA_UNSUPPORTED` carries a clause: it points at the GPU
+        runtime warning log, which names the detected vs supported CUDA majors
+        (they are not part of this status's fixed string). Every other member
+        returns the empty string, so the caller renders one line either way.
+        """
+        if self is GpuStatus.CUDA_UNSUPPORTED:
+            return (
+                " — no matching onnxruntime-gpu build; see the log for the"
+                " detected vs supported CUDA majors"
+            )
+        return ""

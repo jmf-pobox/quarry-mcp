@@ -65,6 +65,22 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **infra (gpu runtime)**: match the `onnxruntime-gpu` build to the host's
+  loadable CUDA major so `quarry install` stops breaking GPU on CUDA-12 hosts.
+  The swap installed the newest `onnxruntime-gpu` unconditionally (an unbounded
+  `>=1.18.0` spec); as of 1.27.0 that wheel links `libcudart.so.13` (CUDA 13), so
+  on a host with only system CUDA 12 `import onnxruntime` raised at import time
+  and the daemon was left with an unimportable onnxruntime — strictly worse than
+  the CPU wheel, and re-broken on every `quarry install`. The swap now probes
+  `ldconfig` for the resolvable CUDA runtime major, selects the matching version
+  range (`12 → >=1.19.0,<1.27.0`, `13 → >=1.27.0`), and verifies the installed
+  wheel actually imports with CUDA before declaring success — restoring CPU if it
+  does not. A host with no mappable CUDA runtime (or a decode/probe failure) keeps
+  CPU and reports the new `GpuStatus.CUDA_UNSUPPORTED` in `quarry doctor` (naming
+  detected vs supported majors) instead of silently mis-pinning. Verified
+  end-to-end on an RTX 5080 / CUDA-12 host: `quarry install` selects
+  `onnxruntime-gpu 1.26.0` and `CUDAExecutionProvider` comes up.
+
 - **infra (install.sh)**: the CLI-only install could not complete on a headless
   machine (server, minimal container). `rapidocr` pulls the GUI `opencv-python`,
   whose `cv2` build dynamically links X11/GL libraries (`libGL.so.1`,

@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -680,54 +680,6 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
 
 
-_QUARRY_CLAUDE_MD_SECTION = """\
-
-<!-- quarry:capabilities -->
-# Quarry
-
-Local semantic search is available via quarry. Use it to search indexed
-documents by meaning, ingest new content, and recall knowledge across sessions.
-
-- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
-  `/quarry`
-- **Research agent**: `researcher` — combines quarry local search with web
-  research. Use for deep investigation across local docs and the web.
-- **Auto-behaviors**: working directory is auto-indexed at session start;
-  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
-  context compaction.
-- **Search tip**: natural language queries work best ("What were Q3 margins?"
-  outperforms "Q3 margins").
-<!-- /quarry:capabilities -->
-"""
-
-_QUARRY_SECTION_MARKER = "<!-- quarry:capabilities -->"
-
-
-def _inject_claude_md() -> str:
-    """Append a quarry capabilities section to ~/.claude/CLAUDE.md.
-
-    Idempotent: skips if the section already exists.
-
-    Returns:
-        Status message for display.
-    """
-    claude_dir = Path.home() / ".claude"
-    claude_md = claude_dir / "CLAUDE.md"
-
-    claude_dir.mkdir(parents=True, exist_ok=True)
-
-    if claude_md.exists():
-        content = claude_md.read_text(encoding="utf-8")
-        if _QUARRY_SECTION_MARKER in content:
-            return f"{claude_md} already has quarry section"
-        with claude_md.open("a", encoding="utf-8") as f:
-            f.write(_QUARRY_CLAUDE_MD_SECTION)
-    else:
-        claude_md.write_text(_QUARRY_CLAUDE_MD_SECTION.lstrip(), encoding="utf-8")
-
-    return f"Appended quarry section to {claude_md}"
-
-
 _SESSION_CONTEXT_TEMPLATE = """\
 ## Memory
 
@@ -897,17 +849,57 @@ def _configure_ethos_ext(
     )
 
 
+def _install_gpu_runtime() -> bool:
+    """Run the GPU-runtime swap step of the installer; return whether it failed.
+
+    Prints the ``GpuStatus`` line plus its :attr:`GpuStatus.install_detail`
+    clause (only ``CUDA_UNSUPPORTED`` carries one — a hint pointing at the
+    GPU-runtime warning log, which names the detected vs supported CUDA majors).
+    Returns ``True`` only when the daemon cannot start after the check — i.e.
+    ``RESTORE_FAILED`` — so the caller marks the install failed. Recovered
+    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail.
+
+    Unexpected exceptions are NOT caught here: this helper is not an error
+    boundary (PY-EH-6). A raise means failure and is caught at ``run_install``,
+    the installer entry point, which converts it to a hard install failure.
+    """
+    from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
+
+    gpu_status = GpuRuntime.ensure()
+    print(f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}")  # noqa: T201
+    return gpu_status.is_failure
+
+
+def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
+    """Run a best-effort install step, printing its result or a skip note.
+
+    Steps like mcp-proxy and daemon registration are optional: quarry works
+    without them. ``step`` is a zero-arg callable that performs BOTH the module
+    import AND the install, returning a status message. It runs entirely inside
+    the try so an import-time failure (``ImportError``, or any error raised while
+    the optional module is loaded) skips the step rather than aborting the whole
+    install — the module living behind the callable is the reason the import is
+    here and not at call time. The broad catch is intentional: this IS the
+    installer's optional-step boundary (PY-EH-6).
+    """
+    try:
+        print(f"  ✓ {step()}")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  • Skipped: {exc}")  # noqa: T201
+        print(f"    {skip_note}")  # noqa: T201
+
+
 def _install_embedding_model() -> bool:
     """Download the INT8 model (and FP16 on CUDA); return whether it succeeded.
 
-    The FP16 download is best-effort — its failure is swallowed because first-use
-    falls back to INT8. Only an INT8 failure marks the step failed.
+    The FP16 download is best-effort — its failure is swallowed because
+    first-use falls back to INT8. Only an INT8 failure marks the step failed.
 
     NOTE: the CUDA probe is an in-process import. If onnxruntime was imported
-    earlier (before ``GpuRuntime.ensure()`` swapped the package), the old native
-    libraries stay loaded and provider detection here may be stale; a fresh
-    ``quarry install`` has not imported it yet, so this is accurate, and the FP16
-    model is fetched on the next run if needed.
+    earlier in this process (before ``GpuRuntime.ensure()`` swapped the package),
+    the old native libraries stay loaded and provider detection here may be
+    stale; a fresh ``quarry install`` has not imported it yet, so this is
+    accurate, and the FP16 model is fetched on the next run if needed.
     """
     try:
         from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
@@ -928,7 +920,7 @@ def _install_embedding_model() -> bool:
     return True
 
 
-def run_install() -> int:  # noqa: C901
+def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
@@ -941,7 +933,7 @@ def run_install() -> int:  # noqa: C901
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/9] Creating directories...")  # noqa: T201
+    print("[1/8] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -954,75 +946,72 @@ def run_install() -> int:  # noqa: C901
     # Step 2: headless OpenCV (rapidocr hard-requires the GUI opencv-python;
     # force the headless wheel to own cv2 so OCR loads on a screenless box, the
     # package-side equivalent of install.sh's resolver override). Best-effort:
-    # a failure here leaves OCR to degrade cleanly via the runtime guard.
-    print("[2/9] Ensuring headless OpenCV...")  # noqa: T201
+    # a failure prints the exact reinstall command and OCR degrades cleanly via
+    # the runtime guard.
+    print("[2/8] Ensuring headless OpenCV...")  # noqa: T201
     from quarry.opencv_headless import HeadlessOpenCv  # noqa: PLC0415
 
     headless = HeadlessOpenCv(sys.executable)
-    try:
-        print(f"  ✓ {headless.enforce()}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  • Skipped: {exc}")  # noqa: T201
-        print(f"    OCR degrades cleanly; to enable it run: {headless.remediation()}")  # noqa: T201
+    _run_optional_step(
+        headless.enforce,
+        f"OCR degrades cleanly; to enable it run: {headless.remediation()}",
+    )
 
     # Step 3: GPU runtime (must run before model download so CUDA provider
-    # detection can trigger FP16 model caching)
-    print("[3/9] Checking GPU runtime...")  # noqa: T201
+    # detection can trigger FP16 model caching). The broad catch is the
+    # installer's error boundary (PY-EH-6): every legitimate GPU outcome
+    # returns a GpuStatus, so a raise here is unexpected and may leave a broken
+    # runtime — convert it to a hard install failure rather than skip.
+    print("[3/8] Checking GPU runtime...")  # noqa: T201
     try:
-        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
-
-        gpu_status = GpuRuntime.ensure()
-        print(f"  {gpu_status.symbol} {gpu_status}")  # noqa: T201
-        if gpu_status.is_failure:
+        if _install_gpu_runtime():
             failed = True
     except Exception as exc:  # noqa: BLE001
-        # Unexpected: legit outcomes return GpuStatus, so a raise means failure.
-        print(f"  \u2717 GPU runtime check failed: {exc}")  # noqa: T201
+        print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
         failed = True
 
     # Step 4: embedding model
-    print("[4/9] Downloading embedding model...")  # noqa: T201
+    print("[4/8] Downloading embedding model...")  # noqa: T201
     if not _install_embedding_model():
         failed = True
 
     # Step 5: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[5/9] Installing mcp-proxy...")  # noqa: T201
-    try:
+    print("[5/8] Installing mcp-proxy...")  # noqa: T201
+
+    def _proxy_step() -> str:
+        # Import INSIDE the callable so an import-time failure of quarry.proxy
+        # skips this optional step instead of aborting run_install.
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
-        msg = proxy_install()
-        print(f"  \u2713 {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
-        print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
+        return proxy_install()
+
+    _run_optional_step(_proxy_step, "mcp-proxy is optional — quarry works without it.")
 
     # Step 6: MCP clients (uses mcp-proxy if step 5 succeeded, otherwise quarry mcp)
-    print("[6/9] Configuring MCP clients...")  # noqa: T201
+    print("[6/8] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
     # Step 7: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[7/9] Registering quarry daemon...")  # noqa: T201
-    try:
+    print("[7/8] Registering quarry daemon...")  # noqa: T201
+
+    def _svc_step() -> str:
+        # Import INSIDE the callable so an import-time failure of quarry.service
+        # skips this optional step instead of aborting run_install.
         from quarry.service import install as svc_install  # noqa: PLC0415
 
-        msg = svc_install()
-        print(f"  \u2713 {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
-        print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
+        return svc_install()
 
-    # Step 8: CLAUDE.md context injection (best-effort)
-    print("[8/9] Injecting quarry context into CLAUDE.md...")  # noqa: T201
-    try:
-        msg = _inject_claude_md()
-        print(f"  \u2713 {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+    _run_optional_step(
+        _svc_step, "Daemon registration is optional — quarry works without it."
+    )
 
-    # Step 9: ethos ext session_context (best-effort)
-    print("[9/9] Configuring ethos identity extension...")  # noqa: T201
+    # quarry is repo-scoped for CLAUDE.md guidance: `quarry enable` registers the
+    # per-repo @-import; `install` never edits ~/.claude/CLAUDE.md.
+
+    # Step 8: ethos ext session_context (best-effort)
+    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
     try:
         check = _configure_ethos_ext()
         _print_check(check)

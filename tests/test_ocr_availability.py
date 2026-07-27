@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from types import ModuleType
 
 import pytest
 
 from quarry.ingestion.ocr_availability import OcrAvailability, OcrUnavailableError
+from quarry.opencv_headless import HeadlessOpenCv
 
 
 def _break_cv2_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,6 +52,18 @@ def test_unavailable_when_cv2_import_fails(monkeypatch: pytest.MonkeyPatch) -> N
     assert availability.reason  # non-empty, actionable
     assert "opencv-python-headless" in availability.reason
     assert "--force-reinstall" in availability.reason
+
+
+def test_reason_quotes_headless_remediation_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # UFAby: the runtime OCR-unavailable message must quote HeadlessOpenCv's
+    # actual command (uv/--python/--no-deps when uv is present), not a bare
+    # `pip install` that would misdirect the uv-tool installs this guard covers.
+    _break_cv2_import(monkeypatch)
+    reason = OcrAvailability.probe().reason
+    assert HeadlessOpenCv(sys.executable).remediation() in reason
+    assert "--no-deps" in reason  # a HeadlessOpenCv trait the bare hint lacked
 
 
 def test_require_raises_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:

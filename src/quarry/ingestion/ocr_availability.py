@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from typing import Self, final
+
+from quarry.opencv_headless import HeadlessOpenCv
 
 __all__ = ["OcrAvailability", "OcrUnavailableError"]
 
-# rapidocr hard-requires the DESKTOP opencv-python, whose cv2 links X11/GL system
-# libraries absent on headless boxes; when that build shadows the headless one,
-# `import cv2` fails. --force-reinstall makes the headless wheel overwrite the
-# shared cv2/ files so it wins (a plain reinstall is a no-op when the headless
-# requirement is already satisfied but lost the file collision).
-_FIX = "pip install --force-reinstall opencv-python-headless"
-_UNAVAILABLE = (
+# The remediation command lives on HeadlessOpenCv so doctor and this runtime
+# warning quote the SAME working command (uv/--python/--no-deps when uv is
+# present); a bare `pip install` would misdirect the uv-tool installs this
+# guard exists to cover. `{fix}` is filled from HeadlessOpenCv.remediation().
+_UNAVAILABLE_TEMPLATE = (
     "local OCR unavailable: the headless OpenCV isn't loadable on this machine "
-    f"(scanned-image OCR is off; everything else works) — run `{_FIX}` to enable it"
+    "(scanned-image OCR is off; everything else works) — run `{fix}` to enable it"
 )
 
 
@@ -59,8 +60,14 @@ class OcrAvailability:
             # fails on a GUI-linked build) — rapidocr's transitive dependency.
             importlib.import_module("cv2")
         except Exception:  # noqa: BLE001  # any cv2 load failure = OCR unavailable
-            return cls(available=False, reason=_UNAVAILABLE)
+            return cls(available=False, reason=cls._unavailable_reason())
         return cls(available=True, reason="")
+
+    @classmethod
+    def _unavailable_reason(cls) -> str:
+        """Return the unavailability message quoting the live headless-fix command."""
+        fix = HeadlessOpenCv(sys.executable).remediation()
+        return _UNAVAILABLE_TEMPLATE.format(fix=fix)
 
     @property
     def is_available(self) -> bool:

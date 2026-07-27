@@ -12,21 +12,19 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.claudemd_block import ClaudeMdBlock
 from quarry.enable import (
     _CONFIG_TEMPLATE,
     DisableResult,
     EnableResult,
-    _bootstrap_ethos_memory,
     _write_project_config,
     disable_project,
     enable_project,
 )
+from quarry.enabled_marker import EnabledMarker
+from quarry.guidance import REPO_IMPORT_LINE
 from tests.conftest import FakeRegistryClient
 
-_BLOCK = ClaudeMdBlock()
-
-_NO_ETHOS = "quarry.enable._GLOBAL_IDENTITIES"
+_NO_ETHOS = "quarry.ethos_memory._GLOBAL_IDENTITIES"
 
 
 class TestT1EnableNewDirectory:
@@ -220,58 +218,6 @@ class TestT6EnablePreservesExistingConfig:
         assert config_path.read_text() == custom_content
 
 
-class TestT7EnableCreatesEthosExtFiles:
-    def test_creates_quarry_yaml_files(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "claude.yaml").write_text("agent: claude\n")
-        (identities_dir / "rmh.yaml").write_text("agent: rmh\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert failed == []
-        assert "claude" in created
-        assert "rmh" in created
-        assert set(updated) == {"claude", "rmh"}
-        assert already_set == []
-
-        claude_yaml = identities_dir / "claude.ext" / "quarry.yaml"
-        rmh_yaml = identities_dir / "rmh.ext" / "quarry.yaml"
-        assert claude_yaml.exists()
-        assert rmh_yaml.exists()
-        assert "memory_collection: memory-claude" in claude_yaml.read_text()
-        assert "memory_collection: memory-rmh" in rmh_yaml.read_text()
-
-
-class TestT7bExistingQuarryYamlNotModified:
-    def test_wrong_memory_collection_preserved(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "claude.yaml").write_text("agent: claude\n")
-
-        ext_dir = identities_dir / "claude.ext"
-        ext_dir.mkdir()
-        quarry_yaml = ext_dir / "quarry.yaml"
-        quarry_yaml.write_text("memory_collection: wrong-name\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        created, _, _, _, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "claude" not in created
-        assert "memory_collection: wrong-name" in quarry_yaml.read_text()
-
-
 class TestT8EnableSkipsEthosWhenMissing:
     def test_skips_when_identities_dir_missing(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
@@ -327,6 +273,34 @@ class TestT11DisableRemovesConfig:
 
         assert result.config_removed is True
         assert not config_path.exists()
+
+    def test_symlinked_ancestor_config_removal_does_not_strand_import(
+        self, tmp_path: Path
+    ) -> None:
+        """A symlinked-ancestor config-remove must not abort disable and strand.
+
+        The config-remove refusal is caught so disable continues to prune the
+        @-import a prior deregister already acted on — and never unlinks the
+        config.md outside the repo via the symlink.
+        """
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / "CLAUDE.md").write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
+        external = tmp_path / "external"
+        (external / "quarry").mkdir(parents=True)
+        planted = external / "quarry" / "config.md"
+        planted.write_text("external config\n")
+        (project / ".punt-labs").symlink_to(external)
+        client = FakeRegistryClient([("myproject", project)])
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = disable_project(project, client)
+
+        # The import was pruned (not stranded), the external config survives,
+        # and the refused config-remove is reported as not-removed.
+        assert REPO_IMPORT_LINE not in (project / "CLAUDE.md").read_text()
+        assert result.config_removed is False
+        assert planted.read_text() == "external config\n"
 
 
 class TestT12DisableKeepData:
@@ -457,29 +431,18 @@ class TestWriteProjectConfig:
 
         assert config_path.read_text() == original
 
-    def test_fd_closed_when_fdopen_raises(self, tmp_path: Path) -> None:
-        """Verify fd is closed if os.fdopen raises before taking ownership."""
-        import os as _os
+    def test_refuses_symlinked_ancestor(self, tmp_path: Path) -> None:
+        """A symlinked .punt-labs ancestor makes the config write refuse, not escape."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        external = tmp_path / "external"
+        external.mkdir()
+        (repo / ".punt-labs").symlink_to(external)
 
-        real_open = _os.open
+        with pytest.raises(ValueError, match="ancestor"):
+            _write_project_config(repo)
 
-        captured_fd: list[int] = []
-
-        def tracking_open(path: str, flags: int, mode: int = 0o777) -> int:
-            fd = real_open(path, flags, mode)
-            captured_fd.append(fd)
-            return fd
-
-        with (
-            patch("quarry.enable.os.open", side_effect=tracking_open),
-            patch("quarry.enable.os.fdopen", side_effect=OSError("fdopen failed")),
-            patch("quarry.enable.os.close") as mock_close,
-            pytest.raises(OSError, match="fdopen failed"),
-        ):
-            _write_project_config(tmp_path)
-
-        assert len(captured_fd) == 1
-        mock_close.assert_called_once_with(captured_fd[0])
+        assert not (external / "quarry" / "config.md").exists()
 
 
 class TestT15DisableOnChildOfRegisteredParentRaises:
@@ -496,69 +459,6 @@ class TestT15DisableOnChildOfRegisteredParentRaises:
         # The parent registration must NOT be deregistered.
         assert client.deregistered == []
         assert client.collections == ["project"]
-
-
-class TestT16BootstrapEthosMemorySkipsBadYaml:
-    def test_skips_bad_yaml_continues(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-
-        (identities_dir / "alice.yaml").write_text("agent: alice\n")
-        (identities_dir / "bad.yaml").write_text("agent: bad\n")
-
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        from yaml import YAMLError
-
-        from quarry.doctor import _write_ethos_ext_session_context as original_write
-
-        def selective_raise(quarry_yaml: Path, handle: str) -> str:
-            if handle == "bad":
-                msg = "simulated YAML parse failure"
-                raise YAMLError(msg)
-            return original_write(quarry_yaml, handle)
-
-        monkeypatch.setattr(
-            "quarry.doctor._write_ethos_ext_session_context",
-            selective_raise,
-        )
-
-        created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "alice" in created
-        # bad's quarry.yaml file was written (so it's "created"), but the
-        # session_context write raised — it lands in failed, never updated.
-        assert "bad" in created
-        assert "bad" in failed
-        assert "bad" not in updated
-        assert "bad" not in already_set
-
-        assert (identities_dir / "alice.ext" / "quarry.yaml").exists()
-        assert (identities_dir / "bad.ext" / "quarry.yaml").exists()
-
-    def test_non_utf8_identity_file_recorded_not_fatal(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A non-UTF8/corrupt ext quarry.yaml makes the session-context reader raise
-        # UnicodeDecodeError (a ValueError, not OSError). enable must record the
-        # handle in ethos_failed and continue, never crash.
-        identities_dir = tmp_path / "identities"
-        identities_dir.mkdir()
-        (identities_dir / "alice.yaml").write_text("agent: alice\n")
-        ext_dir = identities_dir / "alice.ext"
-        ext_dir.mkdir()
-        (ext_dir / "quarry.yaml").write_bytes(b"memory_collection: \xff\xfe bad\n")
-        monkeypatch.setattr("quarry.enable._GLOBAL_IDENTITIES", identities_dir)
-
-        _created, updated, already_set, failed, skipped = _bootstrap_ethos_memory()
-
-        assert skipped is False
-        assert "alice" in failed
-        assert "alice" not in updated
-        assert "alice" not in already_set
 
 
 class TestT17EnableWithOverrideOnChildRaises:
@@ -660,8 +560,8 @@ class TestT20CheckEnableStatusConfigMissing:
         assert "config.md missing" not in result.message
 
 
-class TestEnableAppendsClaudemdBlock:
-    def test_enable_creates_claudemd_with_markers(self, tmp_path: Path) -> None:
+class TestEnableRegistersImportAndMarker:
+    def test_enable_writes_import_marker_and_guide(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
@@ -669,16 +569,19 @@ class TestEnableAppendsClaudemdBlock:
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
-        assert result.claudemd_appended is True
+        # The enabled marker and the repo @-import are the §2.11 biconditional:
+        # both present after enable.
+        assert result.import_registered is True
+        assert result.enabled_marker_written is True
+        assert result.guide_deposited is True
+        assert EnabledMarker(project).is_present()
         claudemd = project / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert _BLOCK.begin in content
-        assert _BLOCK.end in content
-        assert "Local semantic search is available via quarry." in content
+        assert claudemd.read_text().rstrip("\n").endswith(REPO_IMPORT_LINE)
+        guide = project / ".punt-labs" / "quarry" / "CLAUDE.md"
+        assert "Local semantic search is available via quarry." in guide.read_text()
 
 
-class TestEnableClaudemdIdempotent:
+class TestEnableImportIdempotent:
     def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
@@ -688,10 +591,10 @@ class TestEnableClaudemdIdempotent:
             result1 = enable_project(project, client)
             result2 = enable_project(project, client)
 
-        assert result1.claudemd_appended is True
-        assert result2.claudemd_appended is False
+        assert result1.import_registered is True
+        assert result2.import_registered is False
         content = (project / "CLAUDE.md").read_text()
-        assert content.count(_BLOCK.begin) == 1
+        assert content.count(REPO_IMPORT_LINE) == 1
 
 
 class TestEnableAppendsToExistingClaudemd:
@@ -705,15 +608,14 @@ class TestEnableAppendsToExistingClaudemd:
         with patch(_NO_ETHOS, tmp_path / "no-ethos"):
             result = enable_project(project, client)
 
-        assert result.claudemd_appended is True
+        assert result.import_registered is True
         content = claudemd.read_text()
         assert content.startswith("# My Project\n\nExisting content.\n")
-        assert _BLOCK.begin in content
-        assert _BLOCK.end in content
+        assert content.rstrip("\n").endswith(REPO_IMPORT_LINE)
 
 
-class TestDisableRemovesClaudemdBlock:
-    def test_disable_removes_markers_and_content(self, tmp_path: Path) -> None:
+class TestDisableRemovesImportAndMarker:
+    def test_disable_prunes_import_and_marker(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
         client = FakeRegistryClient()
@@ -722,12 +624,13 @@ class TestDisableRemovesClaudemdBlock:
             enable_project(project, client)
             result = disable_project(project, client)
 
-        assert result.claudemd_removed is True
-        claudemd = project / "CLAUDE.md"
-        assert claudemd.exists()
-        content = claudemd.read_text()
-        assert _BLOCK.begin not in content
-        assert _BLOCK.end not in content
+        assert result.import_pruned is True
+        assert result.enabled_marker_removed is True
+        assert not EnabledMarker(project).is_present()
+        content = (project / "CLAUDE.md").read_text()
+        assert REPO_IMPORT_LINE not in content
+        # §2.9: the vendored guide is left dormant, not erased.
+        assert (project / ".punt-labs" / "quarry" / "CLAUDE.md").exists()
 
 
 class TestDisablePreservesOtherClaudemdContent:
@@ -742,8 +645,8 @@ class TestDisablePreservesOtherClaudemdContent:
             enable_project(project, client)
             result = disable_project(project, client)
 
-        assert result.claudemd_removed is True
+        assert result.import_pruned is True
         content = claudemd.read_text()
         assert "# My Project" in content
         assert "Keep this." in content
-        assert _BLOCK.begin not in content
+        assert REPO_IMPORT_LINE not in content
