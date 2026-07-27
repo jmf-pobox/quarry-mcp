@@ -1,7 +1,7 @@
 # ruff: noqa: S603 — subprocess calls invoke trusted system binaries (uv, nvidia-smi, ldconfig)
 """NVIDIA GPU runtime detection and onnxruntime package swapping.
 
-``quarry install`` and ``quarry doctor`` call :meth:`GpuRuntime.ensure` to
+``quarry install`` calls :meth:`GpuRuntime.ensure` to
 swap the CPU-only ``onnxruntime`` wheel for ``onnxruntime-gpu`` when an NVIDIA
 GPU is present.  The swap is best-effort: on any failure the CPU runtime is
 restored so the daemon still starts.  Safe to call on any platform — it returns
