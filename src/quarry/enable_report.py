@@ -51,6 +51,10 @@ class EnableReport:
                     r.import_registered,
                     "  Registered @.punt-labs/quarry/CLAUDE.md in CLAUDE.md",
                 ),
+                (
+                    r.enabled_marker_written,
+                    "  Wrote enabled marker",
+                ),
             )
         )
         return lines + self._ethos_lines()

@@ -52,7 +52,7 @@ class FenceScanner:
             return True
         if indented:
             return True
-        opener = self._fence_run(raw)
+        opener = self._opens(raw)
         if opener is None:
             return False
         self._char, self._length = opener
@@ -70,6 +70,23 @@ class FenceScanner:
             return False
         rest = raw.rstrip("\r\n").lstrip(" ")[run[1] :]
         return not rest.strip()
+
+    @staticmethod
+    def _opens(raw: str) -> tuple[str, int] | None:  # None: not a fence opener
+        """Return the opener ``(marker, length)`` if *raw* opens a fence, else ``None``.
+
+        A backtick fence opener may not contain a backtick anywhere in its info
+        string (CommonMark §4.5) — a line like ``` ```lang`x ``` is inline code,
+        not a fence, so it must not shield an import. A tilde fence's info string
+        is unrestricted, so backticks after ``~~~`` are fine.
+        """
+        run = FenceScanner._fence_run(raw)
+        if run is None:
+            return None
+        marker, length = run
+        if marker == "`" and "`" in raw.rstrip("\r\n").lstrip(" ")[length:]:
+            return None
+        return run
 
     @staticmethod
     def _fence_run(raw: str) -> tuple[str, int] | None:  # None: no fence run present

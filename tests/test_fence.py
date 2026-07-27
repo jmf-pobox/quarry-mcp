@@ -68,6 +68,26 @@ def test_trailing_whitespace_after_closer_still_closes() -> None:
     assert flags == [True, True, True, False]
 
 
+def test_backtick_in_info_string_is_not_an_opener() -> None:
+    """A backtick fence opener may not carry a backtick in its info string.
+
+    ``` ```lang`x ``` is inline code, not a fence, so it and the line after it
+    are top-level (CommonMark §4.5).
+    """
+    assert _shield_flags("```lang`x\nafter\n") == [False, False]
+
+
+def test_tilde_info_string_may_contain_backticks() -> None:
+    """A tilde fence's info string is unrestricted: backticks after ~~~ still open."""
+    flags = _shield_flags("~~~ `code`\nbody\n~~~\nafter\n")
+    assert flags == [True, True, True, False]
+
+
+def test_backtick_only_run_still_opens() -> None:
+    """A plain backtick fence with no backtick in the info string opens normally."""
+    assert _shield_flags("```python\ncode\n```\nafter\n") == [True, True, True, False]
+
+
 def _fence_open_at_eof(text: str) -> bool:
     """Return whether *text* ends inside an unterminated fence."""
     scanner = FenceScanner()

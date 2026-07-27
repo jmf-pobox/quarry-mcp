@@ -159,6 +159,19 @@ def test_register_ignores_copy_after_closed_fence(tmp_path: Path) -> None:
     assert ClaudeMdImport(path).register(IMPORT) is False
 
 
+def test_backtick_in_info_string_does_not_open_a_shielding_fence(
+    tmp_path: Path,
+) -> None:
+    """A ```lang`x line is inline code, not a fence: the import below is top-level.
+
+    Because that line opens no fence, the following import is seen (register is a
+    no-op) rather than mistaken for fenced-code content (CommonMark §4.5).
+    """
+    path = tmp_path / "CLAUDE.md"
+    path.write_text(f"```lang`x\n{IMPORT}\n")
+    assert ClaudeMdImport(path).register(IMPORT) is False
+
+
 def test_prune_sees_both_imports_across_indented_fence(tmp_path: Path) -> None:
     """An indented ``` is code, not a fence: both top-level imports still prune."""
     path = tmp_path / "CLAUDE.md"

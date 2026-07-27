@@ -21,6 +21,8 @@ def test_enable_report_lists_claudemd_steps() -> None:
     joined = "\n".join(lines)
     assert "Deposited quarry guide" in joined
     assert "Registered @.punt-labs/quarry/CLAUDE.md" in joined
+    # Symmetry with DisableReport's marker line: the write is surfaced.
+    assert "Wrote enabled marker" in joined
 
 
 def test_enable_report_omits_absent_steps() -> None:
@@ -29,6 +31,9 @@ def test_enable_report_omits_absent_steps() -> None:
     )
     joined = "\n".join(EnableReport(result).lines())
     assert "Registered @" not in joined
+    # An idempotent re-enable's marker no-op is visible by its absence, like
+    # DisableReport omits the marker line when nothing was removed.
+    assert "Wrote enabled marker" not in joined
 
 
 def test_enable_report_reports_ethos_skipped() -> None:

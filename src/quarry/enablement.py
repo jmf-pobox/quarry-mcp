@@ -108,9 +108,20 @@ class Enablement:
 
         Both run under one :class:`FileLock` so a concurrent ``enable`` cannot
         interleave its marker write with this prune and strand the marker.
+
+        A :class:`~quarry.safe_paths.SafeRepoPath` refusal (a hostile symlinked
+        ancestor) is caught so it cannot abort before the prune and strand the
+        ``@``-import a prior deregister already acted on. The refused marker is
+        not a real in-repo marker (``is_present()`` is ``False``), so treating it
+        as absent and pruning anyway keeps the recoverable invariant. A genuine
+        unlink error still propagates, leaving the recoverable marker-present +
+        import-present enabled state, never marker-present + import-absent.
         """
         with FileLock(self._import.path):
-            enabled_marker_removed = self._marker.remove()
+            try:
+                enabled_marker_removed = self._marker.remove()
+            except ValueError:
+                enabled_marker_removed = False
             import_pruned = self._import.prune(REPO_IMPORT_LINE)
         return DisablementResult(
             import_pruned=import_pruned,

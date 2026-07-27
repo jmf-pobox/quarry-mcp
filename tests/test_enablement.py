@@ -110,6 +110,29 @@ def test_disable_removes_marker_before_prune_can_fail(
     assert not EnabledMarker(tmp_path).is_present()
 
 
+def test_disable_symlinked_ancestor_does_not_strand_import(tmp_path: Path) -> None:
+    """A SafeRepoPath marker refusal during disable must still prune the import.
+
+    A hostile symlinked .punt-labs ancestor makes marker.remove() refuse. The
+    prune must still run so a prior deregister does not leave the @-import
+    lingering; the refused marker is not a real in-repo marker, and the external
+    symlink target is untouched.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CLAUDE.md").write_text(f"# rules\n{REPO_IMPORT_LINE}\n")
+    external = tmp_path / "external"
+    external.mkdir()
+    (repo / ".punt-labs").symlink_to(external)
+
+    result = Enablement(repo).disable()
+
+    assert result.import_pruned is True
+    assert result.enabled_marker_removed is False
+    assert REPO_IMPORT_LINE not in (repo / "CLAUDE.md").read_text()
+    assert list(external.iterdir()) == []  # no external effect
+
+
 def test_disable_is_idempotent(tmp_path: Path) -> None:
     Enablement(tmp_path).enable()
     Enablement(tmp_path).disable()
