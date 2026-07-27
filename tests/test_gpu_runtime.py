@@ -54,6 +54,24 @@ def _pip_install_specs(calls: Sequence[Sequence[str]]) -> list[str]:
     return [str(cmd[-1]) for cmd in calls if "pip" in cmd and "install" in cmd]
 
 
+def _pip_pkg_ops(calls: Sequence[Sequence[str]]) -> list[tuple[str, str]]:
+    """Extract ``(action, spec)`` pairs from every ``uv pip <action> <spec>``.
+
+    Captures both ``install`` and ``uninstall`` so a test can assert the RELATIVE
+    order of an uninstall against an install — ``_pip_install_specs`` sees only
+    installs and cannot express "uninstall X came before install Y".
+    """
+    ops: list[tuple[str, str]] = []
+    for cmd in calls:
+        if "pip" not in cmd:
+            continue
+        if "install" in cmd:
+            ops.append(("install", str(cmd[-1])))
+        elif "uninstall" in cmd:
+            ops.append(("uninstall", str(cmd[-1])))
+    return ops
+
+
 class _RunState:
     """Mutable flag tracking whether the GPU wheel install has run yet.
 
@@ -587,6 +605,16 @@ class TestGpuRuntimeEnsure:
         assert install_specs.index("onnxruntime-gpu>=1.19.0,<1.27.0") < (
             install_specs.index("onnxruntime>=1.18.0")
         )
+        # The GPU wheel installed cleanly (rc 0) but failed import, so it lingers
+        # alongside the CPU wheel — both are separate PyPI distributions of the
+        # same import package and shadow each other. The restore MUST uninstall
+        # onnxruntime-gpu BEFORE installing the CPU spec, or import onnxruntime
+        # can still fail and the RESTORED status would be a false "recovered".
+        pkg_ops = _pip_pkg_ops(calls)
+        assert ("uninstall", "onnxruntime-gpu") in pkg_ops
+        assert pkg_ops.index(("uninstall", "onnxruntime-gpu")) < (
+            pkg_ops.index(("install", "onnxruntime>=1.18.0"))
+        )
 
     def test_verify_probe_oserror_restores_cpu(self) -> None:
         """An ``OSError`` from the post-install verify probe restores CPU.
@@ -636,14 +664,16 @@ class TestGpuRuntimeEnsure:
         )
 
     def test_uninstall_oserror_restores_cpu(self) -> None:
-        """An ``OSError`` from the uninstall subprocess restores CPU, not crashes.
+        """An ``OSError`` from the ``_swap`` CPU uninstall restores CPU, not crashes.
 
         ``subprocess.run`` can raise ``OSError`` at the boundary — the ``uv``
         binary vanishing between the ``shutil.which`` check and exec, or a
-        signal. If the CPU-onnxruntime UNINSTALL raises, the environment is left
-        with neither wheel; the swap must treat that identically to a non-zero
-        return code and fall through to the CPU restore, honouring the
-        "restore CPU on any failure" contract instead of propagating.
+        signal. If the CPU-onnxruntime UNINSTALL in ``_swap`` raises, the swap
+        must treat that identically to a non-zero return code and fall through to
+        the CPU restore, honouring the "restore CPU on any failure" contract
+        instead of propagating. The OSError is scoped to the ``_swap`` CPU
+        uninstall (``onnxruntime``); the restore's own ``onnxruntime-gpu``
+        uninstall runs normally, so the restore succeeds → RESTORED.
         """
         which = _which(["uv", "nvidia-smi", "ldconfig"])
         calls: list[list[str]] = []
@@ -654,7 +684,7 @@ class TestGpuRuntimeEnsure:
                 return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
             if _is_provider_check(cmd):
                 return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
-            if "uninstall" in cmd:
+            if "uninstall" in cmd and "onnxruntime" in cmd:
                 # The uv binary vanished mid-run; exec raises before the child.
                 raise OSError("uv binary vanished")
             return MagicMock(returncode=0)

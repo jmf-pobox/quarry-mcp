@@ -257,11 +257,13 @@ class GpuRuntime:
         logger.info("Swapping onnxruntime for %s (python=%s)", spec, self._python)
         try:
             # Uninstall CPU onnxruntime (suppress errors — may not be installed),
-            # then install the CUDA-matched wheel. subprocess.run can raise
-            # OSError at this boundary — the uv binary removed between the
-            # shutil.which check and exec, or a signal. Treat that identically to
-            # a non-zero return code: restore CPU. Narrowly scoped to the
-            # subprocess boundary, so this is not a defensive-coding violation.
+            # then install the CUDA-matched wheel: onnxruntime and onnxruntime-gpu
+            # are separate PyPI distributions of the same import package, so the
+            # outgoing wheel must go before the incoming one or they shadow each
+            # other. subprocess.run can raise OSError at this boundary — the uv
+            # binary removed between the shutil.which check and exec, or a signal.
+            # Treat that identically to a non-zero return code: restore CPU.
+            # Narrowly scoped to the subprocess boundary, so this is not defensive.
             self._pip("uninstall", "onnxruntime")
             gpu_install = self._pip("install", spec)
         except OSError as exc:
@@ -298,20 +300,33 @@ class GpuRuntime:
         return self._restore_cpu()
 
     def _restore_cpu(self) -> GpuStatus:
-        """Reinstall CPU onnxruntime after a failed GPU swap.
+        """Uninstall onnxruntime-gpu, then reinstall CPU onnxruntime.
 
         The restore is the last-resort path: every ``_swap`` failure branch and
         the ``_verify_install`` import-failure branch route through here to end
-        on a defined :class:`GpuStatus`. ``subprocess.run`` can itself raise
-        ``OSError`` at the boundary — the same race that motivates the guard in
-        ``_swap`` (the ``uv`` binary removed between the ``shutil.which`` check
-        and exec, or a signal). Catching it here — narrowly, only around the
-        subprocess boundary — is the single point that guarantees the contract:
-        every path out of ``_swap``/``ensure`` yields a status, never an
-        exception. ``RESTORE_FAILED`` already means "GPU install failed AND CPU
-        restore failed", which is exactly this state.
+        on a defined :class:`GpuStatus`. ``onnxruntime`` and ``onnxruntime-gpu``
+        are SEPARATE PyPI distributions that both provide the ``onnxruntime``
+        import package; installed together they shadow each other and
+        ``import onnxruntime`` can still fail. ``_verify_install`` reaches here
+        precisely when the GPU wheel installed cleanly (``pip`` rc 0) but did
+        not import — so the GPU wheel is present and MUST be uninstalled first,
+        mirroring how ``_swap`` uninstalls the CPU wheel before the GPU one.
+        The uninstall is best-effort (rc suppressed) — the GPU wheel may be
+        absent (the ``_swap`` early-failure branches route here before it
+        installs), and a missing package must not fail the restore.
+
+        ``subprocess.run`` can itself raise ``OSError`` at the boundary — the
+        same race that motivates the guard in ``_swap`` (the ``uv`` binary
+        removed between the ``shutil.which`` check and exec, or a signal). Both
+        the uninstall and the install run inside this one guarded region, so an
+        ``OSError`` from either yields ``RESTORE_FAILED`` and never escapes.
+        ``RESTORE_FAILED`` already means "GPU install failed AND CPU restore
+        failed", which is exactly this state.
         """
         try:
+            # Uninstall the lingering GPU wheel (suppress rc — may be absent),
+            # then install the CPU wheel so import onnxruntime resolves cleanly.
+            self._pip("uninstall", "onnxruntime-gpu")
             cpu_restore = self._pip("install", _ORT_CPU_SPEC)
         except OSError as exc:
             logger.error("CPU onnxruntime restore raised %s — restore failed", exc)
