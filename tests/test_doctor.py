@@ -121,7 +121,7 @@ class TestCheckImports:
             name: str,
             globals: dict[str, object] | None = None,
             locals: dict[str, object] | None = None,
-            fromlist: list[str] = [],  # noqa: B006
+            fromlist: tuple[str, ...] = (),
             level: int = 0,
         ) -> object:
             if name == "lancedb":
@@ -146,7 +146,7 @@ class TestCheckImportsExcludesCv2:
             name: str,
             globals: dict[str, object] | None = None,
             locals: dict[str, object] | None = None,
-            fromlist: list[str] = [],  # noqa: B006
+            fromlist: tuple[str, ...] = (),
             level: int = 0,
         ) -> object:
             if name == "cv2":

@@ -29,7 +29,7 @@ _OCR_UNAVAILABLE: tuple[type[Exception], ...] = (OcrUnavailableError, ImportErro
 class OcrJob:
     """The per-document context an OCR run threads through its page loop."""
 
-    page_numbers: list[int]
+    page_numbers: tuple[int, ...]
     total_pages: int
     document_name: str
     document_path: str
@@ -74,7 +74,7 @@ class LocalOcrBackend:
         the document's extractable text instead of crashing ingestion.
         """
         job = OcrJob(
-            page_numbers=page_numbers,
+            page_numbers=tuple(page_numbers),
             total_pages=total_pages,
             document_name=document_name or document_path.name,
             document_path=str(document_path.resolve()),
