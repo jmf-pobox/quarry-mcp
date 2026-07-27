@@ -68,7 +68,13 @@ class FileLock:
                 # Already held by this process: reenter, sharing the one flock.
                 FileLock._depth_by_path[key] += 1
                 return self
-        fd = os.open(key, os.O_CREAT | os.O_RDWR, 0o644)
+        # O_NOFOLLOW refuses a symlinked lock path: the parent is the trusted
+        # resolved repo root, so a planted ``.CLAUDE.md.lock`` symlink is the
+        # only escape, and following it would flock (and O_CREAT-create) a file
+        # outside the repo. The resulting ELOOP propagates as the acquire's
+        # refusal — a hostile lock symlink means refuse to enable/disable, which
+        # is correct; a normal regular lock file is unaffected.
+        fd = os.open(key, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
         # A blocking flock can raise (EINTR on a signal, ENOLCK on some
         # filesystems); close the fd here or it leaks for the process lifetime,
         # since __exit__ never runs when __enter__ propagates.

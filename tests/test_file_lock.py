@@ -28,6 +28,41 @@ def test_reentrant_sequential_acquire(tmp_path: Path) -> None:
         pass
 
 
+def test_symlinked_lock_path_is_refused_and_creates_nothing_outside(
+    tmp_path: Path,
+) -> None:
+    """A planted symlink at the lock path must not let the acquire escape the repo.
+
+    O_NOFOLLOW refuses the symlinked ``.CLAUDE.md.lock``; without it the acquire
+    would O_CREAT-create (dangling target) or flock (existing target) a file
+    outside the repo.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external_lock_target"  # does not exist yet
+    (repo / ".CLAUDE.md.lock").symlink_to(external)
+
+    # O_NOFOLLOW on a symlink raises ELOOP ("... symbolic links") on Linux/macOS.
+    with pytest.raises(OSError, match="symbolic"):
+        FileLock(repo / "CLAUDE.md").__enter__()
+
+    assert not external.exists()
+
+
+def test_symlinked_lock_to_existing_file_is_not_opened(tmp_path: Path) -> None:
+    """A symlink to an existing external file is refused, leaving it untouched."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    (repo / ".CLAUDE.md.lock").symlink_to(victim)
+
+    with pytest.raises(OSError, match="symbolic"):
+        FileLock(repo / "CLAUDE.md").__enter__()
+
+    assert victim.read_text() == "keep\n"
+
+
 def test_enter_closes_fd_when_flock_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
