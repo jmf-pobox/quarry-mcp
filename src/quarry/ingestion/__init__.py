@@ -8,7 +8,7 @@ from quarry.ingestion.backends import (
     get_ocr_backend,
 )
 from quarry.ingestion.chunker import chunk_pages
-from quarry.ingestion.ocr_local import LocalOcrBackend, get_engine
+from quarry.ingestion.ocr_local import LocalOcrBackend
 from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.ingestion.pipeline import (
     SUPPORTED_EXTENSIONS,
@@ -36,7 +36,6 @@ __all__ = [
     "clear_caches",
     "extract_text_pages",
     "get_embedding_backend",
-    "get_engine",
     "get_ocr_backend",
     "ingest_auto",
     "ingest_content",

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_resources import ResourceDiagnostics
 from quarry.results import CheckResult
 
@@ -36,14 +37,10 @@ def _quiet_logging() -> Generator[None]:
     root = logging.getLogger()
     previous_level = root.level
     root.setLevel(logging.CRITICAL)
-    devnull = open(os.devnull, "w")  # noqa: SIM115, PTH123
-    old_stderr = sys.stderr
-    sys.stderr = devnull
     try:
-        yield
+        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stderr(devnull):
+            yield
     finally:
-        sys.stderr = old_stderr
-        devnull.close()
         root.setLevel(previous_level)
 
 
@@ -118,56 +115,19 @@ def _check_embedding_model() -> CheckResult:
     )
 
 
-def _check_local_ocr() -> CheckResult:
-    """Check that the local OCR engine (RapidOCR) can initialize."""
-    try:
-        from quarry.ingestion.ocr_local import get_engine  # noqa: PLC0415
-
-        get_engine()
-        return CheckResult(
-            name="Local OCR",
-            passed=True,
-            message="RapidOCR engine OK",
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="Local OCR",
-            passed=False,
-            message=str(exc),
-        )
-
-
-def _check_provider() -> CheckResult:
-    """Report which ONNX execution provider is selected."""
-    from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
-
-    try:
-        selection = ProviderSelection.from_environment()
-        return CheckResult(
-            name="ONNX provider",
-            passed=True,
-            message=f"{selection.provider} ({selection.model_file})",
-            required=False,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="ONNX provider",
-            passed=False,
-            message=str(exc),
-            required=False,
-        )
-
-
 def _check_imports() -> CheckResult:
+    # OCR's modules (rapidocr, cv2) are deliberately absent: they are an optional
+    # capability, and importing rapidocr can transitively load the GUI-linked cv2
+    # that fails on a headless box. Their absence must not fail this required
+    # check; OCR availability is reported separately (advisory) by
+    # InferenceDiagnostics.local_ocr().
     modules = [
         "lancedb",
         "tokenizers",
         "huggingface_hub",
         "fitz",
         "PIL",
-        "rapidocr",
         "onnxruntime",
-        "cv2",
     ]
     failed: list[str] = []
     for mod in modules:
@@ -973,7 +933,7 @@ def run_install() -> int:
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/7] Creating directories...")  # noqa: T201
+    print("[1/8] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -983,12 +943,26 @@ def run_install() -> int:
         print(f"  \u2717 Failed to create directories: {exc}")  # noqa: T201
         failed = True
 
-    # Step 2: GPU runtime (must run before model download so CUDA provider
+    # Step 2: headless OpenCV (rapidocr hard-requires the GUI opencv-python;
+    # force the headless wheel to own cv2 so OCR loads on a screenless box, the
+    # package-side equivalent of install.sh's resolver override). Best-effort:
+    # a failure prints the exact reinstall command and OCR degrades cleanly via
+    # the runtime guard.
+    print("[2/8] Ensuring headless OpenCV...")  # noqa: T201
+    from quarry.opencv_headless import HeadlessOpenCv  # noqa: PLC0415
+
+    headless = HeadlessOpenCv(sys.executable)
+    _run_optional_step(
+        headless.enforce,
+        f"OCR degrades cleanly; to enable it run: {headless.remediation()}",
+    )
+
+    # Step 3: GPU runtime (must run before model download so CUDA provider
     # detection can trigger FP16 model caching). The broad catch is the
     # installer's error boundary (PY-EH-6): every legitimate GPU outcome
     # returns a GpuStatus, so a raise here is unexpected and may leave a broken
     # runtime — convert it to a hard install failure rather than skip.
-    print("[2/7] Checking GPU runtime...")  # noqa: T201
+    print("[3/8] Checking GPU runtime...")  # noqa: T201
     try:
         if _install_gpu_runtime():
             failed = True
@@ -996,14 +970,14 @@ def run_install() -> int:
         print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
         failed = True
 
-    # Step 3: embedding model
-    print("[3/7] Downloading embedding model...")  # noqa: T201
+    # Step 4: embedding model
+    print("[4/8] Downloading embedding model...")  # noqa: T201
     if not _install_embedding_model():
         failed = True
 
-    # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
+    # Step 5: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[4/7] Installing mcp-proxy...")  # noqa: T201
+    print("[5/8] Installing mcp-proxy...")  # noqa: T201
 
     def _proxy_step() -> str:
         # Import INSIDE the callable so an import-time failure of quarry.proxy
@@ -1014,13 +988,13 @@ def run_install() -> int:
 
     _run_optional_step(_proxy_step, "mcp-proxy is optional — quarry works without it.")
 
-    # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
-    print("[5/7] Configuring MCP clients...")  # noqa: T201
+    # Step 6: MCP clients (uses mcp-proxy if step 5 succeeded, otherwise quarry mcp)
+    print("[6/8] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
-    # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[6/7] Registering quarry daemon...")  # noqa: T201
+    # Step 7: daemon service (best-effort — not available in CI, containers, SSH)
+    print("[7/8] Registering quarry daemon...")  # noqa: T201
 
     def _svc_step() -> str:
         # Import INSIDE the callable so an import-time failure of quarry.service
@@ -1036,8 +1010,8 @@ def run_install() -> int:
     # quarry is repo-scoped for CLAUDE.md guidance: `quarry enable` registers the
     # per-repo @-import; `install` never edits ~/.claude/CLAUDE.md.
 
-    # Step 7: ethos ext session_context (best-effort)
-    print("[7/7] Configuring ethos identity extension...")  # noqa: T201
+    # Step 8: ethos ext session_context (best-effort)
+    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
     try:
         check = _configure_ethos_ext()
         _print_check(check)
@@ -1065,9 +1039,9 @@ def check_environment(*, _skip_header: bool = False) -> int:
         all_results: list[CheckResult | None] = [
             _check_python_version(),
             _check_data_directory(),
-            _check_local_ocr(),
+            InferenceDiagnostics.local_ocr(),
             _check_embedding_model(),
-            _check_provider(),
+            InferenceDiagnostics.onnx_provider(),
             _check_imports(),
             _check_mcp_proxy(),
             _check_claude_code_mcp(),
