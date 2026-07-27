@@ -1,0 +1,219 @@
+"""Tests for the symlink-safe repo-relative path writer."""
+
+from __future__ import annotations
+
+import os
+import stat
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from quarry.safe_paths import SafeRepoPath
+
+_RELATIVE = (".punt-labs", "quarry", "leaf")
+
+
+def _target(root: Path) -> SafeRepoPath:
+    return SafeRepoPath(root, _RELATIVE)
+
+
+# ── normal (real-directory) behaviour ────────────────────────────────
+
+
+def test_create_exclusive_creates_with_content_and_mode(tmp_path: Path) -> None:
+    created = _target(tmp_path).create_exclusive("hello\n", mode=0o644)
+    leaf = tmp_path.joinpath(*_RELATIVE)
+    assert created is True
+    assert leaf.read_text() == "hello\n"
+    assert stat.S_IMODE(leaf.stat().st_mode) == 0o644
+
+
+def test_create_exclusive_forces_mode_under_restrictive_umask(tmp_path: Path) -> None:
+    old = os.umask(0o077)
+    try:
+        _target(tmp_path).create_exclusive("x", mode=0o644)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(tmp_path.joinpath(*_RELATIVE).stat().st_mode) == 0o644
+
+
+def test_create_exclusive_existing_regular_is_noop(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    assert target.create_exclusive("first\n", mode=0o644) is True
+    assert target.create_exclusive("second\n", mode=0o644) is False
+    assert tmp_path.joinpath(*_RELATIVE).read_text() == "first\n"
+
+
+def test_is_regular_file_true_then_false_after_remove(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    assert target.is_regular_file() is False
+    target.create_exclusive("x", mode=0o644)
+    assert target.is_regular_file() is True
+    assert target.remove() is True
+    assert target.is_regular_file() is False
+
+
+def test_write_atomic_overwrites_existing(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.create_exclusive("old\n", mode=0o644)
+    target.write_atomic("new\n", mode=0o644)
+    leaf = tmp_path.joinpath(*_RELATIVE)
+    assert leaf.read_text() == "new\n"
+    assert stat.S_IMODE(leaf.stat().st_mode) == 0o644
+    # No temp file is left behind in the parent directory.
+    assert [p.name for p in leaf.parent.iterdir()] == ["leaf"]
+
+
+def test_remove_absent_is_false(tmp_path: Path) -> None:
+    assert _target(tmp_path).remove() is False
+
+
+# ── non-regular leaf is refused / ignored ────────────────────────────
+
+
+def test_create_exclusive_refuses_symlinked_leaf(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.write_text("secret\n")
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        target.create_exclusive("x", mode=0o644)
+
+    assert outside.read_text() == "secret\n"
+
+
+def test_create_exclusive_refuses_directory_leaf(tmp_path: Path) -> None:
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.mkdir()
+    with pytest.raises(ValueError, match="not a regular file"):
+        target.create_exclusive("x", mode=0o644)
+
+
+def test_is_regular_file_false_for_symlinked_leaf(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.write_text("x\n")
+    target = _target(tmp_path)
+    target.path.parent.mkdir(parents=True, exist_ok=True)
+    target.path.symlink_to(outside)
+    assert target.is_regular_file() is False
+
+
+# ── symlinked ANCESTOR must never let an op escape the repo ──────────
+
+
+def test_create_exclusive_refuses_symlinked_ancestor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (repo / ".punt-labs").symlink_to(external)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        _target(repo).create_exclusive("x", mode=0o644)
+
+    assert not (external / "quarry" / "leaf").exists()
+
+
+def test_write_atomic_refuses_symlinked_ancestor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    (external / "quarry").mkdir(parents=True)
+    victim = external / "quarry" / "leaf"
+    victim.write_text("KEEP\n")
+    (repo / ".punt-labs").symlink_to(external)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        _target(repo).write_atomic("clobber\n", mode=0o644)
+
+    assert victim.read_text() == "KEEP\n"
+
+
+def test_remove_refuses_symlinked_ancestor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    (external / "quarry").mkdir(parents=True)
+    planted = external / "quarry" / "leaf"
+    planted.write_text("KEEP\n")
+    (repo / ".punt-labs").symlink_to(external)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        _target(repo).remove()
+
+    assert planted.exists()
+
+
+def test_is_regular_file_false_for_symlinked_ancestor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    (external / "quarry").mkdir(parents=True)
+    (external / "quarry" / "leaf").write_text("x\n")
+    (repo / ".punt-labs").symlink_to(external)
+    assert _target(repo).is_regular_file() is False
+
+
+def test_create_exclusive_refuses_non_directory_ancestor(tmp_path: Path) -> None:
+    """A regular file where a directory ancestor is expected is refused."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".punt-labs").write_text("i am a file, not a dir\n")
+    with pytest.raises(ValueError, match="ancestor"):
+        _target(repo).create_exclusive("x", mode=0o644)
+
+
+# ── Class 1: fd/temp cleanup when os.fdopen raises ───────────────────
+
+
+def test_create_exclusive_closes_fd_when_fdopen_raises(tmp_path: Path) -> None:
+    real_open = os.open
+    real_close = os.close
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def spy_open(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        # Record only the leaf create fd, opened O_WRONLY (not the dir walk fds).
+        if flags & os.O_WRONLY:
+            opened.append(fd)
+        return fd
+
+    def spy_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    with (
+        patch("quarry.safe_paths.os.open", side_effect=spy_open),
+        patch("quarry.safe_paths.os.close", side_effect=spy_close),
+        patch("quarry.safe_paths.os.fdopen", side_effect=OSError("fdopen failed")),
+        pytest.raises(OSError, match="fdopen failed"),
+    ):
+        _target(tmp_path).create_exclusive("x", mode=0o644)
+
+    assert opened, "expected a leaf fd to be opened"
+    assert set(opened) <= set(closed), "the opened leaf fd must be closed, not leaked"
+
+
+def test_write_atomic_removes_temp_when_fdopen_raises(tmp_path: Path) -> None:
+    parent = tmp_path.joinpath(*_RELATIVE[:-1])
+    parent.mkdir(parents=True)
+
+    with (
+        patch("quarry.safe_paths.os.fdopen", side_effect=OSError("fdopen failed")),
+        pytest.raises(OSError, match="fdopen failed"),
+    ):
+        _target(tmp_path).write_atomic("x", mode=0o644)
+
+    # No temp file (or leaf) is left behind after the failed atomic write.
+    assert list(parent.iterdir()) == []

@@ -274,6 +274,27 @@ class TestT11DisableRemovesConfig:
         assert result.config_removed is True
         assert not config_path.exists()
 
+    def test_symlinked_ancestor_config_removal_spares_external(
+        self, tmp_path: Path
+    ) -> None:
+        """disable must not unlink a config.md outside the repo via a symlink."""
+        project = tmp_path / "myproject"
+        project.mkdir()
+        external = tmp_path / "external"
+        (external / "quarry").mkdir(parents=True)
+        planted = external / "quarry" / "config.md"
+        planted.write_text("external config\n")
+        (project / ".punt-labs").symlink_to(external)
+        client = FakeRegistryClient([("myproject", project)])
+
+        with (
+            patch(_NO_ETHOS, tmp_path / "no-ethos"),
+            pytest.raises(ValueError, match="ancestor"),
+        ):
+            disable_project(project, client)
+
+        assert planted.exists()
+
 
 class TestT12DisableKeepData:
     def test_keep_data_dispatches_no_captures_purge(self, tmp_path: Path) -> None:
@@ -403,29 +424,18 @@ class TestWriteProjectConfig:
 
         assert config_path.read_text() == original
 
-    def test_fd_closed_when_fdopen_raises(self, tmp_path: Path) -> None:
-        """Verify fd is closed if os.fdopen raises before taking ownership."""
-        import os as _os
+    def test_refuses_symlinked_ancestor(self, tmp_path: Path) -> None:
+        """A symlinked .punt-labs ancestor makes the config write refuse, not escape."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        external = tmp_path / "external"
+        external.mkdir()
+        (repo / ".punt-labs").symlink_to(external)
 
-        real_open = _os.open
+        with pytest.raises(ValueError, match="ancestor"):
+            _write_project_config(repo)
 
-        captured_fd: list[int] = []
-
-        def tracking_open(path: str, flags: int, mode: int = 0o777) -> int:
-            fd = real_open(path, flags, mode)
-            captured_fd.append(fd)
-            return fd
-
-        with (
-            patch("quarry.enable.os.open", side_effect=tracking_open),
-            patch("quarry.enable.os.fdopen", side_effect=OSError("fdopen failed")),
-            patch("quarry.enable.os.close") as mock_close,
-            pytest.raises(OSError, match="fdopen failed"),
-        ):
-            _write_project_config(tmp_path)
-
-        assert len(captured_fd) == 1
-        mock_close.assert_called_once_with(captured_fd[0])
+        assert not (external / "quarry" / "config.md").exists()
 
 
 class TestT15DisableOnChildOfRegisteredParentRaises:

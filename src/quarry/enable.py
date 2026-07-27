@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
+
+from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
     from quarry.api import (
@@ -204,11 +205,11 @@ def disable_project(
 
     # Clean local capture config whether or not a registration was present, and
     # BEFORE the best-effort captures purge below — a retry always reaches here.
-    config_path = directory / ".punt-labs" / "quarry" / "config.md"
-    config_removed = False
-    if config_path.exists():
-        config_path.unlink()
-        config_removed = True
+    # Route through SafeRepoPath so a symlinked .punt-labs ancestor cannot make
+    # this unlink escape the repo (it is refused, never followed).
+    config_removed = SafeRepoPath(
+        directory, (".punt-labs", "quarry", "config.md")
+    ).remove()
 
     # Prune the @-import line and delete the enabled marker (§ 2.3). The vendored
     # guide is left in place — disable is non-destructive of vendored content
@@ -246,19 +247,13 @@ def disable_project(
 
 
 def _write_project_config(directory: Path) -> str:
-    """Write config.md atomically (O_CREAT|O_EXCL, no overwrite); return its path."""
-    config_dir = directory / ".punt-labs" / "quarry"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / "config.md"
-    try:
-        fd = os.open(str(config_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        try:
-            with os.fdopen(fd, "w") as f:
-                fd = -1  # fdopen took ownership before write
-                f.write(_CONFIG_TEMPLATE)
-        finally:
-            if fd >= 0:
-                os.close(fd)
-    except FileExistsError:
-        pass
-    return str(config_path)
+    """Write config.md exclusively (no overwrite, no symlink follow); return its path.
+
+    Routes through :class:`quarry.safe_paths.SafeRepoPath` so a hostile repo
+    cannot redirect the create outside the repo via a symlinked ``.punt-labs``
+    ancestor or a symlinked ``config.md`` leaf. An existing regular config is
+    left untouched (idempotent); a non-regular entry at the path is refused.
+    """
+    config = SafeRepoPath(directory, (".punt-labs", "quarry", "config.md"))
+    config.create_exclusive(_CONFIG_TEMPLATE, mode=0o644)
+    return str(config.path)

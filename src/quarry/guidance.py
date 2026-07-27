@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.atomic_file import AtomicFile
+from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["REPO_IMPORT_LINE", "Guidance"]
+
+_GUIDE_RELATIVE = (".punt-labs", "quarry", "CLAUDE.md")
 
 # The canonical repo import line (tool-enable-disable.md § 2.4): forward
 # slashes, no ``./`` prefix, no trailing slash, one physical line. quarry's
@@ -65,8 +67,14 @@ class Guidance:
     @property
     def guide_path(self) -> Path:
         """Return the deposited guide's path under the tool subtree."""
-        return self._root / ".punt-labs" / "quarry" / "CLAUDE.md"
+        return self._root.joinpath(*_GUIDE_RELATIVE)
 
     def deposit(self) -> None:
-        """Write the vendored guide wholesale (creating parents as needed)."""
-        AtomicFile(self.guide_path).replace(_GUIDE)
+        """Write the vendored guide wholesale, following no symlink.
+
+        Routes through :class:`quarry.safe_paths.SafeRepoPath` so a hostile repo
+        cannot redirect the wholesale overwrite outside the repo by planting a
+        symlink at ``.punt-labs`` or ``.punt-labs/quarry``: a symlinked ancestor
+        is refused, and the write lands atomically on the real in-repo guide.
+        """
+        SafeRepoPath(self._root, _GUIDE_RELATIVE).write_atomic(_GUIDE, mode=0o644)
