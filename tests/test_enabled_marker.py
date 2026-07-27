@@ -153,3 +153,69 @@ def test_remove_leaves_symlink_and_target(tmp_path: Path) -> None:
     assert marker.remove() is False
     assert marker.path.is_symlink()
     assert outside.read_text() == "keep\n"
+
+
+# ── ancestor-directory symlink: the walk must not escape the repo ─────
+
+
+def test_write_refuses_symlinked_ancestor_and_creates_nothing_outside(
+    tmp_path: Path,
+) -> None:
+    """A symlinked .punt-labs ancestor must not let write() create outside the repo.
+
+    O_NOFOLLOW/O_EXCL guard only the final component; an ancestor symlink would
+    otherwise redirect the create to an external directory. The openat walk pins
+    every fixed component, so a symlinked ancestor is refused.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    (repo / ".punt-labs").symlink_to(external)
+    marker = EnabledMarker(repo)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        marker.write()
+
+    assert not (external / "quarry" / "enabled").exists()
+
+
+def test_remove_refuses_symlinked_ancestor_and_unlinks_nothing_outside(
+    tmp_path: Path,
+) -> None:
+    """A symlinked ancestor must not let remove() unlink a file outside the repo."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    (external / "quarry").mkdir(parents=True)
+    planted = external / "quarry" / "enabled"
+    planted.write_text("")  # a real file the attacker wants unlinked
+    (repo / ".punt-labs").symlink_to(external)
+    marker = EnabledMarker(repo)
+
+    with pytest.raises(ValueError, match="ancestor"):
+        marker.remove()
+
+    assert planted.exists()
+
+
+def test_is_present_false_for_symlinked_ancestor(tmp_path: Path) -> None:
+    """A symlinked ancestor reads as not-enabled (a query never escapes or raises)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    external = tmp_path / "external"
+    (external / "quarry").mkdir(parents=True)
+    (external / "quarry" / "enabled").write_text("")
+    (repo / ".punt-labs").symlink_to(external)
+
+    assert EnabledMarker(repo).is_present() is False
+
+
+def test_write_then_present_then_remove_through_real_dirs(tmp_path: Path) -> None:
+    """The full lifecycle still works when the ancestor chain is real directories."""
+    marker = EnabledMarker(tmp_path)
+    assert marker.write() is True
+    assert marker.is_present() is True
+    assert marker.write() is False  # idempotent no-op
+    assert marker.remove() is True
+    assert marker.is_present() is False
