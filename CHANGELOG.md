@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-27
+
 ### Added
 
 - **transform (OCR)**: OCR now works on headless machines (servers, minimal
