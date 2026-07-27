@@ -1276,6 +1276,38 @@ class TestRunInstall:
         assert "CPU restored" in captured.out
         assert "\u2717 onnxruntime" not in captured.out
 
+    def test_gpu_cuda_unsupported_warns_with_detail(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ):
+        """CUDA_UNSUPPORTED warns (\u26a0), passes install, and renders its detail.
+
+        Design \u00a75 case 5: a GPU host with no importable onnxruntime-gpu build
+        keeps CPU. The install must exit 0 with a warning glyph (not a cross),
+        and the line must carry the ``install_detail`` clause pointing at the
+        log for the detected vs supported CUDA majors \u2014 the CUDA-major-specific
+        message the design requires ``quarry doctor``/install to render.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        with (
+            patch(
+                "quarry.gpu_runtime.GpuRuntime.ensure",
+                return_value=GpuStatus.CUDA_UNSUPPORTED,
+            ),
+            patch(self._DL) as mock_dl,
+        ):
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        assert result == 0
+        captured = capsys.readouterr()
+        # Warning glyph, not a cross \u2014 the daemon still runs on CPU.
+        assert "\u26a0" in captured.out
+        assert "\u2717" not in captured.out
+        # The fixed status string \u2026
+        assert "GPU present but CUDA unsupported" in captured.out
+        # \u2026 plus the CUDA-major-specific install_detail clause.
+        assert "no matching onnxruntime-gpu build" in captured.out
+
     @pytest.mark.parametrize(
         "status",
         [

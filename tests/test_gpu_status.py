@@ -48,3 +48,25 @@ class TestGpuStatusClassification:
         """Every enum member resolves to a known outcome — no member falls through."""
         for status in GpuStatus:
             assert status.outcome in {"success", "recovered", "failure"}
+
+
+class TestGpuStatusInstallDetail:
+    """Tests for GpuStatus.install_detail — the extra install-line clause.
+
+    Only CUDA_UNSUPPORTED carries a clause (it points the reader at the GPU
+    runtime warning log naming detected vs supported CUDA majors, which are not
+    part of the fixed status string). Every other member returns "" so the
+    caller renders one line either way.
+    """
+
+    def test_cuda_unsupported_has_detail(self) -> None:
+        detail = GpuStatus.CUDA_UNSUPPORTED.install_detail
+        assert detail != ""
+        assert "no matching onnxruntime-gpu build" in detail
+
+    @pytest.mark.parametrize(
+        "status",
+        [s for s in GpuStatus if s is not GpuStatus.CUDA_UNSUPPORTED],
+    )
+    def test_other_members_have_no_detail(self, status: GpuStatus) -> None:
+        assert status.install_detail == ""
