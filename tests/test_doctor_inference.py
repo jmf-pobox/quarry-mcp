@@ -6,16 +6,29 @@ from unittest.mock import patch
 
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.ingestion.ocr_availability import OcrAvailability
+from quarry.ingestion.ocr_engine import OcrEngine
 
 
 class TestLocalOcr:
     def test_reports_result(self) -> None:
-        result = InferenceDiagnostics.local_ocr()
+        # Stub the probe (available) and the engine so the check never builds the
+        # real RapidOCR — that model load is slow and belongs in the integration
+        # tier, not this unit test's 30s budget. Here we assert the pass-path
+        # contract: advisory, and a RapidOCR message when the engine is present.
+        available = OcrAvailability(available=True, reason="")
+        with (
+            patch(
+                "quarry.ingestion.ocr_availability.OcrAvailability.probe",
+                return_value=available,
+            ),
+            patch.object(OcrEngine, "get", return_value=object()),
+        ):
+            result = InferenceDiagnostics.local_ocr()
         assert result.name == "Local OCR"
         # OCR is an optional capability — always advisory, never a hard failure.
         assert result.required is False
-        if result.passed:
-            assert "RapidOCR" in result.message
+        assert result.passed is True
+        assert "RapidOCR" in result.message
 
     def test_advisory_warning_when_cv2_unavailable(self) -> None:
         # A headless box where cv2 won't load: OCR warns with an actionable

@@ -32,6 +32,18 @@ def test_command_falls_back_to_pip_when_no_uv(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
+def test_remediation_is_the_reinstall_command_as_a_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The operator hint printed by `quarry install` must be the actual command.
+    monkeypatch.setattr("quarry.opencv_headless.shutil.which", lambda _: None)
+    hint = HeadlessOpenCv("/venv/bin/python").remediation()
+    assert hint == (
+        "/venv/bin/python -m pip install "
+        "--force-reinstall --no-deps opencv-python-headless"
+    )
+
+
 def test_enforce_runs_the_command(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: list[list[str]] = []
 

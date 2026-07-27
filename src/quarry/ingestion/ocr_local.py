@@ -7,16 +7,22 @@ import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import ClassVar, Self
 
 import fitz
 from PIL import Image
 
 from quarry.config import Settings
+from quarry.ingestion.ocr_availability import OcrUnavailableError
 from quarry.ingestion.ocr_engine import OcrEngine, OcrEngineProtocol, OcrResult
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
+
+# The engine build fails one of two ways on a machine that cannot OCR: cv2 won't
+# load on a headless box (OcrUnavailableError) or rapidocr isn't installed
+# (ImportError). Both mean "degrade, don't crash" at the ingestion boundary.
+_OCR_UNAVAILABLE: tuple[type[Exception], ...] = (OcrUnavailableError, ImportError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,11 @@ class LocalOcrBackend:
 
     _settings: Settings
 
+    # Process-wide latch: OCR availability is global (the engine is a
+    # process-wide singleton), so one warning covers a whole directory of
+    # scans instead of one per page.
+    _warned_unavailable: ClassVar[bool] = False
+
     def __new__(cls, settings: Settings) -> Self:
         self = super().__new__(cls)
         self._settings = settings
@@ -56,7 +67,12 @@ class LocalOcrBackend:
         *,
         document_name: str | None = None,
     ) -> list[PageContent]:
-        """OCR pages from a document (PDF or TIFF)."""
+        """OCR pages from a document (PDF or TIFF).
+
+        Degrade cleanly when OCR is unavailable (headless cv2 or missing
+        rapidocr): warn once and return no pages so the caller keeps indexing
+        the document's extractable text instead of crashing ingestion.
+        """
         job = OcrJob(
             page_numbers=page_numbers,
             total_pages=total_pages,
@@ -64,12 +80,16 @@ class LocalOcrBackend:
             document_path=str(document_path.resolve()),
         )
         suffix = document_path.suffix.lower()
-        if suffix in (".tif", ".tiff"):
-            return self._ocr_tiff(document_path, job)
-        if suffix == ".pdf":
+        if suffix not in (".tif", ".tiff", ".pdf"):
+            msg = f"Unsupported document type for OCR: '{suffix}'"
+            raise ValueError(msg)
+        try:
+            if suffix in (".tif", ".tiff"):
+                return self._ocr_tiff(document_path, job)
             return self._ocr_pdf(document_path, job)
-        msg = f"Unsupported document type for OCR: '{suffix}'"
-        raise ValueError(msg)
+        except _OCR_UNAVAILABLE as exc:
+            self._warn_unavailable(exc)
+            return []
 
     def ocr_image_bytes(
         self,
@@ -77,9 +97,18 @@ class LocalOcrBackend:
         document_name: str,
         document_path: Path,
     ) -> PageContent:
-        """OCR a single-page image from bytes."""
+        """OCR a single-page image from bytes.
+
+        Degrade to empty text (which chunks to nothing downstream) when OCR is
+        unavailable, so a scanned image on a headless box indexes without OCR
+        rather than crashing.
+        """
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        text = self._extract_text(OcrEngine.get()(img))
+        try:
+            text = self._extract_text(OcrEngine.get()(img))
+        except _OCR_UNAVAILABLE as exc:
+            self._warn_unavailable(exc)
+            text = ""
         logger.info("OCR image %s: %d chars", document_name, len(text))
         return PageContent(
             document_name=document_name,
@@ -140,6 +169,14 @@ class LocalOcrBackend:
         page = doc[page_number - 1]
         pix = page.get_pixmap(dpi=200)
         return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    @classmethod
+    def _warn_unavailable(cls, exc: Exception) -> None:
+        """Log one warning per process the first time OCR is found unavailable."""
+        if cls._warned_unavailable:
+            return
+        cls._warned_unavailable = True
+        logger.warning("OCR unavailable, indexing without OCR: %s", exc)
 
     @staticmethod
     def _extract_text(result: OcrResult) -> str:

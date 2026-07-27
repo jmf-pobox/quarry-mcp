@@ -119,7 +119,8 @@ def _check_imports() -> CheckResult:
     # OCR's modules (rapidocr, cv2) are deliberately absent: they are an optional
     # capability, and importing rapidocr can transitively load the GUI-linked cv2
     # that fails on a headless box. Their absence must not fail this required
-    # check; OCR availability is reported separately (advisory) by _check_local_ocr.
+    # check; OCR availability is reported separately (advisory) by
+    # InferenceDiagnostics.local_ocr().
     modules = [
         "lancedb",
         "tokenizers",
@@ -955,14 +956,14 @@ def run_install() -> int:  # noqa: C901
     # package-side equivalent of install.sh's resolver override). Best-effort:
     # a failure here leaves OCR to degrade cleanly via the runtime guard.
     print("[2/9] Ensuring headless OpenCV...")  # noqa: T201
-    try:
-        from quarry.opencv_headless import HeadlessOpenCv  # noqa: PLC0415
+    from quarry.opencv_headless import HeadlessOpenCv  # noqa: PLC0415
 
-        msg = HeadlessOpenCv(sys.executable).enforce()
-        print(f"  ✓ {msg}")  # noqa: T201
+    headless = HeadlessOpenCv(sys.executable)
+    try:
+        print(f"  ✓ {headless.enforce()}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  • Skipped: {exc}")  # noqa: T201
-        print("    OCR degrades cleanly; run the printed fix to enable it.")  # noqa: T201
+        print(f"    OCR degrades cleanly; to enable it run: {headless.remediation()}")  # noqa: T201
 
     # Step 3: GPU runtime (must run before model download so CUDA provider
     # detection can trigger FP16 model caching)

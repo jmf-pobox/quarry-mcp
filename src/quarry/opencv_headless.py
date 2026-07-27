@@ -44,6 +44,10 @@ class HeadlessOpenCv:
         )
         return f"{_PACKAGE} is the cv2 provider"
 
+    def remediation(self) -> str:
+        """Return the shell command :meth:`enforce` runs, for an operator hint."""
+        return " ".join(self._reinstall_command())
+
     def _reinstall_command(self) -> list[str]:
         """Return the force-reinstall argv, preferring uv (tool venvs lack pip).
 

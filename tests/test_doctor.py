@@ -1000,7 +1000,12 @@ class TestCheckSyncDirectories:
 
 
 def _mock_install_deps(monkeypatch: MP) -> None:
-    """Stub out MCP config, proxy install, service registration, check_environment."""
+    """Stub out MCP config, proxy install, service registration, check_environment.
+
+    Also stubs the headless-OpenCV step: a real ``enforce`` runs a
+    ``pip install --force-reinstall`` subprocess, which is slow and mutates the
+    test environment — a unit test must not reinstall packages.
+    """
     import quarry.doctor as doctor_mod
 
     noop = lambda: CheckResult(  # noqa: E731
@@ -1012,6 +1017,10 @@ def _mock_install_deps(monkeypatch: MP) -> None:
     monkeypatch.setattr("quarry.proxy.install", lambda: "mocked (skipped in test)")
     monkeypatch.setattr("quarry.service._systemd_install", lambda: None)
     monkeypatch.setattr("quarry.service._launchd_install", lambda: None)
+    monkeypatch.setattr(
+        "quarry.opencv_headless.HeadlessOpenCv.enforce",
+        lambda _self: "opencv-python-headless (mocked)",
+    )
 
 
 class TestMcpCommand:

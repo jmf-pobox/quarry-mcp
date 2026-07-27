@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from quarry.config import Settings
+from quarry.ingestion.ocr_availability import OcrUnavailableError
 from quarry.ingestion.ocr_engine import OcrEngine
 from quarry.ingestion.ocr_local import LocalOcrBackend
 from quarry.models import PageType
@@ -63,8 +64,9 @@ def _create_png_bytes() -> bytes:
 
 @pytest.fixture(autouse=True)
 def _reset_engine() -> None:
-    """Reset singleton engine between tests."""
+    """Reset singleton engine and the OCR-unavailable warn latch between tests."""
     OcrEngine.reset()
+    LocalOcrBackend._warned_unavailable = False
 
 
 class TestExtractText:
@@ -237,3 +239,67 @@ class TestLocalOcrBackendImageBytes:
             )
 
         assert result.text == ""
+
+
+class TestOcrDegradesWhenUnavailable:
+    """OCR-unavailable (headless cv2 or missing rapidocr) degrades, never crashes."""
+
+    def test_document_returns_no_pages_on_unavailable(self, tmp_path: Path) -> None:
+        pdf_path = _create_pdf(tmp_path, "scanned", num_pages=2)
+        unavailable = OcrUnavailableError("headless: libGL.so.1 not loadable")
+
+        with patch.object(OcrEngine, "get", side_effect=unavailable):
+            backend = LocalOcrBackend(_settings())
+            pages = backend.ocr_document(pdf_path, [1, 2], 2, document_name="scan.pdf")
+
+        assert pages == []
+
+    def test_document_returns_no_pages_on_import_error(self, tmp_path: Path) -> None:
+        tiff_path = _create_tiff(tmp_path, num_frames=2)
+
+        with patch.object(OcrEngine, "get", side_effect=ImportError("no rapidocr")):
+            backend = LocalOcrBackend(_settings())
+            pages = backend.ocr_document(tiff_path, [1, 2], 2)
+
+        assert pages == []
+
+    def test_image_bytes_degrades_to_empty_text(self) -> None:
+        png_bytes = _create_png_bytes()
+        unavailable = OcrUnavailableError("headless: cv2 unavailable")
+
+        with patch.object(OcrEngine, "get", side_effect=unavailable):
+            backend = LocalOcrBackend(_settings())
+            result = backend.ocr_image_bytes(
+                png_bytes, "scan.png", Path("/tmp/scan.png")
+            )
+
+        assert result.text == ""
+        assert result.document_name == "scan.png"
+        assert result.page_type == PageType.IMAGE
+
+    def test_unsupported_extension_still_raises(self, tmp_path: Path) -> None:
+        # A real caller error must NOT be swallowed by the unavailability guard.
+        docx_path = tmp_path / "file.docx"
+        docx_path.write_bytes(b"fake")
+        backend = LocalOcrBackend(_settings())
+        with pytest.raises(ValueError, match="Unsupported document type"):
+            backend.ocr_document(docx_path, [1], 1)
+
+    def test_warns_exactly_once_across_calls(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pdf_path = _create_pdf(tmp_path, "scanned", num_pages=1)
+        png_bytes = _create_png_bytes()
+        unavailable = OcrUnavailableError("headless: cv2 unavailable")
+
+        with (
+            patch.object(OcrEngine, "get", side_effect=unavailable),
+            caplog.at_level("WARNING", logger="quarry.ingestion.ocr_local"),
+        ):
+            backend = LocalOcrBackend(_settings())
+            backend.ocr_document(pdf_path, [1], 1)
+            backend.ocr_image_bytes(png_bytes, "scan.png", Path("/tmp/scan.png"))
+            backend.ocr_document(pdf_path, [1], 1)
+
+        warnings = [r for r in caplog.records if "OCR unavailable" in r.message]
+        assert len(warnings) == 1
