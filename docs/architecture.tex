@@ -131,9 +131,11 @@ daemon's \texttt{/v1} REST API); it no longer routes through
 holds the resident engine, every Claude Code tab shares one warm model
 rather than spawning a Python process that loads $\sim$200\,MB of its
 own.  Installed services use TLS with TOFU certificate pinning (DES-020)
---- even on localhost.  (\texttt{mcp-proxy} remains a supported,
-separately-installed tool for other consumers of the REST API; it is
-simply no longer on quarry's own MCP path.)
+--- even on localhost.  (\texttt{mcp-proxy} is an MCP stdio$\leftrightarrow$daemon
+transport, not a REST-API client; \texttt{quarry install} still fetches it
+because it remains a supported transport for other MCP clients, but it is
+no longer on quarry's own MCP path --- the plugin runs \texttt{quarry mcp}
+directly.)
 
 When a remote server is configured (DES-021), the CLI routes
 all data commands over HTTPS to the server, with only authentication
@@ -743,7 +745,7 @@ zero LanceDB/ONNX.  Database selection is a per-request parameter carried
 in the wire call; the daemon holds no per-connection \texttt{ContextVar}
 because the in-daemon \texttt{/mcp} WebSocket route was removed (DES-031
 v2.2, PR-1).  \texttt{mcp-proxy} is no longer on this path (it remains a
-supported tool for other REST-API consumers).
+supported MCP stdio$\leftrightarrow$daemon transport for other MCP clients).
 
 \subsection{CLI and the Daemon}
 
@@ -1076,13 +1078,14 @@ whose defaults reproduce the shipped pipeline bit-for-bit.
   \item \textbf{Vector similarity} --- ANN search via LanceDB under the
     cosine metric
   \item \textbf{BM25 full-text search} --- LanceDB's \emph{native}
-    inverted index on the \texttt{text} column
-    (\texttt{create\_fts\_index(..., use\_tantivy=False)}, the default),
-    created during schema migration.  There is no separate Tantivy
-    \texttt{IndexWriter} process or thread pool; the index rides the
-    daemon's capped LanceDB runtime (DES-045c).  (Earlier ADRs --- DES-017,
-    DES-023 --- name the backend ``Tantivy''; that name is legacy, the
-    shipped engine is LanceDB-native.)
+    (Rust) inverted index on the \texttt{text} column, the FTS backend
+    LanceDB builds by default, created during schema migration.  Quarry's
+    \texttt{LanceTable} protocol and the \texttt{RecyclingTable} wrapper
+    forward only \texttt{replace} to \texttt{create\_fts\_index}; there is
+    no separate Tantivy \texttt{IndexWriter} process or thread pool, so the
+    index rides the daemon's capped LanceDB runtime (DES-045c).  (Earlier
+    ADRs --- DES-017, DES-023 --- name the backend ``Tantivy''; that name is
+    legacy, the shipped engine is LanceDB-native.)
 \end{enumerate}
 
 Results are fused using Reciprocal Rank Fusion (RRF):
@@ -1331,7 +1334,7 @@ context from the pinned CA as the sole root (system roots excluded), so
 every daemon RPC --- CLI, \texttt{quarry mcp}, hooks, library --- verifies
 against it.  The \texttt{quarry.toml} profile also records the CA under
 \texttt{ca\_cert}, which \texttt{mcp-proxy} reads (as the sole root, TLS
-1.3 minimum) when it is used by other REST-API consumers; it is no longer
+1.3 minimum) when it transports MCP for other MCP clients; it is no longer
 on quarry's own MCP path (DES-031 v2.2).
 
 \subsection{Log Safety (CWE-532, CWE-117)}
