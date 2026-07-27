@@ -139,25 +139,22 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tools/*" = ["T20", "S603", "S607", "C901"]
+"tools/*" = ["T20", "S603", "S607"]
 "tools/eval/**/*.py" = ["T20"]  # the eval CLI prints its report to stdout
-"tests/*" = ["S101", "S106", "S108", "S603", "S607", "T20", "SLF001", "ARG", "PLC0415", "A002"]
+"tests/*" = ["S101", "S106", "S108", "S603", "S607", "SLF001", "ARG", "PLC0415", "A002"]
 "benchmarks/*" = ["T20", "S311", "BLE001", "PLC0415", "SIM905"]
 # FastAPI resolves handler annotations at runtime (get_type_hints), so the
 # route groups must import Request at runtime, not under TYPE_CHECKING (TC002).
 "src/quarry/daemon/routes/*.py" = ["TC002"]
 "src/quarry/__main__.py" = ["T20", "FBT"]
-"src/quarry/mcp_server.py" = ["FBT"]  # typer boolean flags; T20 retired — no prints after the client-tier split
+"src/quarry/mcp_server.py" = ["FBT"]  # typer boolean flags
 "src/quarry/cli_captures.py" = ["FBT"]  # typer boolean CLI flags
-"src/quarry/cli_search.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_ingest.py" = ["FBT"]  # typer boolean CLI flags
-"src/quarry/cli_documents.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_sync.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_project.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_maintenance.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/cli_remote.py" = ["FBT"]  # typer boolean CLI flags
 "src/quarry/daemon/launcher.py" = ["FBT"]  # typer boolean CLI flags
-"src/quarry/hooks.py" = ["S603"]  # Popen calls use sys.executable — trusted
 
 [tool.ruff.format]
 quote-style = "double"

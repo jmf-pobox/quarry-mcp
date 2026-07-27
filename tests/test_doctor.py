@@ -486,7 +486,26 @@ class TestCheckEnvironment:
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
         monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
         monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-        # AWS is now optional, so only data_directory check fails
+        # Stub the advisory ONNX/OCR probes: both build a real RapidOCR/ONNX
+        # engine (model load or download) that can exceed the test timeout under
+        # full-suite load. They are required=False, so they never affect this
+        # return code — the point here is that the required data_directory check
+        # fails (home is an empty tmp_path) and drives the exit code to 1.
+        _ok = CheckResult
+        monkeypatch.setattr(
+            InferenceDiagnostics,
+            "local_ocr",
+            lambda: _ok(
+                name="Local OCR", passed=True, message="mocked", required=False
+            ),
+        )
+        monkeypatch.setattr(
+            InferenceDiagnostics,
+            "onnx_provider",
+            lambda: _ok(
+                name="ONNX provider", passed=True, message="mocked", required=False
+            ),
+        )
         assert check_environment() == 1
 
 

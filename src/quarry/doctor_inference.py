@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import final
 
+from quarry.ingestion.ocr_availability import OcrAvailability
+from quarry.ingestion.ocr_engine import OcrEngine
+from quarry.ingestion.provider import ProviderSelection
 from quarry.results import CheckResult
 
 
@@ -25,8 +28,6 @@ class InferenceDiagnostics:
         A headless box where cv2 will not load warns with an actionable message
         (run the printed ``pip install`` fix) rather than failing the run.
         """
-        from quarry.ingestion.ocr_availability import OcrAvailability  # noqa: PLC0415
-
         availability = OcrAvailability.probe()
         if not availability.is_available:
             return CheckResult(
@@ -36,8 +37,6 @@ class InferenceDiagnostics:
                 required=False,
             )
         try:
-            from quarry.ingestion.ocr_engine import OcrEngine  # noqa: PLC0415
-
             OcrEngine.get()
         except Exception as exc:  # noqa: BLE001
             return CheckResult(
@@ -50,8 +49,6 @@ class InferenceDiagnostics:
     @staticmethod
     def onnx_provider() -> CheckResult:
         """Report which ONNX execution provider is selected."""
-        from quarry.ingestion.provider import ProviderSelection  # noqa: PLC0415
-
         try:
             selection = ProviderSelection.from_environment()
         except Exception as exc:  # noqa: BLE001

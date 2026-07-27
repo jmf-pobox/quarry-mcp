@@ -37,14 +37,10 @@ def _quiet_logging() -> Generator[None]:
     root = logging.getLogger()
     previous_level = root.level
     root.setLevel(logging.CRITICAL)
-    devnull = open(os.devnull, "w")  # noqa: SIM115, PTH123
-    old_stderr = sys.stderr
-    sys.stderr = devnull
     try:
-        yield
+        with Path(os.devnull).open("w") as devnull, contextlib.redirect_stderr(devnull):
+            yield
     finally:
-        sys.stderr = old_stderr
-        devnull.close()
         root.setLevel(previous_level)
 
 

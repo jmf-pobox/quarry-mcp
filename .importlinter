@@ -37,9 +37,12 @@ forbidden_modules =
 # WHY a daemon is unhealthy even when it is down. `quarry.__main__` reaches
 # these only through function-body (lazy) imports, so the heavy engine is
 # deferred to those rare, explicit invocations and never loaded on the hot
-# CLI/hook path (the sabotage test proves module-scope engine-freeness). Each
-# edge below is one such lazy diagnostic touch; a NEW engine import from any
-# other client-reachable module still fails the contract.
+# CLI/hook path (the sabotage test proves module-scope engine-freeness). The
+# `quarry.doctor` edges are lazy `__main__`-side touches; the
+# `quarry.doctor_inference` edges are eager, but reachable only through the lazy
+# `__main__` -> `quarry.doctor` boundary, so the engine still loads only when a
+# diagnostic command runs. A NEW engine import from any other client-reachable
+# module still fails the contract.
 ignore_imports =
     quarry.doctor -> quarry.db.facade
     quarry.doctor -> quarry.db.schema
