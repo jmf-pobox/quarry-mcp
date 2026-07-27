@@ -16,6 +16,18 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- **transform (OCR)**: OCR now works on headless machines (servers, minimal
+  containers), not only desktops. Importing `cv2` on a box without X11/GL no
+  longer crashes the OCR path — a failed load degrades cleanly to "OCR
+  unavailable" instead of taking down ingestion or `quarry doctor`, and the
+  doctor's OCR check is advisory (a WARNING, not a required failure that aborts
+  `quarry install`). `quarry install` also force-reinstalls
+  `opencv-python-headless` (`--no-deps`, as the last writer of `cv2/`) so a
+  direct `uv tool install` / `pip install` that pulls the GUI `opencv-python`
+  (whose `cv2` links X11/GL and shadows the headless build) is repaired to
+  headless — the package-side equivalent of install.sh's resolver override
+  (Fixed, below), covering installs that bypass the `curl … | sh` path.
+  (quarry-lb1z)
 - **infra (install.sh)**: `--no-plugin` flag and `QUARRY_NO_PLUGIN=1` env var to
   install the harness-neutral CLI while skipping the Claude Code
   marketplace-register + plugin-install steps (per punt-kit `install-cli-only.md`).
