@@ -588,6 +588,53 @@ class TestGpuRuntimeEnsure:
             install_specs.index("onnxruntime>=1.18.0")
         )
 
+    def test_verify_probe_oserror_restores_cpu(self) -> None:
+        """An ``OSError`` from the post-install verify probe restores CPU.
+
+        The GPU wheel installs cleanly (rc 0), then ``_verify_install`` re-probes
+        with ``_cuda_available`` — a fresh subprocess that can itself raise
+        ``OSError`` (the interpreter binary removed, a signal at exec). If that
+        raises, it must NOT escape ``_swap``/``ensure`` and strand the host on an
+        unverified GPU wheel with no CPU fallback. ``_cuda_available`` treats the
+        boundary failure as "CUDA not confirmed available" (``False``), so the
+        post-install probe routes to the CPU restore: the result is RESTORED and
+        no exception propagates.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        state = _RunState()
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
+            if _is_provider_check(cmd):
+                # Pre-swap probe: CPU only (swap needed). Post-install probe:
+                # the exec raises OSError at the subprocess boundary.
+                if state.installed:
+                    raise OSError("interpreter vanished during verify probe")
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            if "pip" in cmd and "install" in cmd:
+                state.mark_installed()
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The verify-probe OSError did not propagate; CPU was restored.
+        assert result == GpuStatus.RESTORED
+        install_specs = _pip_install_specs(calls)
+        # The GPU wheel WAS installed, then rolled back to CPU after the probe
+        # could not confirm CUDA.
+        assert "onnxruntime-gpu>=1.19.0,<1.27.0" in install_specs
+        assert "onnxruntime>=1.18.0" in install_specs
+        assert install_specs.index("onnxruntime-gpu>=1.19.0,<1.27.0") < (
+            install_specs.index("onnxruntime>=1.18.0")
+        )
+
     def test_uninstall_oserror_restores_cpu(self) -> None:
         """An ``OSError`` from the uninstall subprocess restores CPU, not crashes.
 

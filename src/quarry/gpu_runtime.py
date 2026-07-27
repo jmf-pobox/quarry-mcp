@@ -107,19 +107,33 @@ class GpuRuntime:
 
         Uses a subprocess to avoid stale native shared libraries (``.so``) that
         persist in this process after a previous onnxruntime import.
+
+        ``subprocess.run`` can raise ``OSError`` at the boundary — the
+        interpreter binary removed between calls, or a signal at exec. A probe
+        that cannot run means "CUDA not confirmed available", so return
+        ``False``. Narrowly scoped to the subprocess boundary (``OSError``
+        only), this keeps both call sites robust: the pre-swap ``_resolve``
+        check and, critically, the post-install ``_verify_install`` re-probe —
+        which runs AFTER the CPU wheel is gone, so a raised probe would strand
+        the host on an unverified GPU wheel with no fallback. Returning ``False``
+        routes ``_verify_install`` to ``_restore_cpu`` as the contract requires.
         """
-        provider_check = subprocess.run(
-            [
-                self._python,
-                "-c",
-                "import onnxruntime; "
-                "print(','.join(onnxruntime.get_available_providers()))",
-            ],
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            provider_check = subprocess.run(
+                [
+                    self._python,
+                    "-c",
+                    "import onnxruntime; "
+                    "print(','.join(onnxruntime.get_available_providers()))",
+                ],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as exc:
+            logger.warning("CUDA provider probe raised %s — treating as CPU-only", exc)
+            return False
         return (
             provider_check.returncode == 0
             and "CUDAExecutionProvider" in provider_check.stdout

@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -945,24 +945,35 @@ def _install_gpu_runtime() -> bool:
     GPU-runtime warning log, which names the detected vs supported CUDA majors).
     Returns ``True`` only when the daemon cannot start after the check — i.e.
     ``RESTORE_FAILED`` — so the caller marks the install failed. Recovered
-    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail. A raised
-    exception (never a legitimate outcome) is a hard failure.
+    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail.
+
+    Unexpected exceptions are NOT caught here: this helper is not an error
+    boundary (PY-EH-6). A raise means failure and is caught at ``run_install``,
+    the installer entry point, which converts it to a hard install failure.
+    """
+    from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
+
+    gpu_status = GpuRuntime.ensure()
+    print(f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}")  # noqa: T201
+    return gpu_status.is_failure
+
+
+def _run_optional_step(install: Callable[[], str], skip_note: str) -> None:
+    """Run a best-effort install step, printing its result or a skip note.
+
+    Steps like mcp-proxy and daemon registration are optional: quarry works
+    without them. Both call an ``install()`` that returns a status message and
+    are skipped (never fatal) on any failure — the broad catch is intentional
+    here because this IS the installer's optional-step boundary (PY-EH-6).
     """
     try:
-        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
-
-        gpu_status = GpuRuntime.ensure()
-        print(  # noqa: T201
-            f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}"
-        )
-        return gpu_status.is_failure
+        print(f"  ✓ {install()}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        # Unexpected: legit outcomes return GpuStatus, so a raise means failure.
-        print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
-        return True
+        print(f"  • Skipped: {exc}")  # noqa: T201
+        print(f"    {skip_note}")  # noqa: T201
 
 
-def run_install() -> int:  # noqa: C901
+def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
     Returns 0 on success, 1 on failure.
@@ -986,9 +997,16 @@ def run_install() -> int:  # noqa: C901
         failed = True
 
     # Step 2: GPU runtime (must run before model download so CUDA provider
-    # detection can trigger FP16 model caching)
+    # detection can trigger FP16 model caching). The broad catch is the
+    # installer's error boundary (PY-EH-6): every legitimate GPU outcome
+    # returns a GpuStatus, so a raise here is unexpected and may leave a broken
+    # runtime — convert it to a hard install failure rather than skip.
     print("[2/8] Checking GPU runtime...")  # noqa: T201
-    if _install_gpu_runtime():
+    try:
+        if _install_gpu_runtime():
+            failed = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
         failed = True
 
     # Step 3: embedding model
@@ -1023,14 +1041,11 @@ def run_install() -> int:  # noqa: C901
     # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
     print("[4/8] Installing mcp-proxy...")  # noqa: T201
-    try:
-        from quarry.proxy import install as proxy_install  # noqa: PLC0415
+    from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
-        msg = proxy_install()
-        print(f"  ✓ {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  • Skipped: {exc}")  # noqa: T201
-        print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
+    _run_optional_step(
+        proxy_install, "mcp-proxy is optional — quarry works without it."
+    )
 
     # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
     print("[5/8] Configuring MCP clients...")  # noqa: T201
@@ -1039,14 +1054,11 @@ def run_install() -> int:  # noqa: C901
 
     # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
     print("[6/8] Registering quarry daemon...")  # noqa: T201
-    try:
-        from quarry.service import install as svc_install  # noqa: PLC0415
+    from quarry.service import install as svc_install  # noqa: PLC0415
 
-        msg = svc_install()
-        print(f"  ✓ {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  • Skipped: {exc}")  # noqa: T201
-        print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
+    _run_optional_step(
+        svc_install, "Daemon registration is optional — quarry works without it."
+    )
 
     # Step 7: CLAUDE.md context injection (best-effort)
     print("[7/8] Injecting quarry context into CLAUDE.md...")  # noqa: T201
