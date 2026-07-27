@@ -25,7 +25,7 @@
       "noqa": 1
     },
     "src/quarry/cli_project.py": {
-      "noqa": 2
+      "noqa": 4
     },
     "src/quarry/collections.py": {
       "type_ignore": 1
@@ -56,7 +56,7 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 65
+      "noqa": 61
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
@@ -65,7 +65,10 @@
       "noqa": 3
     },
     "src/quarry/enable.py": {
-      "noqa": 8,
+      "noqa": 7
+    },
+    "src/quarry/ethos_memory.py": {
+      "noqa": 1,
       "pyright_ignore": 1
     },
     "src/quarry/extractors/image_extractor.py": {
@@ -111,6 +114,9 @@
     "src/quarry/proxy.py": {
       "noqa": 2
     },
+    "src/quarry/registrar.py": {
+      "noqa": 2
+    },
     "src/quarry/remote.py": {
       "noqa": 2
     },
@@ -134,5 +140,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-27T03:37:22Z"
+  "updated_at": "2026-07-27T03:48:27Z"
 }

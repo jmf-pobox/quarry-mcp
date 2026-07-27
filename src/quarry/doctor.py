@@ -720,54 +720,6 @@ def _print_check(check: CheckResult) -> None:
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
 
 
-_QUARRY_CLAUDE_MD_SECTION = """\
-
-<!-- quarry:capabilities -->
-# Quarry
-
-Local semantic search is available via quarry. Use it to search indexed
-documents by meaning, ingest new content, and recall knowledge across sessions.
-
-- **Slash commands**: `/find`, `/ingest`, `/remember`, `/explain`, `/source`,
-  `/quarry`
-- **Research agent**: `researcher` — combines quarry local search with web
-  research. Use for deep investigation across local docs and the web.
-- **Auto-behaviors**: working directory is auto-indexed at session start;
-  URLs fetched via WebFetch are auto-ingested; transcripts are captured before
-  context compaction.
-- **Search tip**: natural language queries work best ("What were Q3 margins?"
-  outperforms "Q3 margins").
-<!-- /quarry:capabilities -->
-"""
-
-_QUARRY_SECTION_MARKER = "<!-- quarry:capabilities -->"
-
-
-def _inject_claude_md() -> str:
-    """Append a quarry capabilities section to ~/.claude/CLAUDE.md.
-
-    Idempotent: skips if the section already exists.
-
-    Returns:
-        Status message for display.
-    """
-    claude_dir = Path.home() / ".claude"
-    claude_md = claude_dir / "CLAUDE.md"
-
-    claude_dir.mkdir(parents=True, exist_ok=True)
-
-    if claude_md.exists():
-        content = claude_md.read_text(encoding="utf-8")
-        if _QUARRY_SECTION_MARKER in content:
-            return f"{claude_md} already has quarry section"
-        with claude_md.open("a", encoding="utf-8") as f:
-            f.write(_QUARRY_CLAUDE_MD_SECTION)
-    else:
-        claude_md.write_text(_QUARRY_CLAUDE_MD_SECTION.lstrip(), encoding="utf-8")
-
-    return f"Appended quarry section to {claude_md}"
-
-
 _SESSION_CONTEXT_TEMPLATE = """\
 ## Memory
 
@@ -973,6 +925,37 @@ def _run_optional_step(install: Callable[[], str], skip_note: str) -> None:
         print(f"    {skip_note}")  # noqa: T201
 
 
+def _install_embedding_model() -> bool:
+    """Download the INT8 model (and FP16 on CUDA); return whether it succeeded.
+
+    The FP16 download is best-effort — its failure is swallowed because
+    first-use falls back to INT8. Only an INT8 failure marks the step failed.
+
+    NOTE: the CUDA probe is an in-process import. If onnxruntime was imported
+    earlier in this process (before ``GpuRuntime.ensure()`` swapped the package),
+    the old native libraries stay loaded and provider detection here may be
+    stale; a fresh ``quarry install`` has not imported it yet, so this is
+    accurate, and the FP16 model is fetched on the next run if needed.
+    """
+    try:
+        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
+
+        OnnxEmbeddingBackend.download_model_files()
+        print("  ✓ snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ✗ Model download failed: {exc}")  # noqa: T201
+        return False
+    try:
+        import onnxruntime as ort  # noqa: PLC0415
+
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            OnnxEmbeddingBackend.download_model_files(model_file="onnx/model_fp16.onnx")
+            print("  ✓ FP16 model cached (for CUDA)")  # noqa: T201
+    except Exception:  # noqa: BLE001, S110
+        pass  # FP16 download is optional -- first-use fallback works
+    return True
+
+
 def run_install() -> int:
     """Create data directory, download model, and configure MCP clients.
 
@@ -986,7 +969,7 @@ def run_install() -> int:
     # Step 1: data + logs directories
     data_dir = Path.home() / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
     logs_dir = Path.home() / ".punt-labs" / "quarry" / "logs"
-    print("[1/8] Creating directories...")  # noqa: T201
+    print("[1/7] Creating directories...")  # noqa: T201
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
@@ -1001,7 +984,7 @@ def run_install() -> int:
     # installer's error boundary (PY-EH-6): every legitimate GPU outcome
     # returns a GpuStatus, so a raise here is unexpected and may leave a broken
     # runtime — convert it to a hard install failure rather than skip.
-    print("[2/8] Checking GPU runtime...")  # noqa: T201
+    print("[2/7] Checking GPU runtime...")  # noqa: T201
     try:
         if _install_gpu_runtime():
             failed = True
@@ -1010,37 +993,13 @@ def run_install() -> int:
         failed = True
 
     # Step 3: embedding model
-    print("[3/8] Downloading embedding model...")  # noqa: T201
-    try:
-        from quarry.embeddings import OnnxEmbeddingBackend  # noqa: PLC0415
-
-        OnnxEmbeddingBackend.download_model_files()
-        print("  \u2713 snowflake-arctic-embed-m-v1.5 (INT8 ONNX) cached")  # noqa: T201
-        # Also download FP16 model if CUDA is available.
-        # NOTE: This is an in-process import. If onnxruntime was already
-        # imported earlier in this process *before* GpuRuntime.ensure()
-        # swapped the package in step 2, the native shared libraries (.so)
-        # from the old onnxruntime remain loaded and provider detection here
-        # may be stale. In a typical `quarry install` run where onnxruntime
-        # has not yet been imported in-process, this is accurate. The FP16
-        # model will be downloaded on the next run if needed.
-        try:
-            import onnxruntime as ort  # noqa: PLC0415
-
-            if "CUDAExecutionProvider" in ort.get_available_providers():
-                OnnxEmbeddingBackend.download_model_files(
-                    model_file="onnx/model_fp16.onnx"
-                )
-                print("  \u2713 FP16 model cached (for CUDA)")  # noqa: T201
-        except Exception:  # noqa: BLE001, S110
-            pass  # FP16 download is optional -- first-use fallback works
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2717 Model download failed: {exc}")  # noqa: T201
+    print("[3/7] Downloading embedding model...")  # noqa: T201
+    if not _install_embedding_model():
         failed = True
 
     # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
-    print("[4/8] Installing mcp-proxy...")  # noqa: T201
+    print("[4/7] Installing mcp-proxy...")  # noqa: T201
     from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
     _run_optional_step(
@@ -1048,28 +1007,23 @@ def run_install() -> int:
     )
 
     # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
-    print("[5/8] Configuring MCP clients...")  # noqa: T201
+    print("[5/7] Configuring MCP clients...")  # noqa: T201
     for check in [_configure_claude_code(), _configure_claude_desktop()]:
         _print_check(check)
 
     # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
-    print("[6/8] Registering quarry daemon...")  # noqa: T201
+    print("[6/7] Registering quarry daemon...")  # noqa: T201
     from quarry.service import install as svc_install  # noqa: PLC0415
 
     _run_optional_step(
         svc_install, "Daemon registration is optional — quarry works without it."
     )
 
-    # Step 7: CLAUDE.md context injection (best-effort)
-    print("[7/8] Injecting quarry context into CLAUDE.md...")  # noqa: T201
-    try:
-        msg = _inject_claude_md()
-        print(f"  \u2713 {msg}")  # noqa: T201
-    except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+    # quarry is repo-scoped for CLAUDE.md guidance: `quarry enable` registers the
+    # per-repo @-import; `install` never edits ~/.claude/CLAUDE.md.
 
-    # Step 8: ethos ext session_context (best-effort)
-    print("[8/8] Configuring ethos identity extension...")  # noqa: T201
+    # Step 7: ethos ext session_context (best-effort)
+    print("[7/7] Configuring ethos identity extension...")  # noqa: T201
     try:
         check = _configure_ethos_ext()
         _print_check(check)
