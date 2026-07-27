@@ -18,6 +18,9 @@ _UNAVAILABLE_TEMPLATE = (
     "local OCR unavailable: the headless OpenCV isn't loadable on this machine "
     "(scanned-image OCR is off; everything else works) — run `{fix}` to enable it"
 )
+# Cap the underlying-error detail so a verbose loader message (a long dlopen
+# search path) does not swamp the actionable remediation in logs.
+_CAUSE_MAX = 160
 
 
 class OcrUnavailableError(RuntimeError):
@@ -34,15 +37,21 @@ class OcrAvailability:
     off — instead of crashing on a raw ``libGL``/``libxcb`` ``ImportError``.
     """
 
-    __slots__ = ("_available", "_reason")
+    __slots__ = ("_available", "_cause", "_reason")
 
     _available: bool
     _reason: str
+    # None is the documented contract for the available state: there is no
+    # underlying failure to preserve when cv2 loaded cleanly.
+    _cause: BaseException | None
 
-    def __new__(cls, *, available: bool, reason: str) -> Self:
+    def __new__(
+        cls, *, available: bool, reason: str, cause: BaseException | None = None
+    ) -> Self:
         self = super().__new__(cls)
         self._available = available
         self._reason = reason
+        self._cause = cause
         return self
 
     @classmethod
@@ -59,15 +68,24 @@ class OcrAvailability:
             # Execute the cv2 module (its bootstrap loads the native library that
             # fails on a GUI-linked build) — rapidocr's transitive dependency.
             importlib.import_module("cv2")
-        except Exception:  # noqa: BLE001  # any cv2 load failure = OCR unavailable
-            return cls(available=False, reason=cls._unavailable_reason())
+        except Exception as exc:  # noqa: BLE001  # any cv2 load failure = OCR unavailable
+            return cls(available=False, reason=cls._unavailable_reason(exc), cause=exc)
         return cls(available=True, reason="")
 
     @classmethod
-    def _unavailable_reason(cls) -> str:
-        """Return the unavailability message quoting the live headless-fix command."""
+    def _unavailable_reason(cls, exc: Exception) -> str:
+        """Return the fix message, appending a short form of the cv2 failure.
+
+        The underlying error distinguishes a headless box (``libGL`` missing)
+        from a corrupt install or ABI mismatch, so the operator keeps the real
+        cause instead of a generic "not loadable".
+        """
         fix = HeadlessOpenCv(sys.executable).remediation()
-        return _UNAVAILABLE_TEMPLATE.format(fix=fix)
+        message = _UNAVAILABLE_TEMPLATE.format(fix=fix)
+        detail = f"{type(exc).__name__}: {exc}".strip()
+        if len(detail) > _CAUSE_MAX:
+            detail = f"{detail[:_CAUSE_MAX]}…"
+        return f"{message} [underlying error: {detail}]"
 
     @property
     def is_available(self) -> bool:
@@ -80,6 +98,10 @@ class OcrAvailability:
         return self._reason
 
     def require(self) -> None:
-        """Raise :class:`OcrUnavailableError` when OCR is unavailable."""
+        """Raise :class:`OcrUnavailableError` when OCR is unavailable.
+
+        Chain the captured cv2 failure so the real cause survives in the
+        traceback for troubleshooting.
+        """
         if not self._available:
-            raise OcrUnavailableError(self._reason)
+            raise OcrUnavailableError(self._reason) from self._cause

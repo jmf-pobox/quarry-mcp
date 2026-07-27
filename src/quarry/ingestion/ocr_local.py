@@ -103,12 +103,13 @@ class LocalOcrBackend:
         unavailable, so a scanned image on a headless box indexes without OCR
         rather than crashing.
         """
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        try:
-            text = self._extract_text(OcrEngine.get()(img))
-        except _OCR_UNAVAILABLE as exc:
-            self._warn_unavailable(exc)
-            text = ""
+        with Image.open(io.BytesIO(image_bytes)) as opened:
+            img = opened.convert("RGB")
+            try:
+                text = self._extract_text(OcrEngine.get()(img))
+            except _OCR_UNAVAILABLE as exc:
+                self._warn_unavailable(exc)
+                text = ""
         logger.info("OCR image %s: %d chars", document_name, len(text))
         return PageContent(
             document_name=document_name,

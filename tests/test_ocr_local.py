@@ -240,6 +240,26 @@ class TestLocalOcrBackendImageBytes:
 
         assert result.text == ""
 
+    def test_opened_image_is_released_via_context_manager(self) -> None:
+        # The opened PIL image must be closed deterministically: assert the
+        # context-manager protocol runs so Pillow's file-like resources free.
+        png_bytes = _create_png_bytes()
+        mock_engine = MagicMock(return_value=_mock_ocr_result(["x"]))
+        rgb = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        cm = MagicMock()
+        cm.__enter__.return_value.convert.return_value = rgb
+
+        with (
+            patch.object(OcrEngine, "get", return_value=mock_engine),
+            patch("quarry.ingestion.ocr_local.Image.open", return_value=cm),
+        ):
+            backend = LocalOcrBackend(_settings())
+            result = backend.ocr_image_bytes(png_bytes, "img.png", Path("/tmp/img.png"))
+
+        cm.__enter__.assert_called_once()
+        cm.__exit__.assert_called_once()
+        assert result.text == "x"
+
 
 class TestOcrDegradesWhenUnavailable:
     """OCR-unavailable (headless cv2 or missing rapidocr) degrades, never crashes."""

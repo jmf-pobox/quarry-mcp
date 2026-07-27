@@ -77,10 +77,13 @@ class OcrEngine:
     @classmethod
     def _build(cls) -> OcrEngineProtocol:
         """Probe cv2 then construct the engine, caching the outcome (called locked)."""
-        availability = OcrAvailability.probe()
-        if not availability.is_available:
-            cls._unavailable = OcrUnavailableError(availability.reason)
-            raise cls._unavailable
+        try:
+            OcrAvailability.probe().require()
+        except OcrUnavailableError as exc:
+            # Cache the chained error (its __cause__ is the real cv2 failure) so
+            # later calls re-raise it without re-probing the failing load.
+            cls._unavailable = exc
+            raise
         from rapidocr import RapidOCR  # noqa: PLC0415
 
         engine = cast("OcrEngineProtocol", RapidOCR())

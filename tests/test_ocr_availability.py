@@ -57,13 +57,23 @@ def test_unavailable_when_cv2_import_fails(monkeypatch: pytest.MonkeyPatch) -> N
 def test_reason_quotes_headless_remediation_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # UFAby: the runtime OCR-unavailable message must quote HeadlessOpenCv's
-    # actual command (uv/--python/--no-deps when uv is present), not a bare
-    # `pip install` that would misdirect the uv-tool installs this guard covers.
+    # The runtime OCR-unavailable message must quote HeadlessOpenCv's actual
+    # command (uv/--python/--no-deps when uv is present), not a bare `pip
+    # install` that would misdirect the uv-tool installs this guard covers.
     _break_cv2_import(monkeypatch)
     reason = OcrAvailability.probe().reason
     assert HeadlessOpenCv(sys.executable).remediation() in reason
     assert "--no-deps" in reason  # a HeadlessOpenCv trait the bare hint lacked
+
+
+def test_reason_includes_underlying_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real cv2 failure must survive in the message so a corrupt install or
+    # ABI mismatch is distinguishable from a plain headless box.
+    _break_cv2_import(monkeypatch)
+    reason = OcrAvailability.probe().reason
+    assert "underlying error" in reason
+    assert "ImportError" in reason
+    assert "libGL.so.1" in reason
 
 
 def test_require_raises_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,3 +81,14 @@ def test_require_raises_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> Non
     availability = OcrAvailability.probe()
     with pytest.raises(OcrUnavailableError, match="opencv-python-headless"):
         availability.require()
+
+
+def test_require_chains_the_cv2_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The discarded cv2 exception was the finding: chain it so the operator
+    # keeps the real cause in the traceback.
+    _break_cv2_import(monkeypatch)
+    availability = OcrAvailability.probe()
+    with pytest.raises(OcrUnavailableError) as excinfo:
+        availability.require()
+    assert isinstance(excinfo.value.__cause__, ImportError)
+    assert "libGL.so.1" in str(excinfo.value.__cause__)
