@@ -146,10 +146,26 @@ class GpuRuntime:
         listing = subprocess.run(
             [ldconfig, "-p"],
             capture_output=True,
-            text=True,
+            # Linux library paths are byte strings, not guaranteed UTF-8. Decode
+            # leniently so a single mangled path can't raise UnicodeDecodeError
+            # out of the swap and become a hard install failure — the bad line
+            # simply fails the libcudart regex and the good lines still parse.
+            encoding="utf-8",
+            errors="replace",
             stdin=subprocess.DEVNULL,
             check=False,
         )
+        if listing.returncode != 0:
+            # A crashed probe (permission denied, corrupt cache) yields empty
+            # stdout — indistinguishable from a CUDA-less host if we stay silent.
+            # Warn with the return code so the empty result is visible, then keep
+            # CPU. This is a DISTINCT signal from _swap's "no matching build".
+            logger.warning(
+                "ldconfig exited %d (%s) — cannot probe CUDA runtime, keeping CPU",
+                listing.returncode,
+                listing.stderr.strip(),
+            )
+            return frozenset()
         majors = {int(m) for m in _LIBCUDART_MAJOR_RE.findall(listing.stdout)}
         return frozenset(majors)
 
@@ -189,9 +205,20 @@ class GpuRuntime:
             )
             return GpuStatus.CUDA_UNSUPPORTED
         logger.info("Swapping onnxruntime for %s (python=%s)", spec, self._python)
-        # Uninstall CPU onnxruntime (suppress errors — may not be installed).
-        self._pip("uninstall", "onnxruntime")
-        gpu_install = self._pip("install", spec)
+        try:
+            # Uninstall CPU onnxruntime (suppress errors — may not be installed),
+            # then install the CUDA-matched wheel. subprocess.run can raise
+            # OSError at this boundary — the uv binary removed between the
+            # shutil.which check and exec, or a signal. Treat that identically to
+            # a non-zero return code: restore CPU. Narrowly scoped to the
+            # subprocess boundary, so this is not a defensive-coding violation.
+            self._pip("uninstall", "onnxruntime")
+            gpu_install = self._pip("install", spec)
+        except OSError as exc:
+            logger.warning(
+                "onnxruntime-gpu install raised %s, restoring CPU runtime", exc
+            )
+            return self._restore_cpu()
         if gpu_install.returncode != 0:
             logger.warning(
                 "onnxruntime-gpu install failed (rc=%d), restoring CPU runtime",

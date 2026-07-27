@@ -8,12 +8,17 @@ runtime through the ``ldconfig`` branch of the shared ``_default_run`` mock.
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from quarry.gpu_runtime import GpuRuntime
 from quarry.gpu_status import GpuStatus
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _which(present: Sequence[str]) -> Callable[[str], str | None]:
@@ -270,6 +275,12 @@ class TestGpuRuntimeEnsure:
         assert len(restore_calls) == 1
         # Return value distinguishes from the "restore also failed" case.
         assert "also failed" not in result
+        # Order matters: the GPU-install attempt precedes the CPU restore, so
+        # the restore is the last package op and leaves the CPU wheel installed.
+        install_specs = _pip_install_specs(calls)
+        assert install_specs.index("onnxruntime-gpu>=1.19.0,<1.27.0") < (
+            install_specs.index("onnxruntime>=1.18.0")
+        )
 
     def test_swap_failure_restore_also_fails(self) -> None:
         """When both GPU install and CPU restore fail, return a distinct message."""
@@ -450,6 +461,91 @@ class TestGpuRuntimeEnsure:
         # … and no onnxruntime-gpu install was issued.
         assert not any("onnxruntime-gpu" in spec for spec in _pip_install_specs(calls))
 
+    def test_ldconfig_nonzero_exit_warns_with_returncode(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``ldconfig -p`` exiting non-zero → CUDA_UNSUPPORTED + a distinct warning.
+
+        A failed ``ldconfig`` (permission denied, corrupt cache) yields empty
+        stdout and thus an empty major set — indistinguishable from "no CUDA" if
+        we stay silent. The run must log a warning that NAMES the return code,
+        so an operator can tell a crashed probe from a genuinely CUDA-less host.
+        Detection still returns the empty set (keep CPU), never a guess.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                # Non-zero exit with empty stdout, stderr names the cause.
+                return MagicMock(returncode=13, stdout="", stderr="permission denied")
+            if _is_provider_check(cmd):
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+            caplog.at_level(logging.WARNING, logger="quarry.gpu_runtime"),
+        ):
+            result = GpuRuntime.ensure()
+
+        assert result == GpuStatus.CUDA_UNSUPPORTED
+        # A distinct warning names the return code — not the generic
+        # "no matching build (detected=[])" message that masks the crash.
+        ldconfig_warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "ldconfig" in r.getMessage()
+        ]
+        assert any("13" in msg for msg in ldconfig_warnings)
+        # No onnxruntime-gpu install was issued (keep CPU).
+        assert not any("onnxruntime-gpu" in spec for spec in _pip_install_specs(calls))
+
+    def test_ldconfig_non_utf8_output_does_not_raise(self) -> None:
+        """A non-UTF-8 byte in the ``ldconfig -p`` listing must not crash the swap.
+
+        Linux library paths are byte strings, not guaranteed UTF-8. With
+        ``errors="replace"`` on the subprocess decode, a mangled line simply
+        fails the ``libcudart`` regex; the clean ``libcudart.so.12`` line is
+        still parsed, so the CUDA-12 wheel installs instead of the whole swap
+        exploding into a hard install failure (UnicodeDecodeError propagating
+        out of ``ensure()``).
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        state = _RunState()
+        seen_kwargs: dict[str, object] = {}
+        # A garbled path where the raw bytes were 0xff; errors="replace"
+        # substitutes U+FFFD. The libcudart.so.12 line survives intact.
+        hostile_stdout = (
+            "\t1234 libs found in cache '/etc/ld.so.cache'\n"
+            "\tlibgarbled.so.1 (libc6) => /lib/��/libgarbled.so.1\n"
+            "\tlibcudart.so.12 (libc6,x86-64) => /lib/libcudart.so.12\n"
+        )
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            if _is_ldconfig(cmd):
+                # Capture the decode kwargs the swap passes to subprocess.run.
+                seen_kwargs.update(kwargs)
+                return MagicMock(returncode=0, stdout=hostile_stdout)
+            return _default_run(
+                cmd, ldconfig_majors=(12,), cuda_after_install=True, state=state
+            )
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # No UnicodeDecodeError propagated; the CUDA-12 major was still parsed.
+        assert result == GpuStatus.INSTALLED
+        # The decode is lossy-tolerant: errors="replace" so a bad byte never
+        # raises out of _detect_cuda_majors.
+        assert seen_kwargs.get("encoding") == "utf-8"
+        assert seen_kwargs.get("errors") == "replace"
+
     def test_install_succeeds_but_import_fails_restores_cpu(self) -> None:
         """A clean pip install that fails to import is caught → RESTORED.
 
@@ -484,4 +580,78 @@ class TestGpuRuntimeEnsure:
         # The GPU wheel WAS installed (distinguishing from CUDA_UNSUPPORTED) …
         assert "onnxruntime-gpu>=1.19.0,<1.27.0" in install_specs
         # … then CPU was restored after the failed import re-probe.
+        assert "onnxruntime>=1.18.0" in install_specs
+        # Order matters: the GPU wheel is installed BEFORE the CPU restore.
+        # A restore that ran first would leave the daemon on the GPU wheel it
+        # could not import — the exact failure the rollback exists to prevent.
+        assert install_specs.index("onnxruntime-gpu>=1.19.0,<1.27.0") < (
+            install_specs.index("onnxruntime>=1.18.0")
+        )
+
+    def test_uninstall_oserror_restores_cpu(self) -> None:
+        """An ``OSError`` from the uninstall subprocess restores CPU, not crashes.
+
+        ``subprocess.run`` can raise ``OSError`` at the boundary — the ``uv``
+        binary vanishing between the ``shutil.which`` check and exec, or a
+        signal. If the CPU-onnxruntime UNINSTALL raises, the environment is left
+        with neither wheel; the swap must treat that identically to a non-zero
+        return code and fall through to the CPU restore, honouring the
+        "restore CPU on any failure" contract instead of propagating.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
+            if _is_provider_check(cmd):
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            if "uninstall" in cmd:
+                # The uv binary vanished mid-run; exec raises before the child.
+                raise OSError("uv binary vanished")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The OSError did not propagate; CPU was restored.
+        assert result == GpuStatus.RESTORED
+        install_specs = _pip_install_specs(calls)
+        assert "onnxruntime>=1.18.0" in install_specs
+        # The GPU wheel was never installed — the uninstall raised before it.
+        assert not any("onnxruntime-gpu" in spec for spec in install_specs)
+
+    def test_gpu_install_oserror_restores_cpu(self) -> None:
+        """An ``OSError`` from the GPU-install subprocess also restores CPU.
+
+        The uninstall succeeds, then the ``uv pip install`` of the GPU wheel
+        raises ``OSError`` (binary removed, signal). Same contract as a non-zero
+        return: fall through to the CPU restore and return RESTORED.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
+            if _is_provider_check(cmd):
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            if "install" in cmd and "onnxruntime-gpu>=1.19.0,<1.27.0" in cmd:
+                raise OSError("uv binary vanished")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        assert result == GpuStatus.RESTORED
+        install_specs = _pip_install_specs(calls)
+        # The CPU wheel was restored despite the GPU install raising.
         assert "onnxruntime>=1.18.0" in install_specs
