@@ -703,6 +703,150 @@ class TestGpuRuntimeEnsure:
         # The CPU wheel was restored despite the GPU install raising.
         assert "onnxruntime>=1.18.0" in install_specs
 
+    def test_ldconfig_exec_oserror_keeps_cpu(self) -> None:
+        """An ``OSError`` from the ``ldconfig -p`` exec → CUDA_UNSUPPORTED, keep CPU.
+
+        ``shutil.which`` resolves ``ldconfig``, but ``subprocess.run`` raises
+        ``OSError`` at the boundary (the binary removed between the check and
+        exec, or a signal at fork). ``_detect_cuda_majors`` must absorb that as
+        the same "no CUDA runtime resolvable" fallback as the ldconfig-missing
+        case: return the empty set, so the swap keeps CPU and warns rather than
+        letting the OSError escape ``ensure()`` and crash the install.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                raise OSError("ldconfig binary vanished before exec")
+            if _is_provider_check(cmd):
+                return MagicMock(returncode=0, stdout="CPUExecutionProvider\n")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The OSError did not propagate; the host keeps CPU as a recovered warning.
+        assert result == GpuStatus.CUDA_UNSUPPORTED
+        assert result.is_recovered is True
+        assert result.is_failure is False
+        # No onnxruntime-gpu install was issued — nothing was mutated.
+        assert not any("onnxruntime-gpu" in spec for spec in _pip_install_specs(calls))
+
+    def test_nvidia_smi_exec_oserror_no_mutation(self) -> None:
+        """An ``OSError`` from the ``nvidia-smi`` exec → NO_GPU, packages untouched.
+
+        ``shutil.which`` resolves ``nvidia-smi`` but ``subprocess.run`` raises
+        ``OSError`` (binary removed between the check and exec, or a signal at
+        fork). A probe that cannot run means "no usable GPU": ``_resolve`` must
+        return ``NO_GPU`` and never reach ``_swap``, so no ldconfig probe and no
+        pip command run. This preempts the same boundary crash the ldconfig and
+        provider guards already close.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if cmd[0].endswith("nvidia-smi"):
+                raise OSError("nvidia-smi binary vanished before exec")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The OSError did not propagate; detection reports no GPU.
+        assert result == GpuStatus.NO_GPU
+        # No swap workflow ran: no ldconfig probe and no package operation.
+        assert not any(_is_ldconfig(c) for c in calls)
+        assert _pip_install_specs(calls) == []
+
+    def test_pre_swap_probe_oserror_no_worse_state(self) -> None:
+        """A pre-swap ``_cuda_available`` OSError leaves the env no worse off.
+
+        ``shutil.which`` resolves everything and ``nvidia-smi`` reports a GPU,
+        but the PRE-swap provider probe raises ``OSError`` at the boundary.
+        ``_cuda_available`` returns ``False`` (probe could not run), so
+        ``_resolve`` proceeds to ``_swap``. With a resolvable CUDA-12 runtime the
+        swap installs the matched wheel and the POST-swap verify probe (which
+        does NOT raise here) confirms CUDA → INSTALLED. The point of the test:
+        the pre-swap boundary failure did not abort the install nor strand a
+        half-swapped env — it either succeeds cleanly or (see the empty-majors
+        variant) no-ops to CUDA_UNSUPPORTED, never worse than the start state.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        state = _RunState()
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout((12,)))
+            if _is_provider_check(cmd):
+                # Pre-swap probe raises; post-install probe reports CUDA up.
+                if not state.installed:
+                    raise OSError("interpreter vanished during pre-swap probe")
+                return MagicMock(
+                    returncode=0,
+                    stdout="CUDAExecutionProvider,CPUExecutionProvider\n",
+                )
+            if "pip" in cmd and "install" in cmd:
+                state.mark_installed()
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # The pre-swap OSError did not propagate; the swap proceeded and verified.
+        assert result == GpuStatus.INSTALLED
+        install_specs = _pip_install_specs(calls)
+        assert "onnxruntime-gpu>=1.19.0,<1.27.0" in install_specs
+
+    def test_pre_swap_probe_oserror_no_cuda_runtime_is_noop(self) -> None:
+        """Pre-swap probe OSError + no resolvable CUDA → CUDA_UNSUPPORTED, no-op.
+
+        The dangerous case the Bugbot HIGH flagged: a pre-swap probe that could
+        NOT run (OSError → ``False``) routing to ``_swap`` on a host with no
+        loadable ``libcudart``. ``_detect_cuda_majors`` returns the empty set,
+        ``_select_gpu_spec`` returns ``None``, and ``_swap`` returns
+        CUDA_UNSUPPORTED having mutated NOTHING — no uninstall, no install. The
+        env is exactly as it started: the CPU wheel, untouched.
+        """
+        which = _which(["uv", "nvidia-smi", "ldconfig"])
+        calls: list[list[str]] = []
+
+        def run_side_effect(cmd: list[str], **kwargs: object) -> MagicMock:
+            calls.append(list(cmd))
+            if _is_ldconfig(cmd):
+                # No libcudart on the loader path → empty major set.
+                return MagicMock(returncode=0, stdout=_ldconfig_stdout(()))
+            if _is_provider_check(cmd):
+                raise OSError("interpreter vanished during pre-swap probe")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("quarry.gpu_runtime.shutil.which", side_effect=which),
+            patch("quarry.gpu_runtime.subprocess.run", side_effect=run_side_effect),
+        ):
+            result = GpuRuntime.ensure()
+
+        # Recovered no-op: no package operation of any kind was issued.
+        assert result == GpuStatus.CUDA_UNSUPPORTED
+        assert result.is_recovered is True
+        assert _pip_install_specs(calls) == []
+        # Nothing was uninstalled either — the CPU wheel is exactly as it started.
+        assert not any("uninstall" in c for c in calls)
+
     def test_restore_oserror_returns_restore_failed(self) -> None:
         """An ``OSError`` from the CPU-restore subprocess returns RESTORE_FAILED.
 

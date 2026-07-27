@@ -74,7 +74,19 @@ class GpuRuntime:
         return cls(uv_path)._resolve()
 
     def _resolve(self) -> GpuStatus:
-        """Run the detection/swap workflow once ``uv`` is known to be present."""
+        """Run the detection/swap workflow once ``uv`` is known to be present.
+
+        The pre-swap ``_cuda_available`` probe returns ``False`` when it cannot
+        run (an ``OSError`` at the subprocess boundary), so a probe that *could
+        not run* is not distinguished from one that ran and found CPU-only — both
+        route to ``_swap``. That is safe, not a regression: ``_swap`` first calls
+        the OSError-safe ``_detect_cuda_majors``. With no resolvable CUDA runtime
+        it returns ``CUDA_UNSUPPORTED`` having mutated nothing; with a resolvable
+        major it installs the matched wheel and ``_verify_install`` re-probes,
+        restoring CPU on any import failure. So a pre-swap probe boundary failure
+        can never leave the environment worse than it started — the worst case is
+        a no-op ``CUDA_UNSUPPORTED``, and any real problem is caught by verify.
+        """
         if not self._gpu_present():
             return GpuStatus.NO_GPU
         if self._cuda_available():
@@ -89,12 +101,22 @@ class GpuRuntime:
         if nvidia_smi is None:
             logger.info("nvidia-smi not found — no NVIDIA GPU")
             return False
-        result = subprocess.run(
-            [nvidia_smi],
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [nvidia_smi],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as exc:
+            # subprocess.run can raise OSError at the boundary — the nvidia-smi
+            # binary removed between the shutil.which check and exec, or a
+            # signal at fork/exec. A probe that cannot run means "no usable
+            # GPU": return False so _resolve returns NO_GPU without ever
+            # touching packages. Narrowly scoped to the subprocess boundary
+            # (OSError only), consistent with the ldconfig and provider guards.
+            logger.info("nvidia-smi probe raised %s — no usable NVIDIA GPU", exc)
+            return False
         if result.returncode != 0:
             logger.info(
                 "nvidia-smi failed (rc=%d) — no usable NVIDIA GPU", result.returncode
@@ -157,18 +179,32 @@ class GpuRuntime:
         if ldconfig is None:
             logger.info("ldconfig not on PATH — cannot resolve CUDA runtime")
             return frozenset()
-        listing = subprocess.run(
-            [ldconfig, "-p"],
-            capture_output=True,
-            # Linux library paths are byte strings, not guaranteed UTF-8. Decode
-            # leniently so a single mangled path can't raise UnicodeDecodeError
-            # out of the swap and become a hard install failure — the bad line
-            # simply fails the libcudart regex and the good lines still parse.
-            encoding="utf-8",
-            errors="replace",
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            listing = subprocess.run(
+                [ldconfig, "-p"],
+                capture_output=True,
+                # Linux library paths are byte strings, not guaranteed UTF-8.
+                # Decode leniently so a single mangled path can't raise
+                # UnicodeDecodeError out of the swap and become a hard install
+                # failure — the bad line simply fails the libcudart regex and
+                # the good lines still parse.
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError as exc:
+            # subprocess.run can raise OSError at the boundary — the ldconfig
+            # binary removed between the shutil.which check and exec, or a
+            # signal at fork/exec. Treat that as the same "no CUDA runtime
+            # resolvable" fallback as the ldconfig-missing case: keep CPU, warn,
+            # never crash the install. Narrowly scoped to the subprocess
+            # boundary (OSError only), so this is PL-PP-3 compliant.
+            logger.warning(
+                "ldconfig probe raised %s — cannot resolve CUDA runtime, keeping CPU",
+                exc,
+            )
+            return frozenset()
         if listing.returncode != 0:
             # A crashed probe (permission denied, corrupt cache) yields empty
             # stdout — indistinguishable from a CUDA-less host if we stay silent.

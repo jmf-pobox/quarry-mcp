@@ -1374,6 +1374,35 @@ class TestRunInstall:
             result = run_install()
         assert result == 1
 
+    def test_optional_step_import_failure_skips_not_aborts(
+        self, tmp_path: Path, monkeypatch: MP, capsys: pytest.CaptureFixture[str]
+    ):
+        """An import-time failure of an optional module skips its step, not aborts.
+
+        The mcp-proxy install is optional. Its module import lives INSIDE the
+        callable passed to ``_run_optional_step``, so a failure to import
+        ``quarry.proxy`` (here forced by blocking the module in ``sys.modules``)
+        is caught by the step's ``try`` and prints "• Skipped" — the install
+        continues and still returns 0. Before the fix the import ran outside the
+        guard and an ImportError hard-failed ``run_install``.
+        """
+        import sys
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _mock_install_deps(monkeypatch)
+        # Force `from quarry.proxy import install` to raise ImportError: a None
+        # entry in sys.modules makes the import machinery raise on lookup.
+        monkeypatch.setitem(sys.modules, "quarry.proxy", None)
+        with patch(self._DL) as mock_dl:
+            mock_dl.return_value = ("/fake/model.onnx", "/fake/tokenizer.json")
+            result = run_install()
+        # The install did NOT abort — check_environment stub returns 0.
+        assert result == 0
+        captured = capsys.readouterr()
+        # The optional mcp-proxy step was skipped, not fatal.
+        assert "• Skipped" in captured.out
+        assert "mcp-proxy is optional" in captured.out
+
 
 class TestCheckOrphanedCaptures:
     """Tests for the orphaned captures collection check."""

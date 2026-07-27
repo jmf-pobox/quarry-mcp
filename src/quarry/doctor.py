@@ -910,16 +910,20 @@ def _install_gpu_runtime() -> bool:
     return gpu_status.is_failure
 
 
-def _run_optional_step(install: Callable[[], str], skip_note: str) -> None:
+def _run_optional_step(step: Callable[[], str], skip_note: str) -> None:
     """Run a best-effort install step, printing its result or a skip note.
 
     Steps like mcp-proxy and daemon registration are optional: quarry works
-    without them. Both call an ``install()`` that returns a status message and
-    are skipped (never fatal) on any failure — the broad catch is intentional
-    here because this IS the installer's optional-step boundary (PY-EH-6).
+    without them. ``step`` is a zero-arg callable that performs BOTH the module
+    import AND the install, returning a status message. It runs entirely inside
+    the try so an import-time failure (``ImportError``, or any error raised while
+    the optional module is loaded) skips the step rather than aborting the whole
+    install — the module living behind the callable is the reason the import is
+    here and not at call time. The broad catch is intentional: this IS the
+    installer's optional-step boundary (PY-EH-6).
     """
     try:
-        print(f"  ✓ {install()}")  # noqa: T201
+        print(f"  ✓ {step()}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
         print(f"  • Skipped: {exc}")  # noqa: T201
         print(f"    {skip_note}")  # noqa: T201
@@ -1000,11 +1004,15 @@ def run_install() -> int:
     # Step 4: mcp-proxy binary (best-effort — proxy is optional, falls back to direct)
     # Installed before MCP client config so Desktop can resolve the absolute path.
     print("[4/7] Installing mcp-proxy...")  # noqa: T201
-    from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
-    _run_optional_step(
-        proxy_install, "mcp-proxy is optional — quarry works without it."
-    )
+    def _proxy_step() -> str:
+        # Import INSIDE the callable so an import-time failure of quarry.proxy
+        # skips this optional step instead of aborting run_install.
+        from quarry.proxy import install as proxy_install  # noqa: PLC0415
+
+        return proxy_install()
+
+    _run_optional_step(_proxy_step, "mcp-proxy is optional — quarry works without it.")
 
     # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
     print("[5/7] Configuring MCP clients...")  # noqa: T201
@@ -1013,10 +1021,16 @@ def run_install() -> int:
 
     # Step 6: daemon service (best-effort — not available in CI, containers, SSH)
     print("[6/7] Registering quarry daemon...")  # noqa: T201
-    from quarry.service import install as svc_install  # noqa: PLC0415
+
+    def _svc_step() -> str:
+        # Import INSIDE the callable so an import-time failure of quarry.service
+        # skips this optional step instead of aborting run_install.
+        from quarry.service import install as svc_install  # noqa: PLC0415
+
+        return svc_install()
 
     _run_optional_step(
-        svc_install, "Daemon registration is optional — quarry works without it."
+        _svc_step, "Daemon registration is optional — quarry works without it."
     )
 
     # quarry is repo-scoped for CLAUDE.md guidance: `quarry enable` registers the
