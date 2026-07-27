@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
@@ -72,3 +73,29 @@ def test_unavailable_probe_runs_once(monkeypatch: pytest.MonkeyPatch) -> None:
         OcrEngine.get()
 
     assert calls == 1
+
+
+def test_missing_rapidocr_builds_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A missing/broken rapidocr raises ImportError, not OcrUnavailableError: the
+    # build must run once and the cached ImportError re-raise on every later call,
+    # mirroring the cv2 path for the other unavailability reason.
+    calls = 0
+
+    def counting_probe() -> OcrAvailability:
+        nonlocal calls
+        calls += 1
+        return OcrAvailability(available=True, reason="")
+
+    monkeypatch.setattr(
+        "quarry.ingestion.ocr_availability.OcrAvailability.probe", counting_probe
+    )
+    # A None entry in sys.modules makes `from rapidocr import ...` raise ImportError.
+    monkeypatch.setitem(sys.modules, "rapidocr", None)
+
+    with pytest.raises(ImportError) as first:
+        OcrEngine.get()
+    with pytest.raises(ImportError) as second:
+        OcrEngine.get()
+
+    assert calls == 1
+    assert first.value is second.value  # the same cached exception re-raised

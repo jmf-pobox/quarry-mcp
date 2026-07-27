@@ -13,6 +13,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Building the engine fails one of two ways on a machine that cannot OCR: cv2
+# won't load on a headless box (``OcrUnavailableError`` from the probe) or
+# rapidocr isn't installed (``ImportError`` on its import). Both mean "OCR is
+# off" — callers degrade, don't crash — and both are memoized by the cache so
+# the probe and the import each run at most once per process.
+OCR_UNAVAILABLE: tuple[type[Exception], ...] = (OcrUnavailableError, ImportError)
+
 
 class OcrResult(Protocol):
     """Structural type for RapidOCR v3 output."""
@@ -40,17 +47,20 @@ class OcrEngine:
     __slots__ = ()
 
     _instance: ClassVar[OcrEngineProtocol | None] = None
-    _unavailable: ClassVar[OcrUnavailableError | None] = None
+    # None is the "engine available or not yet probed" state; a non-None value
+    # is the cached unavailability (headless cv2 or missing rapidocr).
+    _unavailable: ClassVar[Exception | None] = None
     _lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
     def get(cls) -> OcrEngineProtocol:
         """Return the cached engine, building it on first use (thread-safe).
 
-        The cv2 probe runs at most once per process. A headless box caches the
-        resulting :class:`OcrUnavailableError` and re-raises it on every later
-        call, so repeated ``ocr_document``/``ocr_image_bytes`` calls never
-        re-attempt the failing native ``cv2`` load.
+        The build runs at most once per process. When OCR is unavailable — a
+        headless box whose ``cv2`` won't load, or a missing ``rapidocr`` — the
+        raised exception is cached and re-raised on every later call, so
+        repeated ``ocr_document``/``ocr_image_bytes`` calls never re-probe cv2
+        or re-attempt the ``rapidocr`` import.
         """
         cached = cls._cached()
         if cached is not None:
@@ -76,16 +86,17 @@ class OcrEngine:
 
     @classmethod
     def _build(cls) -> OcrEngineProtocol:
-        """Probe cv2 then construct the engine, caching the outcome (called locked)."""
+        """Probe cv2 and import rapidocr, caching any unavailability (called locked)."""
         try:
             OcrAvailability.probe().require()
-        except OcrUnavailableError as exc:
-            # Cache the chained error (its __cause__ is the real cv2 failure) so
-            # later calls re-raise it without re-probing the failing load.
+            from rapidocr import RapidOCR  # noqa: PLC0415
+        except OCR_UNAVAILABLE as exc:
+            # Cache ANY unavailability — headless cv2 (OcrUnavailableError, whose
+            # __cause__ is the real load failure) or missing rapidocr
+            # (ImportError) — so later calls re-raise it without re-probing or
+            # re-importing.
             cls._unavailable = exc
             raise
-        from rapidocr import RapidOCR  # noqa: PLC0415
-
         engine = cast("OcrEngineProtocol", RapidOCR())
         cls._instance = engine
         logger.info("RapidOCR engine initialized")

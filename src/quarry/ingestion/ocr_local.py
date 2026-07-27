@@ -13,16 +13,15 @@ import fitz
 from PIL import Image
 
 from quarry.config import Settings
-from quarry.ingestion.ocr_availability import OcrUnavailableError
-from quarry.ingestion.ocr_engine import OcrEngine, OcrEngineProtocol, OcrResult
+from quarry.ingestion.ocr_engine import (
+    OCR_UNAVAILABLE,
+    OcrEngine,
+    OcrEngineProtocol,
+    OcrResult,
+)
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
-
-# The engine build fails one of two ways on a machine that cannot OCR: cv2 won't
-# load on a headless box (OcrUnavailableError) or rapidocr isn't installed
-# (ImportError). Both mean "degrade, don't crash" at the ingestion boundary.
-_OCR_UNAVAILABLE: tuple[type[Exception], ...] = (OcrUnavailableError, ImportError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +86,7 @@ class LocalOcrBackend:
             if suffix in (".tif", ".tiff"):
                 return self._ocr_tiff(document_path, job)
             return self._ocr_pdf(document_path, job)
-        except _OCR_UNAVAILABLE as exc:
+        except OCR_UNAVAILABLE as exc:
             self._warn_unavailable(exc)
             return []
 
@@ -107,7 +106,7 @@ class LocalOcrBackend:
             img = opened.convert("RGB")
             try:
                 text = self._extract_text(OcrEngine.get()(img))
-            except _OCR_UNAVAILABLE as exc:
+            except OCR_UNAVAILABLE as exc:
                 self._warn_unavailable(exc)
                 text = ""
         logger.info("OCR image %s: %d chars", document_name, len(text))
