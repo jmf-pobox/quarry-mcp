@@ -937,6 +937,31 @@ def _configure_ethos_ext(
     )
 
 
+def _install_gpu_runtime() -> bool:
+    """Run the GPU-runtime swap step of the installer; return whether it failed.
+
+    Prints the ``GpuStatus`` line plus its :attr:`GpuStatus.install_detail`
+    clause (only ``CUDA_UNSUPPORTED`` carries one — a hint pointing at the
+    GPU-runtime warning log, which names the detected vs supported CUDA majors).
+    Returns ``True`` only when the daemon cannot start after the check — i.e.
+    ``RESTORE_FAILED`` — so the caller marks the install failed. Recovered
+    outcomes (``RESTORED``, ``CUDA_UNSUPPORTED``) warn but do not fail. A raised
+    exception (never a legitimate outcome) is a hard failure.
+    """
+    try:
+        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
+
+        gpu_status = GpuRuntime.ensure()
+        print(  # noqa: T201
+            f"  {gpu_status.symbol} {gpu_status}{gpu_status.install_detail}"
+        )
+        return gpu_status.is_failure
+    except Exception as exc:  # noqa: BLE001
+        # Unexpected: legit outcomes return GpuStatus, so a raise means failure.
+        print(f"  ✗ GPU runtime check failed: {exc}")  # noqa: T201
+        return True
+
+
 def run_install() -> int:  # noqa: C901
     """Create data directory, download model, and configure MCP clients.
 
@@ -963,16 +988,7 @@ def run_install() -> int:  # noqa: C901
     # Step 2: GPU runtime (must run before model download so CUDA provider
     # detection can trigger FP16 model caching)
     print("[2/8] Checking GPU runtime...")  # noqa: T201
-    try:
-        from quarry.gpu_runtime import GpuRuntime  # noqa: PLC0415
-
-        gpu_status = GpuRuntime.ensure()
-        print(f"  {gpu_status.symbol} {gpu_status}")  # noqa: T201
-        if gpu_status.is_failure:
-            failed = True
-    except Exception as exc:  # noqa: BLE001
-        # Unexpected: legit outcomes return GpuStatus, so a raise means failure.
-        print(f"  \u2717 GPU runtime check failed: {exc}")  # noqa: T201
+    if _install_gpu_runtime():
         failed = True
 
     # Step 3: embedding model
@@ -1011,9 +1027,9 @@ def run_install() -> int:  # noqa: C901
         from quarry.proxy import install as proxy_install  # noqa: PLC0415
 
         msg = proxy_install()
-        print(f"  \u2713 {msg}")  # noqa: T201
+        print(f"  ✓ {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print(f"  • Skipped: {exc}")  # noqa: T201
         print("    mcp-proxy is optional — quarry works without it.")  # noqa: T201
 
     # Step 5: MCP clients (uses mcp-proxy if step 4 succeeded, otherwise quarry mcp)
@@ -1027,9 +1043,9 @@ def run_install() -> int:  # noqa: C901
         from quarry.service import install as svc_install  # noqa: PLC0415
 
         msg = svc_install()
-        print(f"  \u2713 {msg}")  # noqa: T201
+        print(f"  ✓ {msg}")  # noqa: T201
     except Exception as exc:  # noqa: BLE001
-        print(f"  \u2022 Skipped: {exc}")  # noqa: T201
+        print(f"  • Skipped: {exc}")  # noqa: T201
         print("    Daemon registration is optional — quarry works without it.")  # noqa: T201
 
     # Step 7: CLAUDE.md context injection (best-effort)
