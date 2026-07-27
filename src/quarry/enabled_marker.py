@@ -71,9 +71,15 @@ class EnabledMarker:
         (even a dangling one) can never make ``touch`` write *through* it to an
         arbitrary path outside the repo. ``fchmod`` on the returned descriptor
         forces ``0644`` independent of the umask — ``O_CREAT``'s mode is masked,
-        so a restrictive umask would otherwise yield ``0600``. An existing
-        symlink is refused with ``ValueError`` rather than followed; an existing
-        regular marker is the idempotent no-op.
+        so a restrictive umask would otherwise yield ``0600``.
+
+        On a pre-existing entry the predicate is generalized rather than
+        special-cased: only a genuine regular file is the idempotent no-op
+        (return ``False``). Anything else — symlink, directory, fifo, socket,
+        device — is not a valid marker, so it is refused with ``ValueError``
+        rather than silently reported as "already present": a caller that read
+        ``False`` as "already enabled" while :meth:`is_present` stayed ``False``
+        would strand an import with no real marker (the § 2.11 forbidden state).
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -83,10 +89,10 @@ class EnabledMarker:
                 0o644,
             )
         except FileExistsError:
-            if self._path.is_symlink():
-                msg = f"refusing to follow symlink at marker path: {self._path}"
-                raise ValueError(msg) from None
-            return False
+            if stat.S_ISREG(os.lstat(self._path).st_mode):
+                return False
+            msg = f"marker path is not a regular file: {self._path}"
+            raise ValueError(msg) from None
         try:
             os.fchmod(fd, 0o644)
         finally:

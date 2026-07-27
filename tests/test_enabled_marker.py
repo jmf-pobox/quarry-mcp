@@ -80,7 +80,7 @@ def test_remove_absent_is_false(tmp_path: Path) -> None:
     assert EnabledMarker(tmp_path).remove() is False
 
 
-# ── symlink safety: never follow a planted final-component symlink ────
+# ── non-regular entries at the marker path are refused, not followed ──
 
 
 def test_write_refuses_existing_symlink_and_leaves_target(tmp_path: Path) -> None:
@@ -92,7 +92,7 @@ def test_write_refuses_existing_symlink_and_leaves_target(tmp_path: Path) -> Non
     marker.path.parent.mkdir(parents=True, exist_ok=True)
     marker.path.symlink_to(outside)
 
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError, match="not a regular file"):
         marker.write()
 
     # The external target is untouched — neither its bytes nor its mode changed.
@@ -108,10 +108,27 @@ def test_write_refuses_dangling_symlink_and_creates_no_target(tmp_path: Path) ->
     marker.path.parent.mkdir(parents=True, exist_ok=True)
     marker.path.symlink_to(external)
 
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError, match="not a regular file"):
         marker.write()
 
     assert not external.exists()
+
+
+def test_write_refuses_directory_and_reports_absent(tmp_path: Path) -> None:
+    """A directory at the marker path is refused, not a false idempotent success.
+
+    §2.11: returning False here would tell enable() "already present" while
+    is_present() stays False — stranding the import with no real marker.
+    """
+    marker = EnabledMarker(tmp_path)
+    marker.path.parent.mkdir(parents=True, exist_ok=True)
+    marker.path.mkdir()
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        marker.write()
+
+    assert marker.is_present() is False
+    assert marker.path.is_dir()
 
 
 def test_is_present_false_for_symlink_to_file(tmp_path: Path) -> None:
