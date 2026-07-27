@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from yaml import YAMLError
+from quarry.safe_paths import SafeRepoPath
 
 if TYPE_CHECKING:
     from quarry.api import (
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
         RegistrationList,
         TaskAccepted,
     )
-    from quarry.registrations import Registrations
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +38,11 @@ class RegistryClient(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EnableResult:
-    """Result of enabling quarry for a project directory."""
+    """Result of enabling quarry for a project directory.
+
+    The three CLAUDE.md fields track the § 2.3 enable steps: the vendored guide
+    deposit, the ``enabled`` marker, and the one bare ``@``-import line.
+    """
 
     directory: str
     collection: str
@@ -48,7 +50,9 @@ class EnableResult:
     memory_collections: list[str] = field(default_factory=list)
     config_path: str = ""
     created_registration: bool = False
-    claudemd_appended: bool = False
+    guide_deposited: bool = False
+    enabled_marker_written: bool = False
+    import_registered: bool = False
     ethos_skipped: bool = False
     ethos_updated: list[str] = field(default_factory=list)
     ethos_already_set: list[str] = field(default_factory=list)
@@ -59,17 +63,21 @@ class EnableResult:
 @dataclass(frozen=True, slots=True)
 class DisableResult:
     """Result of disabling quarry.  ``removed`` is the registry file count the
-    daemon reported synchronously; the chunk purge runs as a background task."""
+    daemon reported synchronously; the chunk purge runs as a background task.
+
+    ``disable`` is non-destructive of the vendored guide (§ 2.9): it prunes the
+    ``@``-import line and deletes the ``enabled`` marker, leaving the deposited
+    ``.punt-labs/quarry/CLAUDE.md`` dormant on disk.
+    """
 
     directory: str
     collection: str
     captures_collection: str
     removed: int = 0
     config_removed: bool = False
-    claudemd_removed: bool = False
+    import_pruned: bool = False
+    enabled_marker_removed: bool = False
 
-
-_GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
 
 _CONFIG_TEMPLATE = """\
 ---
@@ -108,8 +116,9 @@ def enable_project(
     a local ``SyncRegistry``.  The project files (config.md, CLAUDE.md, ethos ext)
     are the client's and are written locally.
     """
-    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
-    from quarry.registrations import Registrations  # noqa: PLC0415
+    from quarry.enablement import Enablement  # noqa: PLC0415
+    from quarry.ethos_memory import EthosMemoryBootstrap  # noqa: PLC0415
+    from quarry.registrar import Registrar  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd
     # ("./~/proj"), targeting the wrong directory.
@@ -118,41 +127,32 @@ def enable_project(
         msg = f"directory not found: {directory}"
         raise ValueError(msg)
 
-    view = Registrations.from_list(client.list_registrations())
-    collection, created = _resolve_or_register(
-        view, client, directory, collection_override
-    )
+    collection, created = Registrar(client).resolve(directory, collection_override)
 
     captures_collection = f"{collection}-captures"
 
-    (
-        created_handles,
-        updated_handles,
-        already_set_handles,
-        failed_handles,
-        ethos_skipped,
-    ) = _bootstrap_ethos_memory()
-
-    memory_collections = [f"memory-{h}" for h in created_handles]
+    ethos = EthosMemoryBootstrap().run()
 
     config_path = _write_project_config(directory)
-    claudemd_appended = ClaudeMdBlock().append_to(directory)
-    if claudemd_appended:
-        logger.info("Appended quarry instructions to CLAUDE.md")
+    claudemd = Enablement(directory).enable()
+    if claudemd.import_registered:
+        logger.info("Registered quarry @-import in CLAUDE.md")
 
     return EnableResult(
         directory=str(directory),
         collection=collection,
         captures_collection=captures_collection,
-        memory_collections=memory_collections,
+        memory_collections=ethos.memory_collections,
         config_path=config_path,
         created_registration=created,
-        claudemd_appended=claudemd_appended,
-        ethos_skipped=ethos_skipped,
-        ethos_updated=updated_handles,
-        ethos_already_set=already_set_handles,
-        ethos_created=created_handles,
-        ethos_failed=failed_handles,
+        guide_deposited=claudemd.guide_deposited,
+        enabled_marker_written=claudemd.enabled_marker_written,
+        import_registered=claudemd.import_registered,
+        ethos_skipped=ethos.skipped,
+        ethos_updated=ethos.updated,
+        ethos_already_set=ethos.already_set,
+        ethos_created=ethos.created,
+        ethos_failed=ethos.failed,
     )
 
 
@@ -177,8 +177,8 @@ def disable_project(
     or CLAUDE.md claiming enabled.
     """
     from quarry.api import DeleteCollectionRequest, DeregisterRequest  # noqa: PLC0415
-    from quarry.claudemd_block import ClaudeMdBlock  # noqa: PLC0415
     from quarry.client.errors import QuarryError  # noqa: PLC0415
+    from quarry.enablement import Enablement  # noqa: PLC0415
     from quarry.registrations import Registrations  # noqa: PLC0415
 
     # expanduser BEFORE resolve: a bare "~/proj" otherwise resolves against cwd,
@@ -203,21 +203,27 @@ def disable_project(
             DeregisterRequest(collection=collection, keep_data=keep_data)
         ).removed
 
-    # Clean local files whether or not a registration was present, and BEFORE the
-    # best-effort captures purge below — a retry always reaches here.
-    config_path = directory / ".punt-labs" / "quarry" / "config.md"
-    config_removed = False
-    if config_path.exists():
-        config_path.unlink()
-        config_removed = True
+    # Clean local capture config whether or not a registration was present, and
+    # BEFORE the best-effort captures purge below — a retry always reaches here.
+    # Route through SafeRepoPath so a symlinked .punt-labs ancestor cannot make
+    # this unlink escape the repo (it is refused, never followed). Catch that
+    # refusal so it cannot abort disable before Enablement.disable prunes the
+    # @-import a prior deregister already acted on — the config there is not a
+    # real in-repo file, so treating it as absent and continuing is correct.
+    try:
+        config_removed = SafeRepoPath(
+            directory, (".punt-labs", "quarry", "config.md")
+        ).remove()
+    except ValueError:
+        config_removed = False
 
-    quarry_dir = directory / ".punt-labs" / "quarry"
-    if quarry_dir.is_dir() and not any(quarry_dir.iterdir()):
-        quarry_dir.rmdir()
-
-    claudemd_removed = ClaudeMdBlock().remove_from(directory)
-    if claudemd_removed:
-        logger.info("Removed quarry instructions from CLAUDE.md")
+    # Prune the @-import line and delete the enabled marker (§ 2.3). The vendored
+    # guide is left in place — disable is non-destructive of vendored content
+    # (§ 2.9), so the .punt-labs/quarry/ subtree stays as dormant, git-recoverable
+    # history rather than being erased on a toggle.
+    claudemd = Enablement(directory).disable()
+    if claudemd.import_pruned:
+        logger.info("Removed quarry @-import from CLAUDE.md")
 
     # Best-effort captures purge, dispatched last. A rejection is caught and
     # warned, never propagated: the primary teardown (deregister + local file
@@ -241,115 +247,19 @@ def disable_project(
         captures_collection=captures_collection,
         removed=removed,
         config_removed=config_removed,
-        claudemd_removed=claudemd_removed,
+        import_pruned=claudemd.import_pruned,
+        enabled_marker_removed=claudemd.enabled_marker_removed,
     )
-
-
-def _resolve_or_register(
-    view: Registrations,
-    client: RegistryClient,
-    directory: Path,
-    collection_override: str,
-) -> tuple[str, bool]:
-    """Reuse the covering registration, or dispatch a new one to the daemon.
-
-    Returns (collection_name, created).  Raises ValueError when *directory* is a
-    child of an existing registration (sessions there use the parent's collection
-    automatically).
-    """
-    from quarry.api import RegisterRequest  # noqa: PLC0415
-
-    covering = view.covering(directory)
-    if covering is not None:
-        if covering.directory == str(directory):
-            return covering.collection, False
-        msg = (
-            f"This directory is already covered by the registration at "
-            f"{covering.directory} (collection: {covering.collection}). "
-            f"Sessions here use that collection automatically. No action needed."
-        )
-        raise ValueError(msg)
-
-    # Re-adopt: if THIS directory owns an archived (keep-data) collection, reuse
-    # its name so the daemon's register re-adopts the kept chunks and its rescan
-    # auto-freshens them. A different directory owns no archive here, so it falls
-    # through to a fresh unique name that avoids every archived name (I7).
-    archived = view.archived_collection_for(directory)
-    name = collection_override or archived or view.unique_collection_name(directory)
-    # Fire-and-forget: the daemon re-guards the path on its own filesystem and
-    # writes the registry row as a background task.
-    client.register(RegisterRequest(directory=str(directory), collection=name))
-    return name, True
-
-
-def _bootstrap_ethos_memory() -> tuple[
-    list[str], list[str], list[str], list[str], bool
-]:
-    """Create quarry.yaml ext files and write session_context.
-
-    Reads only the global identities directory (repo-level identities are
-    read-only). Returns (created, updated, already_set, failed, skipped);
-    skipped is True when the global identities directory does not exist.
-
-    A handle appears in ``failed`` when its session_context write raised an
-    I/O or YAML error — the useful part never landed, so the caller must not
-    report unqualified success for it.  Non-OSError/YAMLError exceptions are
-    real bugs and propagate.
-    """
-    from quarry.doctor import (  # noqa: PLC0415
-        _write_ethos_ext_session_context,  # pyright: ignore[reportPrivateUsage]
-    )
-
-    if not _GLOBAL_IDENTITIES.is_dir():
-        return [], [], [], [], True
-
-    created: list[str] = []
-    updated: list[str] = []
-    already_set: list[str] = []
-    failed: list[str] = []
-    for identity_file in sorted(_GLOBAL_IDENTITIES.glob("*.yaml")):
-        handle = identity_file.stem
-        ext_dir = _GLOBAL_IDENTITIES / f"{handle}.ext"
-        ext_dir.mkdir(exist_ok=True)
-        quarry_yaml = ext_dir / "quarry.yaml"
-        if not quarry_yaml.exists():
-            quarry_yaml.write_text(
-                f"memory_collection: memory-{handle}\n",
-                encoding="utf-8",
-            )
-            created.append(handle)
-
-        try:
-            result = _write_ethos_ext_session_context(quarry_yaml, handle)
-        except (OSError, YAMLError, UnicodeDecodeError):
-            # UnicodeDecodeError (a ValueError, not an OSError) fires on a
-            # non-UTF8/corrupt identity file — record the handle and continue
-            # rather than crash enable; a real bug still propagates.
-            logger.warning("failed to write session context for %s", handle)
-            failed.append(handle)
-            continue
-        if result == "updated":
-            updated.append(handle)
-        elif result == "already_set":
-            already_set.append(handle)
-
-    return created, updated, already_set, failed, False
 
 
 def _write_project_config(directory: Path) -> str:
-    """Write config.md atomically (O_CREAT|O_EXCL, no overwrite); return its path."""
-    config_dir = directory / ".punt-labs" / "quarry"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / "config.md"
-    try:
-        fd = os.open(str(config_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        try:
-            with os.fdopen(fd, "w") as f:
-                fd = -1  # fdopen took ownership before write
-                f.write(_CONFIG_TEMPLATE)
-        finally:
-            if fd >= 0:
-                os.close(fd)
-    except FileExistsError:
-        pass
-    return str(config_path)
+    """Write config.md exclusively (no overwrite, no symlink follow); return its path.
+
+    Routes through :class:`quarry.safe_paths.SafeRepoPath` so a hostile repo
+    cannot redirect the create outside the repo via a symlinked ``.punt-labs``
+    ancestor or a symlinked ``config.md`` leaf. An existing regular config is
+    left untouched (idempotent); a non-regular entry at the path is refused.
+    """
+    config = SafeRepoPath(directory, (".punt-labs", "quarry", "config.md"))
+    config.create_exclusive(_CONFIG_TEMPLATE, mode=0o644)
+    return str(config.path)

@@ -1,0 +1,113 @@
+"""Tests for the Markdown code-fence scanner."""
+
+from __future__ import annotations
+
+from quarry.fence import FenceScanner
+
+
+def _shield_flags(text: str) -> list[bool]:
+    """Return the per-line shield decision for *text* (keepends split)."""
+    scanner = FenceScanner()
+    return [scanner.shields(line) for line in text.splitlines(keepends=True)]
+
+
+def test_plain_lines_are_never_shielded() -> None:
+    assert _shield_flags("alpha\nbeta\n") == [False, False]
+
+
+def test_fenced_block_shields_open_body_and_close() -> None:
+    assert _shield_flags("```\nbody\n```\nafter\n") == [True, True, True, False]
+
+
+def test_indented_backticks_do_not_open_a_fence() -> None:
+    """An indented ``` is code-block content, not a fence delimiter."""
+    assert _shield_flags("top\n    ```\nstill top\n") == [False, True, False]
+
+
+def test_tilde_line_does_not_close_a_backtick_fence() -> None:
+    """A fence closes only on the SAME character; ~~~ leaves a ```-fence open."""
+    flags = _shield_flags("```\n~~~\ninside\n```\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_backtick_line_does_not_close_a_tilde_fence() -> None:
+    flags = _shield_flags("~~~\n```\ninside\n~~~\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_shorter_run_does_not_close_a_longer_fence() -> None:
+    """A 3-backtick line cannot close a 4-backtick fence (length < opener)."""
+    flags = _shield_flags("````\n```\ninside\n````\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_longer_run_closes_a_shorter_fence() -> None:
+    flags = _shield_flags("```\n````\nafter\n")
+    assert flags == [True, True, False]
+
+
+def test_info_string_after_fence_still_opens() -> None:
+    assert _shield_flags("```python\ncode\n```\ndone\n") == [True, True, True, False]
+
+
+def test_indented_line_inside_fence_does_not_close_it() -> None:
+    """An indented line inside a fence is literal content, never a closer."""
+    flags = _shield_flags("```\n    ```\ninside\n```\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_info_string_line_does_not_close_a_fence() -> None:
+    """A closing fence carries only whitespace; a ```note line keeps it open."""
+    flags = _shield_flags("```\n```note\ninside\n```\nafter\n")
+    assert flags == [True, True, True, True, False]
+
+
+def test_trailing_whitespace_after_closer_still_closes() -> None:
+    """Spaces/tabs after the closing marker are allowed (CommonMark §4.5)."""
+    flags = _shield_flags("```\nbody\n```   \nafter\n")
+    assert flags == [True, True, True, False]
+
+
+def test_backtick_in_info_string_is_not_an_opener() -> None:
+    """A backtick fence opener may not carry a backtick in its info string.
+
+    ``` ```lang`x ``` is inline code, not a fence, so it and the line after it
+    are top-level (CommonMark §4.5).
+    """
+    assert _shield_flags("```lang`x\nafter\n") == [False, False]
+
+
+def test_tilde_info_string_may_contain_backticks() -> None:
+    """A tilde fence's info string is unrestricted: backticks after ~~~ still open."""
+    flags = _shield_flags("~~~ `code`\nbody\n~~~\nafter\n")
+    assert flags == [True, True, True, False]
+
+
+def test_backtick_only_run_still_opens() -> None:
+    """A plain backtick fence with no backtick in the info string opens normally."""
+    assert _shield_flags("```python\ncode\n```\nafter\n") == [True, True, True, False]
+
+
+def _fence_open_at_eof(text: str) -> bool:
+    """Return whether *text* ends inside an unterminated fence."""
+    scanner = FenceScanner()
+    for line in text.splitlines(keepends=True):
+        scanner.shields(line)
+    return scanner.is_open
+
+
+def test_is_open_false_before_any_line() -> None:
+    assert FenceScanner().is_open is False
+
+
+def test_is_open_false_after_a_closed_fence() -> None:
+    assert _fence_open_at_eof("```\nbody\n```\nafter\n") is False
+
+
+def test_is_open_true_after_an_unterminated_fence() -> None:
+    """A fence opened but never closed leaves the scanner open at EOF."""
+    assert _fence_open_at_eof("# rules\n\n```\nnever closed\n") is True
+
+
+def test_is_open_false_on_plain_prose() -> None:
+    assert _fence_open_at_eof("alpha\nbeta\n") is False
