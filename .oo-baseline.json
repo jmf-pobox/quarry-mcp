@@ -624,17 +624,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/config.py": {
-    "avg_complexity": 2.83,
-    "avg_params": 0.5,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 7.0,
     "method_ratio": 1.0,
-    "module_size": 118.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.57,
+    "max_complexity": 7.0,
+    "avg_complexity": 2.86,
+    "module_size": 149.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/__init__.py": {
     "avg_complexity": 0.0,
