@@ -571,6 +571,7 @@ class TestServeToken:
     def _server(self, tmp_path: Path, api_key: str | None) -> DaemonServer:
         settings = MagicMock()
         settings.lancedb_path = tmp_path / "default" / "lancedb"
+        settings.fd_limit = 8192  # real int: run() raises the fd envelope to it
         config = ServeConfig(host="127.0.0.1", port=8420, api_key=api_key)
         return DaemonServer(settings, config)
 
@@ -605,6 +606,7 @@ class TestServeToken:
         # ([::1]:8420), not the ambiguous ::1:8420. Display only; bind unchanged.
         settings = MagicMock()
         settings.lancedb_path = tmp_path / "default" / "lancedb"
+        settings.fd_limit = 8192  # real int: run() raises the fd envelope to it
         server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
         with (
             patch("quarry.daemon.server.DaemonContext"),
@@ -630,6 +632,7 @@ class TestServeToken:
         # bind host is unchanged.
         settings = MagicMock()
         settings.lancedb_path = tmp_path / "default" / "lancedb"
+        settings.fd_limit = 8192  # real int: run() raises the fd envelope to it
         server = DaemonServer(settings, ServeConfig(host="::1", port=8420, api_key="k"))
         uv = self._bound_server_mock()
         server._install_startup_hook(uv)

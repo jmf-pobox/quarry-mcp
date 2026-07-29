@@ -25,6 +25,7 @@ import uvicorn
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.fd_config import FdEnvelope
 from quarry.fd_telemetry import FdTelemetry
 from quarry.remote import to_netloc
 from quarry.run_dir import RunDir
@@ -147,11 +148,14 @@ class DaemonServer:
                 api_key=self._config.api_key,
                 cors_origins=self._config.cors_origins,
             )
-            # Clamp LanceDB's compute pool (and OMP) immediately before warm()'s
-            # first lancedb.connect — adjacent to the connect it guards, so no
-            # alternate caller of run() can connect uncapped.  lance reads
-            # LANCE_CPU_THREADS once when it builds its runtime, so a later set is
-            # ignored; is_gpu=False since the lance/OMP caps are provider-independent.
+            # Set the process resource envelope immediately before warm()'s first
+            # lancedb.connect — the one seam that guards every connect, so no
+            # alternate caller of run() connects uncapped or under a stale fd
+            # ceiling.  The fd raise MUST precede the first open() (Bug-class-1),
+            # and lance reads LANCE_CPU_THREADS once when it builds its runtime, so
+            # a later set is ignored.  is_gpu=False since the lance/OMP caps are
+            # provider-independent.
+            FdEnvelope(target=self._settings.fd_limit).apply()  # DES-046
             ThreadConfig(is_gpu=False).apply_env_limits()
             ctx.warm()  # Build cached resources single-threaded before serving.
 
