@@ -14,6 +14,21 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **infra (daemon)**: the resident `quarryd` no longer exhausts file descriptors
+  over long uptime. It inherited launchd/systemd's soft `RLIMIT_NOFILE` (256 on
+  macOS) and never raised it, while post-DES-045 it holds one LanceDB connection
+  per roster database — so at ~21 collections the aggregate of per-connection
+  descriptor plateaus exceeded 256 and the daemon walked into `EMFILE` after ~16h
+  (failed flushes, spool errors, cascading tracebacks). The daemon now raises its
+  soft limit to a configurable target (`QUARRY_FD_LIMIT`, default 8192) at start,
+  fail-safe: clamped to the hard limit, never lowering a higher inherited limit
+  (an operator's systemd `LimitNOFILE` is honored), and a malformed override
+  degrades to the default with a warning rather than crashing. The reader-recycler
+  is unchanged — a daemon-scale plateau invariant proves the aggregate is already
+  bounded, so the fix is the higher ceiling, not a new mechanism. See DES-046.
+
 ## [2.0.0] - 2026-07-27
 
 ### Added
