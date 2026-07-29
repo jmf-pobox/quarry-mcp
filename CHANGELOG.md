@@ -14,8 +14,39 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-29
+
+### Fixed
+
+- **infra (daemon)**: the resident `quarryd` no longer exhausts file descriptors
+  over long uptime. It inherited launchd/systemd's soft `RLIMIT_NOFILE` (256 on
+  macOS) and never raised it, while post-DES-045 it holds one LanceDB connection
+  per roster database — so at ~21 collections the aggregate of per-connection
+  descriptor plateaus exceeded 256 and the daemon walked into `EMFILE` after ~16h
+  (failed flushes, spool errors, cascading tracebacks). The daemon now raises its
+  soft limit to a configurable target (`QUARRY_FD_LIMIT`, default 8192) at start,
+  fail-safe: clamped to the hard limit, never lowering a higher inherited limit
+  (an operator's systemd `LimitNOFILE` is honored), and a malformed override
+  degrades to the default with a warning rather than crashing. The reader-recycler
+  is unchanged — a daemon-scale plateau invariant proves the aggregate is already
+  bounded, so the fix is the higher ceiling, not a new mechanism. See DES-046.
+
+## [2.0.0] - 2026-07-27
+
 ### Added
 
+- **transform (OCR)**: OCR now works on headless machines (servers, minimal
+  containers), not only desktops. Importing `cv2` on a box without X11/GL no
+  longer crashes the OCR path — a failed load degrades cleanly to "OCR
+  unavailable" instead of taking down ingestion or `quarry doctor`, and the
+  doctor's OCR check is advisory (a WARNING, not a required failure that aborts
+  `quarry install`). `quarry install` also force-reinstalls
+  `opencv-python-headless` (`--no-deps`, as the last writer of `cv2/`) so a
+  direct `uv tool install` / `pip install` that pulls the GUI `opencv-python`
+  (whose `cv2` links X11/GL and shadows the headless build) is repaired to
+  headless — the package-side equivalent of install.sh's resolver override
+  (Fixed, below), covering installs that bypass the `curl … | sh` path.
+  (quarry-lb1z)
 - **infra (install.sh)**: `--no-plugin` flag and `QUARRY_NO_PLUGIN=1` env var to
   install the harness-neutral CLI while skipping the Claude Code
   marketplace-register + plugin-install steps (per punt-kit `install-cli-only.md`).

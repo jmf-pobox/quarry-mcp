@@ -282,6 +282,9 @@ class TestRunClampsThreadsBeforeWarm:
         monkeypatch.setattr(DaemonServer, "_acquire_run_dir_lock", lambda self: None)
         monkeypatch.setattr(DaemonServer, "_release_run_dir_lock", lambda self: None)
         monkeypatch.setattr(DaemonContext, "warm", fake_warm)
+        # run() applies the fd envelope before warm(); stub apply() so the test
+        # never mutates the pytest process's real, unrestored RLIMIT_NOFILE.
+        monkeypatch.setattr("quarry.daemon.server.FdEnvelope.apply", lambda self: "")
 
         server = DaemonServer(Settings(), ServeConfig(api_key="k"))
         with pytest.raises(_StopBeforeServeError):

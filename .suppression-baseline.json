@@ -1,11 +1,11 @@
 {
-  "total": 212,
+  "total": 208,
   "by_category": {
-    "noqa": 170,
+    "noqa": 171,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
-    "per_file_ignores": 34
+    "per_file_ignores": 29
   },
   "by_file": {
     "src/quarry/__main__.py": {
@@ -56,10 +56,13 @@
       "type_ignore": 1
     },
     "src/quarry/doctor.py": {
-      "noqa": 61
+      "noqa": 58
     },
     "src/quarry/doctor_captures.py": {
       "noqa": 6
+    },
+    "src/quarry/doctor_inference.py": {
+      "noqa": 2
     },
     "src/quarry/embeddings.py": {
       "noqa": 3
@@ -93,7 +96,10 @@
     "src/quarry/ingestion/image_prep.py": {
       "noqa": 2
     },
-    "src/quarry/ingestion/ocr_local.py": {
+    "src/quarry/ingestion/ocr_availability.py": {
+      "noqa": 1
+    },
+    "src/quarry/ingestion/ocr_engine.py": {
       "noqa": 1
     },
     "src/quarry/ingestion/pipeline.py": {
@@ -109,6 +115,9 @@
       "noqa": 1
     },
     "src/quarry/onnx_session.py": {
+      "noqa": 1
+    },
+    "src/quarry/opencv_headless.py": {
       "noqa": 1
     },
     "src/quarry/proxy.py": {
@@ -140,5 +149,5 @@
       "noqa": 1
     }
   },
-  "updated_at": "2026-07-27T03:48:27Z"
+  "updated_at": "2026-07-27T14:06:19Z"
 }
