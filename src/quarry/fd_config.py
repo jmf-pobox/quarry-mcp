@@ -9,11 +9,13 @@ limit toward a configured target at daemon start — the sibling of
 ``ThreadConfig``'s CPU/thread envelope (DES-032), applied at the same seam before
 the first ``lancedb.connect``. See DES-046.
 
-The raise is fail-safe: a missing ``resource`` module, a raising
-``getrlimit``/``setrlimit``, or a target above the hard limit all degrade to a
-single logged line and the inherited limit — the whole point is to survive, so a
-platform quirk must never crash the daemon at start. It never lowers an already
-higher inherited soft limit, so an operator's ``LimitNOFILE=65536`` is honored.
+The raise is fail-safe: a missing ``resource`` module, a raising ``getrlimit``,
+or a raising ``setrlimit`` each degrade to a single logged line and the inherited
+limit — the whole point is to survive, so a platform quirk must never crash the
+daemon at start. A target above the hard limit is not a degrade: ``apply`` clamps
+to the hard limit and successfully raises the soft limit to it. It never lowers
+an already higher inherited soft limit, so an operator's ``LimitNOFILE=65536`` is
+honored.
 """
 
 from __future__ import annotations
@@ -57,10 +59,12 @@ class FdEnvelope:
         """Raise the soft fd limit toward the target; return the effective state.
 
         Fail-safe at every boundary (Bug-class-2): a missing ``resource`` module,
-        a ``getrlimit``/``setrlimit`` that raises, or a target above the hard limit
-        degrades to a single logged line and the inherited limit — never a crash.
-        Never LOWERS an already-higher inherited soft limit (the floor is the
-        inherited soft), so a higher operator/systemd ``LimitNOFILE`` is honored.
+        a ``getrlimit`` that raises, or a ``setrlimit`` that raises degrades to a
+        single logged line and the inherited limit — never a crash. A target above
+        the hard limit is clamped to the hard limit and the soft limit is raised to
+        it (a success, not a degrade). Never LOWERS an already-higher inherited soft
+        limit (the floor is the inherited soft), so a higher operator/systemd
+        ``LimitNOFILE`` is honored.
         """
         rlimits = resource
         if rlimits is None:
