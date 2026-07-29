@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-29
+
 ### Fixed
 
 - **infra (daemon)**: the resident `quarryd` no longer exhausts file descriptors
