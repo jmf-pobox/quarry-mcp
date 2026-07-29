@@ -27,6 +27,7 @@ import gc
 import json
 import resource
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 from unittest.mock import patch
@@ -37,7 +38,8 @@ import pytest
 from quarry.backfill import backfill_sessions, encode_project_path
 from quarry.config import Settings
 from quarry.db import Database
-from quarry.db.connection import _DEFAULT_RECYCLE_AFTER, RecyclingTable
+from quarry.db.connection import LanceConnection, RecyclingTable
+from quarry.db.storage import get_db
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
@@ -466,26 +468,45 @@ def test_watch_session_does_not_leak_descriptors(
 # connection's index-rebuild descriptors; nobody had proven the AGGREGATE across a
 # realistic roster plateaus rather than summing to EMFILE — the arbiter for whether
 # raising RLIMIT_NOFILE (FdEnvelope) is the whole fix or the recycler also needs a
-# forced collection. N mirrors the ~21 collections reported at exhaustion.
-_DAEMON_SCALE_DATABASES = 21
+# forced collection. The invariant is scale-independent, so the test runs a reduced
+# roster at a reduced recycle cap: N connections, each recycling every
+# ``_DAEMON_SCALE_RECYCLE_AFTER`` rebuilds. Setting N equal to the cap gives full
+# phase coverage — one connection resident at each recycle phase — so the aggregate
+# is flat by construction (a round-robin advances phases but the multiset of phases
+# present is invariant), not a partial cover that wobbles as recycles beat against
+# the sampling. Shrinking both the roster and the cap cuts the rebuild count ~4x so
+# this resource-tier test fits the CI timeout on a 2-core runner, without changing
+# what it proves: the recycler bounds the roster-aggregate descriptor count. The
+# exhaustion report was ~21 collections; the plateau holds the same shape at any
+# roster size and cap.
+_DAEMON_SCALE_RECYCLE_AFTER = 8
+_DAEMON_SCALE_DATABASES = _DAEMON_SCALE_RECYCLE_AFTER
 # Give every table a fixed, non-trivial index once (no optimize between inserts),
 # then loop pure rebuilds. Fixing the table isolates the ONE variable this
 # invariant is about — the recycler's reader accumulation — from the unrelated
 # fd cost of a table that grows on every insert (covered by the sibling
-# growing-table tests). A handful of rebuilds' readers per connection is enough
-# headroom that a broken recycler climbs by hundreds while the bounded one holds.
-_DAEMON_SCALE_PREFILL = 30
+# growing-table tests).
+_DAEMON_SCALE_PREFILL = 20
 # Warm each connection PAST its first recycle before measuring, staggered by
-# recycle phase (db ``i`` starts ``i % recycle_after`` cycles ahead) so recycles
-# fire out of phase — a smooth aggregate, not a synchronized round-robin sawtooth.
-# The measured window then samples the steady state, not the one-time fill.
-_DAEMON_SCALE_WARMUP = _DEFAULT_RECYCLE_AFTER + 2
+# recycle phase (db ``i`` starts ``i`` cycles ahead, and ``N == recycle_after`` so
+# ``i`` spans every phase) — the connections cover all recycle phases at once, a
+# smooth aggregate rather than a synchronized round-robin sawtooth. The measured
+# window then samples the steady state, not the one-time fill.
+_DAEMON_SCALE_WARMUP = _DAEMON_SCALE_RECYCLE_AFTER + 2
 _DAEMON_SCALE_MEASURE = 12
-# A recycle transient (a connection mid-rebuild pins an extra index generation
-# until gc) sits ~one recycle amplitude above the plateau; the bounded aggregate
-# stays within that of its baseline, while a genuine per-connection leak would
-# grow by the measured cycle count — hundreds of descriptors — over the window.
+# With full phase coverage the working aggregate is flat (growth ~0); a genuine
+# per-connection leak (a broken recycler that never swaps ``_inner``) climbs by the
+# measured cycle count — dozens to hundreds of descriptors — over the window. The
+# slack sits decisively between the two.
 _DAEMON_SCALE_SLACK = 40
+
+
+def _daemon_scale_connect(path: Path) -> Database:
+    """Connect at the reduced recycle cap so N connections cover all phases."""
+    conn = LanceConnection(
+        partial(get_db, path), recycle_after=_DAEMON_SCALE_RECYCLE_AFTER
+    )
+    return Database(conn)
 
 
 def _daemon_scale_rebuild(database: Database) -> None:
@@ -501,16 +522,19 @@ def _daemon_scale_rebuild(database: Database) -> None:
 def test_daemon_scale_fd_plateau(tmp_path: Path) -> None:
     """N persistent connections rebuilt in a loop must plateau the aggregate fds.
 
-    Models the resident daemon: one persistent ``Database.connect`` per roster
-    database (watch_roster.py), each rebuilding its FTS index on every sync. Each
+    Models the resident daemon: one persistent connection per roster database
+    (watch_roster.py), each rebuilding its FTS index on every sync. Each
     connection's reader-recycler bounds its own descriptors; this proves the
-    *aggregate* across a ~21-collection roster plateaus rather than climbing to
+    *aggregate* across a multi-connection roster plateaus rather than climbing to
     EMFILE. Raising RLIMIT_NOFILE (FdEnvelope) lifts the ceiling above that bounded
     plateau; this guards that the plateau is real, not a slow climb a higher
-    ceiling would only defer. Hermetic: in-process connections, no daemon, no ONNX.
+    ceiling would only defer. The roster and recycle cap are reduced (N ==
+    ``_DAEMON_SCALE_RECYCLE_AFTER``) so the connections cover every recycle phase —
+    a flat aggregate — while the test stays inside the CI timeout. Hermetic:
+    in-process connections, no daemon, no ONNX.
     """
     databases = [
-        Database.connect(tmp_path / f"db{i}" / "lancedb")
+        _daemon_scale_connect(tmp_path / f"db{i}" / "lancedb")
         for i in range(_DAEMON_SCALE_DATABASES)
     ]
     # Prefill each table to a fixed size so the loop below only rebuilds — never
@@ -525,7 +549,7 @@ def test_daemon_scale_fd_plateau(tmp_path: Path) -> None:
     # Warm each connection past its first recycle, staggered by recycle phase so
     # the aggregate is smooth. Unmeasured: this is the one-time fill to steady state.
     for offset, database in enumerate(databases):
-        for _ in range(_DAEMON_SCALE_WARMUP + offset % _DEFAULT_RECYCLE_AFTER):
+        for _ in range(_DAEMON_SCALE_WARMUP + offset % _DAEMON_SCALE_RECYCLE_AFTER):
             _daemon_scale_rebuild(database)
 
     trajectory = FdTrajectory()
