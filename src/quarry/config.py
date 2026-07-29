@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from pathlib import Path
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 ONNX_MODEL_REPO = "Snowflake/snowflake-arctic-embed-m-v1.5"
 ONNX_MODEL_REVISION = "e58a8f756156a1293d763f17e3aae643474e9b8a"
 ONNX_TOKENIZER_FILE = "tokenizer.json"
 ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+# The resident daemon's file-descriptor budget: the soft RLIMIT_NOFILE FdEnvelope
+# raises to at daemon start (DES-046). ~25x the bounded working set of a ~21-db
+# roster, well under any reasonable hard limit — years of roster growth headroom.
+_DEFAULT_FD_LIMIT = 8192
 
 
 class Settings(BaseSettings):
@@ -64,6 +72,33 @@ class Settings(BaseSettings):
     # trailing finalize when it elapses (FTS lags, vector channel stays fresh;
     # DES-045 §9).  0 disables the rate-limit (finalize every batch).
     watch_optimize_min_interval_s: float = Field(default=30.0, ge=0)
+
+    # Soft RLIMIT_NOFILE the daemon raises to at start (DES-046), overridable via
+    # QUARRY_FD_LIMIT.  Coerced fail-safe: a malformed or non-positive env value
+    # degrades to the default with one logged warning rather than crashing the
+    # daemon at construction (Bug-class-2) — the whole point of the raise is to
+    # survive, so a typo in the override must not defeat it.
+    fd_limit: int = Field(default=_DEFAULT_FD_LIMIT, validation_alias="QUARRY_FD_LIMIT")
+
+    @field_validator("fd_limit", mode="before")
+    @classmethod
+    def _coerce_fd_limit(cls, value: object) -> int:
+        """Return QUARRY_FD_LIMIT as a positive int, else degrade to the default."""
+        try:
+            parsed = int(str(value))  # env yields str; the default arrives as int
+        except (TypeError, ValueError):
+            logger.warning(
+                "QUARRY_FD_LIMIT=%r is not an integer; using %d",
+                value,
+                _DEFAULT_FD_LIMIT,
+            )
+            return _DEFAULT_FD_LIMIT
+        if parsed < 1:
+            logger.warning(
+                "QUARRY_FD_LIMIT=%r is not positive; using %d", value, _DEFAULT_FD_LIMIT
+            )
+            return _DEFAULT_FD_LIMIT
+        return parsed
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

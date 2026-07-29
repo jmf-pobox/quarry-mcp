@@ -2217,3 +2217,68 @@ compaction cadence without the thread cap* — leaves a single finalize able to 
 every core; the cap is the ceiling, the throttle is the duty-cycle, and both are
 needed. *Raising `narenas` to reduce contention instead of capping threads* —
 addressed in DES-032; increases jemalloc retention (DES-027) and does not bound CPU.
+
+## DES-046: File-descriptor envelope — raise RLIMIT_NOFILE at daemon start
+
+**Context.** The resident `quarryd` exhausted file descriptors over long uptime: an
+18h41m run hit `OSError: [Errno 24] Too many open files` (EMFILE) 65 times across
+~16h, with 305 tracebacks and cascading failures in `sync_ingest` (`Flush failed`),
+`daemon.job_spool`, `shadow.sync`, and the fd-telemetry sampler itself; `quarry
+doctor` showed ~9/256 fd headroom. Two facts compound. First, **nothing raises the
+limit**: the daemon runs at whatever soft `RLIMIT_NOFILE` launchd/systemd hands it
+(256 on macOS by `launchctl limit maxfiles`), and the fd trio (`fd_headroom`,
+`fd_telemetry`, `doctor_resources`) only *measures* it — DES-032's `ThreadConfig`
+enveloped CPU/threads but the fd side was never enveloped. Second, **the ceiling was
+sized for two connections**: the per-connection reader-recycler (DES-023/quarry-0dss)
+bounds *one* connection's descriptor growth, but post-DES-045 the daemon holds one
+persistent LanceDB connection *per roster database* (`watch_roster`), so at a
+~21-collection roster the aggregate of N bounded per-connection plateaus, plus the
+ONNX/socket/watcher/sqlite baseline, sits above 256. This is not an unbounded leak —
+it is a plateau summed over a roster that grows with uptime, against a limit meant
+for two connections.
+
+**Decision.** A new `FdEnvelope` (`fd_config.py`) — the fd sibling of DES-032's
+`ThreadConfig` — raises the process soft `RLIMIT_NOFILE` toward a configured target
+at daemon start, applied at the one process-resource seam in `DaemonServer.run()`
+immediately before the first `lancedb.connect`. The target is a `Settings` field,
+`QUARRY_FD_LIMIT` (default 8192), coerced fail-safe (a malformed or non-positive
+override degrades to 8192 with a logged warning, never crashing construction). The
+raise is fail-safe at every boundary (Bug-class-2): a missing `resource` module, a
+raising `getrlimit`/`setrlimit`, or a target above the hard limit all degrade to a
+single logged line and the inherited limit — the point is to survive, so a platform
+quirk must never crash the daemon at start. It **clamps to the hard limit** and
+**never lowers** an already-higher inherited soft limit, so an operator's systemd
+`LimitNOFILE=65536` is honored, not clamped to 8192. The **reader-recycler is
+unchanged**: the operator ruled prove-then-fix, and a daemon-scale plateau invariant
+(N≈21 in-process connections × repeated optimize+FTS) is the arbiter — it shows the
+working recycler holds the aggregate flat (growth 0.4, peak 243) while a
+never-swapping recycler climbs (growth 189) and fails the guard, so accumulation is
+already bounded and the fix is the higher ceiling, not a new mechanism. The stale
+two-connection ceiling rationale in `connection.py` is re-derived to the correct
+`(N+1)·recycle_after·fds_per_rebuild + baseline` aggregate (uncompressed — comments
+are never a ratchet lever).
+
+**Consequence.** The daemon always gets at least 8192 descriptors independent of what
+launchd/systemd hands it — ~4–8× the bounded working set at 21 collections (~90
+before nearing the limit), with `FdTelemetry` + doctor warning at 80% and the target
+a one-line/​env bump. Verified against *real* `setrlimit`, not just mocks: under a
+256 soft limit the installed code raised 256→8192 (default), 256→65536
+(`QUARRY_FD_LIMIT=65536`), and 256→8192 with a warning (`QUARRY_FD_LIMIT=nope`, no
+crash); the live daemon, which currently inherits a 1,048,576 soft limit, correctly
+no-ops (`unchanged … never lower`). The envelope is **daemon-only by construction** —
+the CLI and stdio-MCP are short-lived thin clients holding no roster connections, so
+every-surface-or-none is satisfied by explicit scoping. Sibling to DES-032
+(CPU/thread envelope) and DES-023 (per-connection reader-pinning).
+
+**Rejected alternatives.** *A fraction-of-hard target* — the hard limit is
+`RLIM_INFINITY` on macOS launchd, so a fraction is undefined; a fixed target with
+clamp-to-hard is well-defined on both platforms. *A fixed non-configurable constant*
+— the operator ruled the budget configurable (`QUARRY_FD_LIMIT`) so a pathological
+roster can be accommodated without a release. *Mandating a recycler mechanism change
+(forced `gc.collect()` / lower `recycle_after`) up front* — speculative against the
+evidence; the plateau invariant proves the recycler already bounds each connection,
+so prove-then-fix keeps `connection.py` a comment re-derivation. *Setting
+`LimitNOFILE` in the launchd plist / systemd unit only* — launchd's plist has no
+clean soft-limit knob beyond the 256 default and it would not be cross-platform; the
+in-process raise works identically on both and its never-lower floor still honors a
+higher unit-file value where one is set.
