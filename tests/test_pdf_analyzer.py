@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import fitz
+
+from quarry.config import Settings
 from quarry.extractors.pdf_extractor import MIN_TEXT_CHARS_FOR_TEXT_PAGE, PdfExtractor
+from quarry.ingestion.ocr_availability import OcrUnavailableError
+from quarry.ingestion.ocr_engine import OcrEngine
+from quarry.ingestion.ocr_local import LocalOcrBackend
 from quarry.models import PageType
 
 
@@ -97,3 +104,35 @@ class TestClassifyPages:
 
         assert results[0].page_number == 1
         assert results[1].page_number == 2
+
+
+class TestExtractPagesDegradesWithoutOcr:
+    """A mixed PDF on a headless box indexes its text page, skips its scan page."""
+
+    def _mixed_pdf(self, tmp_path: Path) -> Path:
+        pdf_path = tmp_path / "mixed.pdf"
+        doc = fitz.open()
+        text_page = doc.new_page()
+        text_page.insert_text((72, 72), "This page has a real text layer. " * 4)
+        doc.new_page()  # blank → classified IMAGE → routed to OCR
+        doc.save(str(pdf_path))
+        doc.close()
+        return pdf_path
+
+    def test_text_page_indexes_when_ocr_unavailable(self, tmp_path: Path) -> None:
+        pdf_path = self._mixed_pdf(tmp_path)
+        settings = Settings.model_validate({})
+        LocalOcrBackend._warned_unavailable = False
+        OcrEngine.reset()
+        backend = LocalOcrBackend(settings)
+
+        with patch.object(
+            OcrEngine, "get", side_effect=OcrUnavailableError("headless: no cv2")
+        ):
+            extractor = PdfExtractor(settings, backend)
+            pages = extractor.extract_pages(pdf_path, document_name="mixed.pdf")
+
+        # No crash; the OCR (image) page degraded to nothing, the text page stays.
+        assert [p.page_number for p in pages] == [1]
+        assert pages[0].page_type == PageType.TEXT
+        assert "real text layer" in pages[0].text

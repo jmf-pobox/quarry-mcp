@@ -568,6 +568,14 @@ class TestStatus:
 class TestServeToken:
     """DaemonServer persists the loopback bearer so clients can authenticate."""
 
+    @pytest.fixture(autouse=True)
+    def _neutralize_fd_envelope(self) -> Iterator[None]:
+        """Stub the fd envelope so run()-driving tests never mutate the pytest
+        process's real, unrestored ``RLIMIT_NOFILE`` (the raise is process-global).
+        """
+        with patch("quarry.daemon.server.FdEnvelope"):
+            yield
+
     def _server(self, tmp_path: Path, api_key: str | None) -> DaemonServer:
         settings = MagicMock()
         settings.lancedb_path = tmp_path / "default" / "lancedb"

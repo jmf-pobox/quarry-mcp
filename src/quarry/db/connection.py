@@ -42,9 +42,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Recycle the connection after this many index rebuilds. Each rebuild leaks a
-# small, fixed number of descriptors, so the ceiling is roughly
-# ``recycle_after * fds_per_rebuild`` above the process baseline — comfortably
-# under a 256 soft limit for the daemon's two connections.
+# small, fixed number of descriptors that cyclic GC reclaims once the superseded
+# connection is dropped, so one connection's descriptor use plateaus at roughly
+# ``recycle_after * fds_per_rebuild`` above the process baseline.
+#
+# Post-DES-045 the daemon holds one such connection per roster database
+# (watch_roster.py), not the two this bound was first sized for. The aggregate
+# ceiling is therefore ``(N+1) * recycle_after * fds_per_rebuild + baseline`` for
+# N sibling databases plus the active one — a constant for a fixed roster (each
+# connection recycles on a bounded cadence, so the sum of per-connection plateaus
+# is itself a plateau), not an unbounded climb. That aggregate is what a
+# ~21-collection roster pushes above launchd's 256 soft limit, so DES-046 raises
+# RLIMIT_NOFILE to 8192 at daemon start: the ceiling must fit under the raised
+# limit, not the inherited 256. The recycler is unchanged — the roster-scale
+# aggregate plateau is proven, so the fix is the higher limit, not a new mechanism.
 _DEFAULT_RECYCLE_AFTER = 20
 
 

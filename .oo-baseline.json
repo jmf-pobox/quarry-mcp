@@ -624,17 +624,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/config.py": {
-    "avg_complexity": 2.83,
-    "avg_params": 0.5,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 7.0,
     "method_ratio": 1.0,
-    "module_size": 118.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.57,
+    "max_complexity": 7.0,
+    "avg_complexity": 2.86,
+    "module_size": 149.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/__init__.py": {
     "avg_complexity": 0.0,
@@ -1053,17 +1053,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/daemon/server.py": {
-    "avg_complexity": 2.46,
-    "avg_params": 0.77,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 2.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 5.0,
     "method_ratio": 1.0,
-    "module_size": 316.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.77,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.46,
+    "module_size": 320.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/tasks.py": {
     "avg_complexity": 2.0,
@@ -1196,17 +1196,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/db/connection.py": {
-    "avg_complexity": 1.35,
-    "avg_params": 1.18,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 2.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 4.0,
     "method_ratio": 1.0,
-    "module_size": 223.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.18,
+    "max_complexity": 4.0,
+    "avg_complexity": 1.35,
+    "module_size": 234.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/db/facade.py": {
     "avg_complexity": 1.0,
@@ -1263,10 +1263,10 @@
   "src/quarry/doctor.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.69,
+    "avg_params": 0.74,
     "max_complexity": 10.0,
-    "avg_complexity": 3.83,
-    "module_size": 945.0,
+    "avg_complexity": 3.94,
+    "module_size": 923.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
@@ -1298,6 +1298,19 @@
     "method_ratio": 1.0,
     "module_size": 172.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/doctor_inference.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 3.0,
+    "avg_complexity": 2.5,
+    "module_size": 55.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/doctor_resources.py": {
     "avg_complexity": 4.0,
@@ -1507,6 +1520,19 @@
     "module_size": 122.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/fd_config.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.5,
+    "max_complexity": 5.0,
+    "avg_complexity": 3.0,
+    "module_size": 80.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/fd_headroom.py": {
     "avg_complexity": 2.33,
     "avg_params": 0.0,
@@ -1664,17 +1690,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/ingestion/__init__.py": {
-    "avg_complexity": 0.0,
-    "avg_params": 0.0,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 0.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 0.0,
     "method_ratio": 1.0,
-    "module_size": 48.0,
-    "public_attr_violations": 0.0
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 0.0,
+    "avg_complexity": 0.0,
+    "module_size": 47.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ingestion/backends.py": {
     "avg_complexity": 2.0,
@@ -1754,18 +1780,44 @@
     "module_size": 27.0,
     "public_attr_violations": 0.0
   },
-  "src/quarry/ingestion/ocr_local.py": {
-    "avg_complexity": 1.92,
-    "avg_params": 2.17,
-    "class_to_func_ratio": 0.2,
-    "classes_per_module": 1.0,
+  "src/quarry/ingestion/ocr_availability.py": {
+    "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
+    "avg_params": 0.67,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.5,
+    "module_size": 86.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
-    "max_complexity": 4.0,
-    "method_ratio": 0.636,
-    "module_size": 150.0,
-    "public_attr_violations": 0.0
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/ingestion/ocr_engine.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.17,
+    "max_complexity": 3.0,
+    "avg_complexity": 1.83,
+    "module_size": 86.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/ingestion/ocr_local.py": {
+    "method_ratio": 0.9,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.64,
+    "max_complexity": 5.0,
+    "avg_complexity": 2.09,
+    "module_size": 159.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.667,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/ingestion/page_geometry.py": {
     "avg_complexity": 3.2,
@@ -2013,6 +2065,19 @@
     "method_ratio": 1.0,
     "module_size": 119.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/opencv_headless.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.25,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.25,
+    "module_size": 51.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/proxy.py": {
     "avg_complexity": 2.12,
