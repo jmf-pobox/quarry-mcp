@@ -18,10 +18,10 @@ import socket
 import subprocess
 import textwrap
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Self, final, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
-from quarry.config import DEFAULT_PORT
+from quarry.config import DEFAULT_PORT, Settings
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
@@ -54,6 +54,94 @@ _ENV_FILE: Path = Path.home() / ".punt-labs" / "quarry" / "quarry.env"
 
 
 _MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:1,tcache:false"
+
+
+# The hard RLIMIT_NOFILE ceiling the service manager grants quarryd before spawn.
+# A freshly BOOTSTRAPPED launchd agent inherits hard=256, and a non-root process
+# cannot raise its own hard limit — so the in-daemon FdEnvelope (DES-046) clamps to
+# 256 and the daemon walks into EMFILE. The service manager is the one actor that
+# CAN raise the hard limit, so the generated plist/unit bake this generous ceiling;
+# FdEnvelope then lifts the SOFT limit toward QUARRY_FD_LIMIT at runtime within it.
+# 65536 is ~8x the 8192 default soft target — years of roster-growth headroom — and
+# sits well under macOS kern.maxfilesperproc (~92160) and any systemd hard limit.
+_SERVICE_FD_HARD = 65536
+
+
+@final
+class FdServiceLimits:
+    """The RLIMIT_NOFILE window the service manager bakes into the plist/unit.
+
+    The service manager sets the descriptor limits BEFORE spawning quarryd because
+    it — unlike the non-root daemon — can raise the hard limit above the 256 a fresh
+    launchd bootstrap inherits.  The hard ceiling is fixed and generous
+    (``_SERVICE_FD_HARD``); the soft floor is the configured target
+    (``Settings.fd_limit``, ``QUARRY_FD_LIMIT``-overridable), clamped to the hard
+    ceiling so the generated file stays valid — a plist/unit whose soft limit exceeds
+    its hard limit is rejected.
+
+    Division of labour with :class:`~quarry.fd_config.FdEnvelope`: the plist/unit give
+    the HARD headroom, FdEnvelope sets the SOFT at runtime.  So a ``QUARRY_FD_LIMIT``
+    override up to the hard ceiling takes effect on a daemon restart with no reinstall;
+    a value above the hard ceiling clamps (doctor/telemetry warn on descriptor
+    pressure).  FdEnvelope remains the cross-platform floor and never lowers an
+    already-higher inherited soft limit.
+    """
+
+    __slots__ = ("_hard", "_soft")
+
+    _soft: int
+    _hard: int
+
+    def __new__(cls, *, soft: int, hard: int) -> Self:
+        self = super().__new__(cls)
+        self._soft = min(soft, hard)  # a soft above the hard is an invalid plist/unit
+        self._hard = hard
+        return self
+
+    @classmethod
+    def from_settings(cls) -> Self:
+        """Build the ceiling from config: soft = ``QUARRY_FD_LIMIT``, hard = fixed."""
+        return cls(soft=Settings().fd_limit, hard=_SERVICE_FD_HARD)
+
+    @property
+    def soft(self) -> int:
+        """Return the soft descriptor limit baked in (clamped to the hard ceiling)."""
+        return self._soft
+
+    @property
+    def hard(self) -> int:
+        """Return the fixed hard descriptor ceiling the service manager grants."""
+        return self._hard
+
+    def launchd_fragment(self) -> str:
+        """Return the ``SoftResourceLimits`` + ``HardResourceLimits`` plist dicts.
+
+        Indented to match the sibling ``EnvironmentVariables`` block and ending in
+        the 8-space pad the next top-level ``<key>`` rides on, so the outer
+        ``textwrap.dedent`` in :func:`_launchd_plist_content` renders valid XML.
+        """
+        return (
+            "<key>SoftResourceLimits</key>\n"
+            "        <dict>\n"
+            "            <key>NumberOfFiles</key>\n"
+            f"            <integer>{self._soft}</integer>\n"
+            "        </dict>\n"
+            "        <key>HardResourceLimits</key>\n"
+            "        <dict>\n"
+            "            <key>NumberOfFiles</key>\n"
+            f"            <integer>{self._hard}</integer>\n"
+            "        </dict>\n"
+            "        "
+        )
+
+    def systemd_directive(self) -> str:
+        """Return the ``LimitNOFILE=<soft>:<hard>`` directive for the [Service] block.
+
+        systemd's ``LimitNOFILE`` takes ``soft:hard`` and raises the daemon's hard
+        limit above the login-session default, the Linux analogue of the launchd
+        ``HardResourceLimits`` ceiling.
+        """
+        return f"LimitNOFILE={self._soft}:{self._hard}"
 
 
 def _write_env_file(api_key: str = "") -> None:
@@ -194,6 +282,10 @@ def _launchd_plist_content() -> str:
         "        </dict>\n"
         "        "
     )
+    # Bake the descriptor ceiling into the plist: launchd raises the daemon's hard
+    # limit above the 256 a fresh bootstrap inherits, so the in-daemon FdEnvelope
+    # can lift the soft limit off it instead of clamping to 256 (DES-046 / quarry-fnzh).
+    fd_limits_block = FdServiceLimits.from_settings().launchd_fragment()
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -206,7 +298,7 @@ def _launchd_plist_content() -> str:
             <array>
         {program_args}
             </array>
-            {env_vars_block}<key>ProcessType</key>
+            {env_vars_block}{fd_limits_block}<key>ProcessType</key>
             <string>Interactive</string>
             <key>RunAtLoad</key>
             <true/>
@@ -314,6 +406,10 @@ def _systemd_unit_content() -> str:
     args = _quarryd_exec_args()
     exec_start = " ".join(_systemd_escape(a) for a in args)
     env_file_path = str(_ENV_FILE)
+    # Bake the descriptor ceiling into the unit: systemd raises the daemon's hard
+    # limit above the login-session default so the in-daemon FdEnvelope lifts the
+    # soft limit off it instead of clamping to it (DES-046 / quarry-fnzh).
+    fd_limits_directive = FdServiceLimits.from_settings().systemd_directive()
     return textwrap.dedent(f"""\
         [Unit]
         Description=Quarry semantic search daemon
@@ -325,6 +421,7 @@ def _systemd_unit_content() -> str:
         Restart=always
         RestartSec=5
         Nice=-5
+        {fd_limits_directive}
 
         [Install]
         WantedBy=default.target

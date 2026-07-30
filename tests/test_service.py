@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,8 @@ from quarry.config import DEFAULT_PORT
 from quarry.service import (
     _LABEL,
     _MALLOC_CONF,
+    _SERVICE_FD_HARD,
+    FdServiceLimits,
     ServiceBackend,
     _get_tls_hostname,
     _launchd_install,
@@ -1189,6 +1192,154 @@ class TestSystemdNice:
         rs_idx = content.index("RestartSec=5")
         nice_idx = content.index("Nice=-5")
         assert nice_idx > rs_idx
+
+
+class TestFdServiceLimits:
+    """Unit tests for the FdServiceLimits value class (RLIMIT_NOFILE ceiling).
+
+    The service manager bakes these limits BEFORE spawning quarryd because it can
+    raise the hard limit above the 256 a fresh launchd bootstrap inherits — the
+    root cause of ``FD headroom: 9/256`` (quarry-fnzh).  FdEnvelope (DES-046) then
+    lifts the soft limit off this ceiling at runtime instead of clamping to 256.
+    """
+
+    def test_from_settings_default_soft_and_hard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default: soft = 8192 (Settings.fd_limit), hard = _SERVICE_FD_HARD (65536)."""
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 8192
+        assert limits.hard == _SERVICE_FD_HARD == 65536
+
+    def test_soft_follows_fd_limit_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_FD_LIMIT raises the baked soft floor; the hard ceiling is fixed."""
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "16384")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 16384
+        assert limits.hard == 65536
+
+    def test_soft_clamped_to_hard(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A QUARRY_FD_LIMIT above the hard ceiling clamps — soft may not exceed hard.
+
+        A plist/unit whose soft limit exceeds its hard limit is rejected by the
+        service manager, so the class clamps rather than emit an invalid file.
+        """
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "999999")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 65536
+        assert limits.hard == 65536
+
+    def test_launchd_fragment_carries_both_numberoffiles(self) -> None:
+        """The plist fragment names Soft/Hard ResourceLimits with NumberOfFiles."""
+        fragment = FdServiceLimits(soft=8192, hard=65536).launchd_fragment()
+        assert "<key>SoftResourceLimits</key>" in fragment
+        assert "<key>HardResourceLimits</key>" in fragment
+        assert fragment.count("<key>NumberOfFiles</key>") == 2
+        assert "<integer>8192</integer>" in fragment
+        assert "<integer>65536</integer>" in fragment
+
+    def test_systemd_directive_format(self) -> None:
+        """The systemd directive is ``LimitNOFILE=<soft>:<hard>``."""
+        assert (
+            FdServiceLimits(soft=8192, hard=65536).systemd_directive()
+            == "LimitNOFILE=8192:65536"
+        )
+
+
+class TestLaunchdPlistResourceLimits:
+    """_launchd_plist_content() must bake SoftResourceLimits + HardResourceLimits.
+
+    Root cause of the two prior failed attempts: a fresh launchd bootstrap inherits
+    hard=256 and a non-root FdEnvelope cannot raise its own hard limit, so it clamps
+    to 256 and ``quarry doctor`` shows ``FD headroom: 9/256``.  The service manager
+    sets the hard limit before spawn; these tests assert the generated plist both
+    PARSES (plistlib) and carries the expected NumberOfFiles limits.
+    """
+
+    @staticmethod
+    def _plist(tmp_path: Path) -> dict[str, object]:
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+        ):
+            content = _launchd_plist_content()
+        # A malformed resource-limits block would make the whole plist unparseable
+        # and launchd would silently refuse to load the agent.
+        parsed = plistlib.loads(content.encode())
+        assert isinstance(parsed, dict)
+        return parsed
+
+    def test_plist_parses_with_default_limits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        parsed = self._plist(tmp_path)
+        assert parsed["SoftResourceLimits"] == {"NumberOfFiles": 8192}
+        assert parsed["HardResourceLimits"] == {"NumberOfFiles": 65536}
+
+    def test_soft_limit_follows_fd_limit_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "16384")
+        monkeypatch.delenv("QUARRY_API_KEY", raising=False)
+        parsed = self._plist(tmp_path)
+        assert parsed["SoftResourceLimits"] == {"NumberOfFiles": 16384}
+        assert parsed["HardResourceLimits"] == {"NumberOfFiles": 65536}
+
+    def test_resource_limits_coexist_with_env_vars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fd-limits block must not corrupt the sibling EnvironmentVariables."""
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        monkeypatch.setenv("QUARRY_API_KEY", "k1")
+        parsed = self._plist(tmp_path)
+        assert parsed["SoftResourceLimits"] == {"NumberOfFiles": 8192}
+        env_vars = parsed["EnvironmentVariables"]
+        assert isinstance(env_vars, dict)
+        assert env_vars["QUARRY_API_KEY"] == "k1"
+        assert parsed["ProcessType"] == "Interactive"
+
+
+class TestSystemdUnitResourceLimits:
+    """_systemd_unit_content() must carry LimitNOFILE=<soft>:<hard> in [Service]."""
+
+    @staticmethod
+    def _unit(tmp_path: Path) -> str:
+        _make_local_bin_quarryd(tmp_path)
+        with (
+            patch("quarry.service.Path.home", return_value=tmp_path),
+            patch("quarry.service.TLS_DIR", tmp_path / "tls"),
+            patch("quarry.service._ENV_FILE", tmp_path / "quarry.env"),
+        ):
+            return _systemd_unit_content()
+
+    def test_unit_contains_default_limit_nofile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        assert "LimitNOFILE=8192:65536" in self._unit(tmp_path)
+
+    def test_limit_nofile_follows_fd_limit_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "16384")
+        assert "LimitNOFILE=16384:65536" in self._unit(tmp_path)
+
+    def test_limit_nofile_in_service_section(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LimitNOFILE must sit inside [Service], before the [Install] section."""
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        content = self._unit(tmp_path)
+        service_idx = content.index("[Service]")
+        install_idx = content.index("[Install]")
+        limit_idx = content.index("LimitNOFILE=")
+        assert service_idx < limit_idx < install_idx
 
 
 class TestServiceBackendProtocol:
