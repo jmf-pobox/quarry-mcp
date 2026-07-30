@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import sqlite3
@@ -29,6 +30,7 @@ from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
+from quarry.fd_headroom import FdHeadroom
 from quarry.results import SearchResult
 
 
@@ -149,6 +151,40 @@ class TestHealth:
     def test_cors_headers(self, client: TestClient) -> None:
         resp = client.get("/health", headers={"Origin": "http://localhost"})
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
+
+    def test_fd_populated_from_daemon_sample(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """/health reports the DAEMON's own fd headroom.
+
+        The handler samples ``FdHeadroom`` in the daemon process, so the field
+        is the resident daemon's descriptor state — the number doctor must read
+        — never a request-time sample taken in some other (CLI) process.
+        """
+        monkeypatch.setattr(
+            FdHeadroom, "sample", classmethod(lambda cls: FdHeadroom(42, 512))
+        )
+        assert client.get("/health").json()["fd"] == {"open_fds": 42, "soft_limit": 512}
+
+    def test_fd_null_when_sample_raises(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An EMFILE (or platform-absent) sample yields ``fd: null`` and a 200.
+
+        The fd scan itself needs a descriptor, so at real exhaustion the sample
+        raises — the health endpoint must degrade the field to ``None``, never
+        500 on the very condition this field exists to surface (bug-class-2).
+        """
+
+        def _raise(cls: type[FdHeadroom]) -> FdHeadroom:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(FdHeadroom, "sample", classmethod(_raise))
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["fd"] is None
+        assert data["status"] == "ok"
 
 
 class TestCaCertRoute:
