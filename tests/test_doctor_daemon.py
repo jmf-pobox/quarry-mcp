@@ -8,6 +8,7 @@ and the run dir are mocked.
 
 from __future__ import annotations
 
+import resource
 import ssl
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.fd_headroom import FdHeadroom
 
 
 @contextmanager
@@ -123,17 +125,112 @@ class TestServeToken:
 
 
 class TestHealthParsing:
-    def test_ready_body_is_ready(self) -> None:
-        assert DaemonDiagnostics._is_ready(b'{"state": "ready", "uptime": 1}') is True
+    def test_object_body_parses(self) -> None:
+        assert DaemonDiagnostics._parse_object(b'{"state": "ready", "uptime": 1}') == {
+            "state": "ready",
+            "uptime": 1,
+        }
 
-    def test_starting_body_is_not_ready(self) -> None:
-        assert DaemonDiagnostics._is_ready(b'{"state":"starting"}') is False
+    def test_non_json_body_is_none(self) -> None:
+        assert DaemonDiagnostics._parse_object(b"not json at all") is None
 
-    def test_non_json_body_is_not_ready(self) -> None:
-        assert DaemonDiagnostics._is_ready(b"not json at all") is False
+    def test_non_object_body_is_none(self) -> None:
+        assert DaemonDiagnostics._parse_object(b'["ready"]') is None
 
-    def test_non_object_body_is_not_ready(self) -> None:
-        assert DaemonDiagnostics._is_ready(b'["ready"]') is False
+
+class TestFdHeadroom:
+    """The FD-headroom check reports the DAEMON's headroom, read from /health."""
+
+    @staticmethod
+    def _ready_fd(open_fds: int, soft_limit: int) -> dict[str, object]:
+        return {
+            "state": "ready",
+            "fd": {"open_fds": open_fds, "soft_limit": soft_limit},
+        }
+
+    def test_reports_daemon_soft_limit_not_local_ulimit(self, tmp_path: Path) -> None:
+        # The daemon reports soft_limit 8192; the local process ulimit is
+        # whatever this test's shell set. A pass proves the number came from the
+        # daemon's /health, not a local getrlimit sample (the observability bug).
+        (tmp_path / "serve.port").write_text("8420")
+        local_soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        with (
+            _run_dir_at(tmp_path),
+            patch.object(
+                DaemonDiagnostics,
+                "_fetch_health",
+                return_value=self._ready_fd(100, 8192),
+            ),
+        ):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is True
+        assert "100/8192 fds" in result.message  # the DAEMON's soft limit drives it
+        if local_soft != 8192:
+            assert f"/{local_soft} fds" not in result.message
+
+    def test_never_samples_the_local_process(self, tmp_path: Path) -> None:
+        # A daemon-sourced check must NEVER touch the local sampler; a poisoned
+        # FdHeadroom.sample would blow up if the check fell back to it.
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path),
+            patch.object(
+                FdHeadroom,
+                "sample",
+                side_effect=AssertionError("fd_headroom sampled the local process"),
+            ),
+            patch.object(
+                DaemonDiagnostics,
+                "_fetch_health",
+                return_value=self._ready_fd(100, 8192),
+            ),
+        ):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is True
+
+    def test_unreachable_daemon_reports_unavailable(self, tmp_path: Path) -> None:
+        # No serve.port → daemon not running: degrade clearly, no local fallback.
+        with _run_dir_at(tmp_path):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "unavailable" in result.message
+        assert "not running" in result.message
+
+    def test_health_unreadable_reports_unavailable(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path),
+            patch.object(DaemonDiagnostics, "_fetch_health", return_value=None),
+        ):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "unavailable" in result.message
+
+    def test_daemon_reported_null_fd_degrades(self, tmp_path: Path) -> None:
+        # Daemon reachable but could not sample its own fds (fd: null).
+        (tmp_path / "serve.port").write_text("8420")
+        body: dict[str, object] = {"state": "ready", "fd": None}
+        with (
+            _run_dir_at(tmp_path),
+            patch.object(DaemonDiagnostics, "_fetch_health", return_value=body),
+        ):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "no fd headroom" in result.message
+
+    def test_low_headroom_warns(self, tmp_path: Path) -> None:
+        (tmp_path / "serve.port").write_text("8420")
+        with (
+            _run_dir_at(tmp_path),
+            patch.object(
+                DaemonDiagnostics,
+                "_fetch_health",
+                return_value=self._ready_fd(250, 256),
+            ),
+        ):
+            result = DaemonDiagnostics.fd_headroom()
+        assert result.passed is False
+        assert "over 80%" in result.message
 
 
 class TestProbeFailSoft:

@@ -25,7 +25,7 @@ from typing import Self, final
 # it is missing the sampler degrades exactly like a missing fd directory —
 # ``sample`` raises an errno-less ``OSError`` (callers report "unavailable") and
 # ``describe`` treats the limit as unbounded — instead of poisoning the import
-# chain (fd_headroom is imported by doctor_resources and fd_telemetry).
+# chain (fd_headroom is imported by fd_telemetry, doctor_daemon, and meta routes).
 resource: ModuleType | None
 try:
     resource = importlib.import_module("resource")

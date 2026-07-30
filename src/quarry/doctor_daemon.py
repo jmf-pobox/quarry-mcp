@@ -1,10 +1,16 @@
-"""Daemon-health doctor checks: quarryd reachability and the serve.token sidecar.
+"""Daemon-health doctor checks: quarryd reachability, serve.token, and fd headroom.
 
 Fail-closed loopback auth (:class:`quarry.client.ClientConfig`) tells operators to
 "Run 'quarry doctor'" when ``serve.token`` is missing, unreadable, or empty. These
 checks make that remediation real: they resolve the SAME run dir the client reads
 (the active database's, per :meth:`quarry.config.Settings.active_db`) and diagnose
 a token/daemon outage instead of pointing at a dead end.
+
+Descriptor headroom is likewise a property of the resident daemon — the only
+long-lived process that accumulates LanceDB reader handles and can hit EMFILE —
+so :meth:`DaemonDiagnostics.fd_headroom` reads the daemon's self-sampled ``fd``
+field off ``/health`` rather than sampling the short-lived CLI, whose limit is
+just the invoking shell's ``ulimit``.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from pathlib import Path
 from typing import final
 
 from quarry.config import Settings
+from quarry.fd_headroom import FdHeadroom
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
 
@@ -29,6 +36,10 @@ _TOKEN_MODE = 0o600
 # The daemon's pinned CA, written by ``quarry install`` (mirrors tls.TLS_DIR);
 # defined locally so this diagnostic never imports cryptography via quarry.tls.
 _CA_CERT_PATH = Path.home() / ".punt-labs" / "quarry" / "tls" / "ca.crt"
+# Reported when the daemon's fd headroom cannot be read: fd headroom is a
+# property of the resident daemon, so with no daemon there is nothing to sample
+# (never a local CLI fallback — that fallback is the observability bug itself).
+_FD_UNAVAILABLE = "daemon fd headroom unavailable — daemon not running"
 
 
 @final
@@ -102,6 +113,57 @@ class DaemonDiagnostics:
             )
         return result(passed=True, message=f"present, 0600 ({token_path})")
 
+    @classmethod
+    def fd_headroom(cls) -> CheckResult:
+        """Report the DAEMON's open-fd headroom, read from its ``/health``.
+
+        The resident daemon is the only long-lived process that accumulates
+        LanceDB reader descriptors and can hit ``EMFILE``, so its headroom — not
+        the short-lived CLI's shell ``ulimit`` — is what this check must surface.
+        Sampling locally would report the invoking shell's limit, meaningless for
+        the daemon; reading the daemon's self-sampled ``fd`` field is the fix.
+        Degrade to a clear advisory when the daemon is unreachable or reported no
+        fd headroom; never fall back to a local sample — that fallback IS the bug.
+        """
+        result = partial(CheckResult, name="FD headroom", required=False)
+        try:
+            port = cls._run_dir().port_file.read()
+        except (OSError, ValueError):
+            return result(passed=False, message=_FD_UNAVAILABLE)
+        body = cls._fetch_health(port)
+        if body is None:
+            return result(passed=False, message=_FD_UNAVAILABLE)
+        headroom = cls._fd_from_health(body)
+        if headroom is None:
+            return result(
+                passed=False,
+                message="daemon reachable but reported no fd headroom",
+            )
+        if headroom.is_low:
+            return result(
+                passed=False,
+                message=f"daemon {headroom.describe()} — over 80%, "
+                "risk of descriptor exhaustion",
+            )
+        return result(passed=True, message=f"daemon {headroom.describe()}")
+
+    @staticmethod
+    def _fd_from_health(body: dict[str, object]) -> FdHeadroom | None:
+        """Build the daemon's ``FdHeadroom`` from the ``/health`` ``fd`` field.
+
+        Returns ``None`` — the documented "no headroom to render" signal — when
+        the daemon reported ``fd: null`` (it could not sample its own
+        descriptors) or the field is malformed on the wire boundary.
+        """
+        fd = body.get("fd")
+        if not isinstance(fd, dict):
+            return None
+        open_fds = fd.get("open_fds")
+        soft_limit = fd.get("soft_limit")
+        if not isinstance(open_fds, int) or not isinstance(soft_limit, int):
+            return None
+        return FdHeadroom(open_fds=open_fds, soft_limit=soft_limit)
+
     @staticmethod
     def _run_dir() -> RunDir:
         """The active database's run dir — the SAME one ClientConfig reads.
@@ -115,16 +177,25 @@ class DaemonDiagnostics:
 
     @classmethod
     def _probe_health(cls, port: int) -> bool:
-        """Probe ``/health`` for ``state == "ready"``, over HTTPS then HTTP.
+        """Return True iff ``/health`` reports ``state == "ready"``."""
+        body = cls._fetch_health(port)
+        return body is not None and body.get("state") == "ready"
 
-        A managed daemon serves ``--tls``; a bare ``quarryd`` (no ``--tls``)
-        serves plaintext. Try HTTPS first (verify against the pinned CA when
-        present, else skip verification — a loopback liveness check, not a
-        security boundary; mirrors install.sh's ``--cacert`` gate and its ``-k``
-        fallback). On a TLS handshake failure (``ssl.SSLError``, e.g. plaintext
+    @classmethod
+    def _fetch_health(cls, port: int) -> dict[str, object] | None:
+        """GET ``/health`` over HTTPS then HTTP; return the parsed object or None.
+
+        The single daemon-health read that both :meth:`reachability` and
+        :meth:`fd_headroom` consume, so the two checks never drift into separate
+        probes (bug-class-3). A managed daemon serves ``--tls``; a bare
+        ``quarryd`` (no ``--tls``) serves plaintext. Try HTTPS first (verify
+        against the pinned CA when present, else skip verification — a loopback
+        liveness check, not a security boundary; mirrors install.sh's ``--cacert``
+        gate and its ``-k`` fallback). On a TLS handshake failure (plaintext
         behind https / wrong-version-number), fall back to plain HTTP so a
-        plaintext daemon still reports ready. Fail soft: a refused connection is
-        not-ready, never a raise.
+        plaintext daemon still answers. Returns ``None`` — the documented
+        not-reachable signal — on a refused/broken connection, a non-200, or a
+        non-object body, so callers render one degraded state.
         """
         https = http.client.HTTPSConnection(
             _HEALTH_HOST,
@@ -133,34 +204,34 @@ class DaemonDiagnostics:
             timeout=_PROBE_TIMEOUT_SECONDS,
         )
         try:
-            return cls._probe_conn(https)
+            return cls._read_health(https)
         except ssl.SSLError:
             # Plaintext daemon behind an HTTPS probe — retry over HTTP.
             http_conn = http.client.HTTPConnection(
                 _HEALTH_HOST, port, timeout=_PROBE_TIMEOUT_SECONDS
             )
-            return cls._probe_conn(http_conn)
+            return cls._read_health(http_conn)
 
     @classmethod
-    def _probe_conn(cls, conn: http.client.HTTPConnection) -> bool:
-        """GET ``/health`` on *conn*; True iff a 200 body reports ``ready``.
+    def _read_health(cls, conn: http.client.HTTPConnection) -> dict[str, object] | None:
+        """GET ``/health`` on *conn*; return the parsed JSON object or None.
 
-        Fail soft on a refused/broken connection (not-ready), but let an
-        ``ssl.SSLError`` propagate so :meth:`_probe_health` can retry over HTTP.
+        Fail soft on a refused/broken connection (``None``), but let an
+        ``ssl.SSLError`` propagate so :meth:`_fetch_health` can retry over HTTP.
         """
         try:
             conn.request("GET", "/health")
             response = conn.getresponse()
             if response.status != 200:
-                return False
+                return None
             body = response.read()
         except (OSError, http.client.HTTPException) as exc:
             if isinstance(exc, ssl.SSLError):
                 raise  # a TLS handshake failure: let the HTTP fallback retry
-            return False
+            return None
         finally:
             conn.close()
-        return cls._is_ready(body)
+        return cls._parse_object(body)
 
     @staticmethod
     def _ssl_context() -> ssl.SSLContext:
@@ -184,10 +255,10 @@ class DaemonDiagnostics:
         return ctx
 
     @staticmethod
-    def _is_ready(body: bytes) -> bool:
-        """True iff the ``/health`` JSON body reports ``state == "ready"``."""
+    def _parse_object(body: bytes) -> dict[str, object] | None:
+        """Return the ``/health`` JSON body as a dict, or None if not an object."""
         try:
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):
-            return False
-        return isinstance(data, dict) and data.get("state") == "ready"
+            return None
+        return data if isinstance(data, dict) else None
