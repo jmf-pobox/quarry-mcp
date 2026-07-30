@@ -965,7 +965,7 @@ wheels = [
 
 [[package]]
 name = "lancedb"
-version = "0.29.1"
+version = "0.36.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecation" },
@@ -977,12 +977,10 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/7d/1031d4fabf51fd8b6cfe47cfccf8d2cbe3d4709d248cd08c78a99ce97385/lancedb-0.29.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:4a9f8f4d03ca2127d6e0b72728b2cc09ae7bfc8ea7b14ab37fc09bfdd1f03f73", size = 42340080, upload-time = "2026-02-07T00:51:24.38Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/44/25f20890fd4cc1588bea4974be0da2921421a9e22291cfb6118690eefe37/lancedb-0.29.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7c2477e898762324314a6a3be902c64ea5a3f7457720d4ec235e65e6ab3170f7", size = 44151522, upload-time = "2026-02-07T00:57:59.298Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/6a/bbdeb1dea91bbf2c613ca991a2b76f29b598c1c46f17b42c81d052b4e726/lancedb-0.29.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6ba3d4fa4d7f0e9b00861349dcce13fb437d9e40462c48679df91dd587d13919", size = 47183673, upload-time = "2026-02-07T01:01:09.364Z" },
-    { url = "https://files.pythonhosted.org/packages/30/4f/014a1097c9b77b1883d9afca7872fa6d5cc5f890546af5939400c2aea971/lancedb-0.29.1-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a60143bdeef2390e5c07cb5335c1888cf322102540108e1281b8b6444b8eb7d1", size = 44169206, upload-time = "2026-02-07T00:57:12.096Z" },
-    { url = "https://files.pythonhosted.org/packages/65/a2/8f0c4978df7c5ec7e8e813f0488ac88beca51282cc58726babae51ab6d00/lancedb-0.29.1-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1208a4c825ba51fd61e285b0fd179976fb035f0a0838acde1022d45b2c171b30", size = 47222807, upload-time = "2026-02-07T01:03:25.117Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/3f/bb3ec72aa32e77a132ba17edccaaa6edc0e69c16d8781a5985732920e71c/lancedb-0.29.1-cp39-abi3-win_amd64.whl", hash = "sha256:f122263c074c12cc4e716423a29fe2bc7bf574ee958c4df6099b1ed6b47a35ea", size = 52031064, upload-time = "2026-02-07T01:28:28.572Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/49/1f5c136e3ce845879ff9e326c54633b64bb4229c1b458996456be279f93b/lancedb-0.36.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:20c382a7c4e86386d4c26ef35068db8871b6c9f43ec5c581391f926f5346ed2b", size = 57254441, upload-time = "2026-07-29T20:15:32.868Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/7e/97a836881829f960925261bd5429d1d6e1e90cb5645f85a0355569fb4b40/lancedb-0.36.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ac434374c49e4a642190855fb3940591637efd4af4487c67ee28bd534abf2d6e", size = 60493819, upload-time = "2026-07-29T20:15:37.933Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/1f/c1e2015bdc67b2f7d28d7efb5dd9911ecefe910c0ef11ce691a89d72fa52/lancedb-0.36.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e20bb817346a7db30212c7f67f623ee21d096a1f52cfe6c8dfc4c911b515480e", size = 63614803, upload-time = "2026-07-29T20:15:43.658Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/e7/67af08fd25e6ac6c5819a8d7f6c345bd036a512725b035475408e42b6475/lancedb-0.36.0-cp39-abi3-win_amd64.whl", hash = "sha256:5e2b5e42f34329c07cd1a9b0cb341609602dd5fe29b088c7537c84662444d52c", size = 69371272, upload-time = "2026-07-29T20:15:47.836Z" },
 ]
 
 [[package]]
