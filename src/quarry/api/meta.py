@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FdHealth(BaseModel):
@@ -12,8 +12,8 @@ class FdHealth(BaseModel):
     state — the number a health check must report, never the short-lived CLI's.
     """
 
-    open_fds: int
-    soft_limit: int
+    open_fds: int = Field(ge=0)
+    soft_limit: int = Field(gt=0)
 
 
 class HealthResponse(BaseModel):

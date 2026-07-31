@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from quarry.api.meta import FdHealth
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.fd_headroom import FdHeadroom
 
@@ -294,3 +295,46 @@ class TestProbeTransportFallback:
 
         with patch("quarry.doctor_daemon.http.client.HTTPSConnection", _refused):
             assert DaemonDiagnostics._probe_health(8420) is False
+
+
+class TestFdWireContract:
+    """FdHealth is the single owner of the fd wire shape (bug-class-3).
+
+    The daemon serializes an ``FdHealth``; doctor parses the same model back, so
+    a field added to the contract cannot drift between the two hand-sites.
+    """
+
+    def test_producer_shape_round_trips_through_doctor(self) -> None:
+        # Exactly what the /health route emits: FdHealth(...).model_dump().
+        wire = FdHealth(open_fds=100, soft_limit=8192).model_dump()
+        headroom = DaemonDiagnostics._fd_from_health({"fd": wire})
+        assert headroom == FdHeadroom(open_fds=100, soft_limit=8192)
+
+    def test_null_fd_degrades_to_none(self) -> None:
+        assert DaemonDiagnostics._fd_from_health({"fd": None}) is None
+
+    def test_missing_fd_key_degrades_to_none(self) -> None:
+        assert DaemonDiagnostics._fd_from_health({"state": "ready"}) is None
+
+    def test_non_object_fd_degrades_to_none(self) -> None:
+        # A string where the object is expected fails validation → None, no raise.
+        assert DaemonDiagnostics._fd_from_health({"fd": "nope"}) is None
+
+    def test_nonpositive_soft_limit_rejected(self) -> None:
+        # gt=0 on FdHealth.soft_limit stops a zero/negative limit from
+        # deserializing and reaching FdHeadroom.utilization's divide.
+        zero = DaemonDiagnostics._fd_from_health(
+            {"fd": {"open_fds": 1, "soft_limit": 0}}
+        )
+        assert zero is None
+        neg = DaemonDiagnostics._fd_from_health(
+            {"fd": {"open_fds": 1, "soft_limit": -5}}
+        )
+        assert neg is None
+
+    def test_negative_open_fds_rejected(self) -> None:
+        # ge=0 on FdHealth.open_fds rejects a negative count on the wire.
+        result = DaemonDiagnostics._fd_from_health(
+            {"fd": {"open_fds": -1, "soft_limit": 8192}}
+        )
+        assert result is None

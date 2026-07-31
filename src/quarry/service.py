@@ -75,9 +75,11 @@ class FdServiceLimits:
     it — unlike the non-root daemon — can raise the hard limit above the 256 a fresh
     launchd bootstrap inherits.  The hard ceiling is fixed and generous
     (``_SERVICE_FD_HARD``); the soft is the configured target (``Settings.fd_limit``,
-    ``QUARRY_FD_LIMIT``-overridable), floored BELOW at the safe default
+    ``QUARRY_FD_LIMIT``-overridable), floored UNCONDITIONALLY at the safe default
     (``DEFAULT_FD_LIMIT``) so the override can only RAISE it, and capped ABOVE at the
-    hard ceiling so the file stays valid (a soft above the hard is rejected).
+    hard ceiling so the file stays valid (a soft above the hard is rejected).  The
+    constructor rejects a ``hard`` below the floor — clamping against a too-low
+    ceiling would silently re-admit a soft below ``DEFAULT_FD_LIMIT``, defeating it.
 
     ``QUARRY_FD_LIMIT`` is applied at INSTALL time, not at runtime: ``quarry install``
     bakes the soft limit into the plist ``SoftResourceLimits`` / systemd
@@ -95,11 +97,17 @@ class FdServiceLimits:
     _hard: int
 
     def __new__(cls, *, soft: int, hard: int) -> Self:
+        if hard < DEFAULT_FD_LIMIT:
+            msg = (
+                f"hard fd ceiling {hard} is below the safe default "
+                f"{DEFAULT_FD_LIMIT} — the soft floor could not hold"
+            )
+            raise ValueError(msg)
         self = super().__new__(cls)
-        # Floor BELOW to the safe default and cap ABOVE to the hard ceiling, so
-        # QUARRY_FD_LIMIT may only RAISE the soft limit — never lower it into the
-        # EMFILE range (config._coerce_fd_limit accepts any positive int, e.g. 100)
-        # — and a soft above the hard is never emitted (an invalid plist/unit).
+        # Floor to the safe default and cap at the hard ceiling, so QUARRY_FD_LIMIT
+        # may only RAISE the soft limit — never lower it into the EMFILE range
+        # (config._coerce_fd_limit accepts any positive int, e.g. 100).  The guard
+        # above keeps the floor unconditional: max() always wins over a valid hard.
         self._soft = min(max(soft, DEFAULT_FD_LIMIT), hard)
         self._hard = hard
         return self

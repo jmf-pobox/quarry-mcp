@@ -23,6 +23,9 @@ from functools import partial
 from pathlib import Path
 from typing import final
 
+from pydantic import ValidationError
+
+from quarry.api.meta import FdHealth
 from quarry.config import Settings
 from quarry.fd_headroom import FdHeadroom
 from quarry.results import CheckResult
@@ -151,18 +154,15 @@ class DaemonDiagnostics:
     def _fd_from_health(body: dict[str, object]) -> FdHeadroom | None:
         """Build the daemon's ``FdHeadroom`` from the ``/health`` ``fd`` field.
 
-        Returns ``None`` — the documented "no headroom to render" signal — when
-        the daemon reported ``fd: null`` (it could not sample its own
-        descriptors) or the field is malformed on the wire boundary.
+        Validates the wire value through :class:`FdHealth` — the single owner of
+        the fd shape — returning ``None`` (the "no headroom to render" signal)
+        when the daemon reported ``fd: null`` or the field is malformed.
         """
-        fd = body.get("fd")
-        if not isinstance(fd, dict):
+        try:
+            health = FdHealth.model_validate(body.get("fd"))
+        except ValidationError:
             return None
-        open_fds = fd.get("open_fds")
-        soft_limit = fd.get("soft_limit")
-        if not isinstance(open_fds, int) or not isinstance(soft_limit, int):
-            return None
-        return FdHeadroom(open_fds=open_fds, soft_limit=soft_limit)
+        return FdHeadroom(open_fds=health.open_fds, soft_limit=health.soft_limit)
 
     @staticmethod
     def _run_dir() -> RunDir:

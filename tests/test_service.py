@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry.config import DEFAULT_PORT
+from quarry.config import DEFAULT_FD_LIMIT, DEFAULT_PORT
 from quarry.service import (
     _LABEL,
     _MALLOC_CONF,
@@ -1254,6 +1254,18 @@ class TestFdServiceLimits:
         limits = FdServiceLimits.from_settings()
         assert limits.soft == 30000
         assert limits.hard == 65536
+
+    def test_hard_below_default_raises(self) -> None:
+        """A hard ceiling under DEFAULT_FD_LIMIT is rejected at construction.
+
+        The keyword constructor is public.  With hard < DEFAULT_FD_LIMIT the
+        clamp ``min(max(soft, DEFAULT_FD_LIMIT), hard)`` collapses to hard,
+        silently re-admitting a soft below the EMFILE-safe floor.  Reject up
+        front (PY-CC-2) so the floor is genuinely unconditional, not just an
+        accident of the production hard=65536.
+        """
+        with pytest.raises(ValueError, match="below the safe default"):
+            FdServiceLimits(soft=100, hard=DEFAULT_FD_LIMIT - 1)
 
     def test_launchd_fragment_carries_both_numberoffiles(self) -> None:
         """The plist fragment names Soft/Hard ResourceLimits with NumberOfFiles."""

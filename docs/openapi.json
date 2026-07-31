@@ -228,10 +228,12 @@
         "description": "The daemon's open file descriptors against its soft ``RLIMIT_NOFILE``.\n\nSampled inside the daemon process, so it is the resident daemon's own fd\nstate \u2014 the number a health check must report, never the short-lived CLI's.",
         "properties": {
           "open_fds": {
+            "minimum": 0.0,
             "title": "Open Fds",
             "type": "integer"
           },
           "soft_limit": {
+            "exclusiveMinimum": 0.0,
             "title": "Soft Limit",
             "type": "integer"
           }
