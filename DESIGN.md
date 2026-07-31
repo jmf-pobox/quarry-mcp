@@ -2226,8 +2226,9 @@ addressed in DES-032; increases jemalloc retention (DES-027) and does not bound 
 `daemon.job_spool`, `shadow.sync`, and the fd-telemetry sampler itself; `quarry
 doctor` showed ~9/256 fd headroom. Two facts compound. First, **nothing raises the
 limit**: the daemon runs at whatever soft `RLIMIT_NOFILE` launchd/systemd hands it
-(256 on macOS by `launchctl limit maxfiles`), and the fd trio (`fd_headroom`,
-`fd_telemetry`, `doctor_resources`) only *measures* it — DES-032's `ThreadConfig`
+(256 on macOS by `launchctl limit maxfiles`), and the fd measurers (`fd_headroom`,
+`fd_telemetry`, and the doctor fd check — see the amendment) only *measured* it —
+DES-032's `ThreadConfig`
 enveloped CPU/threads but the fd side was never enveloped. Second, **the ceiling was
 sized for two connections**: the per-connection reader-recycler (DES-023/quarry-0dss)
 bounds *one* connection's descriptor growth, but post-DES-045 the daemon holds one
@@ -2281,4 +2282,50 @@ so prove-then-fix keeps `connection.py` a comment re-derivation. *Setting
 `LimitNOFILE` in the launchd plist / systemd unit only* — launchd's plist has no
 clean soft-limit knob beyond the 256 default and it would not be cross-platform; the
 in-process raise works identically on both and its never-lower floor still honors a
-higher unit-file value where one is set.
+higher unit-file value where one is set. **(This rejection was wrong — see the
+amendment below.)**
+
+### DES-046 amendment (quarry-fnzh): the in-process raise is not enough on launchd, and doctor was measuring the wrong process
+
+Two defects surfaced when 2.0.1 was smoke-tested on a fresh `quarry install`, and
+both are fixed here.
+
+**The in-process raise silently no-ops on a fresh launchd install.** DES-046's
+`FdEnvelope` is correct in isolation, but a freshly *bootstrapped* launchd user
+agent inherits a **hard** `RLIMIT_NOFILE` of 256 — and a non-root process cannot
+raise its own hard limit. So `FdEnvelope` clamps the soft limit to the 256 hard and
+lifts nothing; the daemon comes up exactly as descriptor-starved as before. (A
+`launchctl kickstart` of an *already-loaded* service inherits the user domain's high
+limit and masks this entirely, which is how the DES-046 demo was fooled into passing.)
+The rejected-alternative above was therefore wrong on two counts: the launchd plist
+*does* have a clean knob — `SoftResourceLimits`/`HardResourceLimits` with
+`NumberOfFiles` — and the service manager is the *only* actor that can raise the hard
+ceiling, because it sets limits before the process spawns.
+
+**Fix:** `service.py` now bakes the ceiling into the service definition — launchd
+`SoftResourceLimits`=`Settings.fd_limit` (default 8192, floored to `DEFAULT_FD_LIMIT`
+so `QUARRY_FD_LIMIT` can only *raise*, never lower into the EMFILE range) and
+`HardResourceLimits`=65536; systemd `LimitNOFILE=8192:65536`. `FdEnvelope` stays as
+the cross-platform floor and its never-lower guarantee. `QUARRY_FD_LIMIT` is applied
+at **install** time (baked into the service limits); changing it requires re-running
+`quarry install` — it is deliberately *not* in the daemon's environment, so a running
+daemon's `FdEnvelope` never reads a stale override.
+
+**`quarry doctor`'s fd-headroom check measured the CLI, never the daemon** — this is
+why the fd limit was unprovable for three rounds. `ResourceDiagnostics.fd_headroom`
+sampled `getrlimit`/`/proc/self/fd` of *the process running doctor* (the short-lived
+CLI, whose limit is just the invoking shell's `ulimit`). The "9/256" that drove this
+round was the operator's fresh shell, not the daemon. **Fix (Bug-class-3):** the
+daemon self-samples its own `FdHeadroom` in the `/health` handler (`fd: FdHealth` on
+`HealthResponse`), and doctor reads it through the *same* TLS-pinned `/health` probe
+`reachability()` uses — one reader, no drift, and no silent fallback to a local sample
+when the daemon is unreachable (it reports a clear degraded state instead). The dead
+CLI-local sampler `doctor_resources.py` is deleted (PL-PP-1: no dead second path).
+
+**Verification** is on the real fresh-bootstrap path — `quarry install` (regenerates
+the plist and re-spawns the daemon under it), then `quarry doctor` reads
+`FD headroom: daemon <open>/<limit>` sourced from the daemon, e.g. `daemon 232/10496`
+— the daemon's own number, not the shell's — with the plist carrying
+`SoftResourceLimits 8192` / `HardResourceLimits 65536`. Sibling to DES-032 (the
+service manager, not the process, owns the pre-spawn envelope where the process is
+powerless to set it).
