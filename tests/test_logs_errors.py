@@ -155,6 +155,16 @@ def test_unreadable_log_never_reports_a_false_clean(tmp_path: Path) -> None:
     exact failure this diagnostic exists to catch (CLAUDE.md bug class 2). The
     scan must surface the read failure, withhold the clean verdict, and still
     exit 0 (a diagnostic never gates).
+
+    This also guards the SUBSHELL-propagation fix. The verdict is driven solely
+    by the marker file the counting path (``count_signal``, run in a ``$()``
+    subshell) appends to on a grep read failure — NOT by the glob-time
+    readability count, which only phrases the message. If that failure signal
+    stopped crossing the subshell boundary (e.g. reverting to a plain
+    ``scan_failed=1`` shell variable, lost when the subshell exits), the marker
+    would stay empty, the verdict would fall through to 'no errors found', and
+    this test would fail. The per-pattern warning on stderr proves the counting
+    path itself detected the failure.
     """
     if os.geteuid() == 0:
         pytest.skip("root bypasses chmod 000, so the unreadable path can't be forced")
@@ -169,8 +179,31 @@ def test_unreadable_log_never_reports_a_false_clean(tmp_path: Path) -> None:
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "no errors found" not in result.stdout, "must not report a false clean"
     assert "log scan incomplete" in result.stdout, "the incomplete scan is surfaced"
-    combined = result.stdout + result.stderr
-    assert "unreadable" in combined or "scan failed" in combined
+    # The counting path (in its subshell) detected the read failure and named
+    # the pattern — proof the signal originated there, not only at the glob
+    # pre-check, and reached the parent verdict via the marker file.
+    assert "log scan failed (grep exit" in result.stderr
+
+
+def test_recent_lines_streamed_and_tailed_on_large_log(tmp_path: Path) -> None:
+    """The recent-lines block streams grep into tail and shows only the last N.
+
+    ``recent_lines`` pipes grep straight into ``tail`` rather than buffering the
+    whole match set into a variable — on a real daemon log the matches run to
+    thousands of lines. This exercises that path with a large synthetic log and
+    asserts only the last ``LOG_LINES`` matches survive, in order, exit 0.
+    """
+    logs = tmp_path / "logs"
+    lines = "".join(f"ERROR event number {n}\n" for n in range(2000))
+    _write_log(logs, "quarry-stderr.log", lines)
+    result = _run(logs, log_lines="5")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "2000 error lines found" in result.stdout
+    # Only the final 5 matches appear in the recent-lines block.
+    assert "ERROR event number 1999" in result.stdout
+    assert "ERROR event number 1995" in result.stdout
+    assert "ERROR event number 1994" not in result.stdout
+    assert "ERROR event number 0" not in result.stdout
 
 
 def _run_tail(

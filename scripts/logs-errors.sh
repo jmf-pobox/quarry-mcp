@@ -66,11 +66,20 @@ if [ "${#files[@]}" -eq 0 ]; then
     exit 0
 fi
 
-# Set the moment any log proves unreadable (here) or a grep read fails mid-scan
-# (below). It gates the clean verdict: results may undercount, so the scan must
-# never report "no errors found" once this is set.
-scan_failed=0
-[ "$unreadable" -gt 0 ] && scan_failed=1
+# Record read failures on the FILESYSTEM, not in a shell variable. The greps
+# below run inside `$()` command substitutions (and one inside a pipe), each a
+# SUBSHELL — a variable assigned there never reaches this parent scope, so an
+# earlier `scan_failed=1` set in count_signal was silently lost and a mid-scan
+# grep read failure still printed "no errors found" (the false clean this tool
+# must never emit). A grep that fails to read a log instead appends a line to
+# this marker; the parent reads it after all scans (`-s`) to gate the verdict.
+# mktemp keeps it private and race-free; the EXIT trap removes it (the script
+# always exits 0, so the trap always fires). The glob-time `unreadable` count
+# above is kept only to phrase the message — the marker is the sole gate, so a
+# file that is readable at grep time is never falsely flagged, and a file that
+# fails only mid-scan still is.
+scan_status=$(mktemp "${TMPDIR:-/tmp}/quarry-logscan.XXXXXX")
+trap 'rm -f "$scan_status"' EXIT
 
 # Error signals to summarize, as parallel label/pattern arrays (Bash 3.2, the
 # macOS default, has no associative arrays). Patterns are matched
@@ -109,25 +118,28 @@ for p in "${patterns[@]}"; do
     fi
 done
 
-# Classify a grep exit code. Exit 1 is benign (no line matched); exit >1 is a
-# REAL read failure — an unreadable file, an IO error, or a bad regex — which
-# `|| true` used to flatten into the no-match path, so a run over logs it could
-# not read printed "no errors found" and exited 0 (a false clean, the exact
-# failure this tool exists to catch). On a real failure, warn and set
-# scan_failed so the clean verdict is withheld; a partial count from the
-# readable files is still emitted (better an undercount, clearly flagged, than
-# a lie).
+# Classify a grep (or grep|tail pipeline) exit code. Exit 1 is benign (no line
+# matched). Exit 141 is SIGPIPE — a downstream `tail` closed the pipe early, not
+# a read error. Anything else >1 is a REAL read failure (an unreadable file or
+# an IO error), which `|| true` used to flatten into the no-match path so a run
+# over logs it could not read printed "no errors found" and exited 0 (a false
+# clean, the exact failure this tool exists to catch). On a real failure, warn
+# (naming the pattern) and append to the parent-visible marker so the clean
+# verdict is withheld; a partial count from the readable files is still emitted
+# (better an undercount, clearly flagged, than a lie). Runs inside subshells, so
+# the marker file — not a shell variable — is how the signal reaches the parent.
 check_grep_rc() {
-    if [ "$1" -gt 1 ]; then
+    if [ "$1" -gt 1 ] && [ "$1" -ne 141 ]; then
         echo "warning: log scan failed (grep exit $1) for pattern '$2'" >&2
-        scan_failed=1
+        echo failed >>"$scan_status"
     fi
 }
 
 # Sum per-file line counts for a pattern across all log files. `grep -c` prints
-# one `count` per file (filenames suppressed with -h); awk sums them. grep's
-# exit code is captured (`|| rc=$?`) and classified rather than discarded, so a
-# read failure is surfaced instead of masked.
+# one `count` per file (filenames suppressed with -h); awk sums them. Its output
+# is tiny (one integer per file), so capturing it is cheap. grep's exit code is
+# captured (`|| rc=$?`) and classified rather than discarded, so a read failure
+# is surfaced instead of masked.
 count_signal() {
     local out rc=0
     out=$(grep -hicE "$1" -- "${files[@]}") || rc=$?
@@ -135,13 +147,17 @@ count_signal() {
     printf '%s\n' "$out" | awk '{ s += $1 } END { print s + 0 }'
 }
 
-# The most recent matching lines across all logs. Same rc classification: a
-# read failure here is flagged, not silently dropped from the tail.
+# The most recent matching lines across all logs. grep is STREAMED straight into
+# `tail` rather than captured into a variable first — on a real daemon log the
+# match set runs to thousands of lines, and buffering all of them only to keep
+# the last `log_lines` wastes memory. Under `set -o pipefail` the pipeline's exit
+# code is the rightmost non-zero, so a grep read failure (exit 2) still surfaces
+# through the pipe as the captured `rc`; check_grep_rc treats 141 (tail closing
+# the pipe → grep SIGPIPE) as benign so it is never misread as a read failure.
 recent_lines() {
-    local out rc=0
-    out=$(grep -hiE "$combined" -- "${files[@]}") || rc=$?
+    local rc=0
+    grep -hiE "$combined" -- "${files[@]}" | tail -n "$log_lines" || rc=$?
     check_grep_rc "$rc" "$combined"
-    printf '%s\n' "$out" | tail -n "$log_lines"
 }
 
 names=""
@@ -163,10 +179,15 @@ echo
 
 total=$(count_signal "$combined")
 
-# A read failure means the counts above are a floor, not the truth — so the
+# Fold every read failure the subshells recorded into a parent-visible verdict.
+# A non-empty marker means at least one grep could not read a log during the
+# summary loop or the total, so the counts are a floor, not the truth — the
 # clean verdict is withheld regardless of the total. Report the incomplete scan;
 # name the count of files we could not open when we know it (unreadable at glob
 # time), else report the generic mid-scan read failure surfaced by grep's rc.
+scan_failed=0
+[ -s "$scan_status" ] && scan_failed=1
+
 if [ "$scan_failed" -eq 1 ]; then
     if [ "$unreadable" -gt 0 ]; then
         echo "log scan incomplete: $unreadable file(s) unreadable — results may undercount"
