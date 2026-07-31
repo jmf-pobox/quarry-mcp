@@ -45,6 +45,16 @@ if [ ! -d "$log_dir" ]; then
     exit 0
 fi
 
+# The dir exists but cannot be read/searched (mode 000): the `*.log` glob below
+# expands to nothing and falls through to "no daemon logs" — a FALSE absent, the
+# same misleading-fallback class as an unreadable file (bug class 2). Surface it
+# distinctly on stderr and exit 0 (a diagnostic never gates), never claiming the
+# logs absent when the truth is we could not read the directory.
+if [ ! -r "$log_dir" ] || [ ! -x "$log_dir" ]; then
+    echo "daemon log dir present but unreadable: $log_dir" >&2
+    exit 0
+fi
+
 # Collect the primary *.log files. The glob deliberately excludes rotated
 # quarry.log.1..N (they match *.log.N, not *.log); the live files carry the
 # current state. `[ -f ]` guards the literal-glob case when nothing matches,

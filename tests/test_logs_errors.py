@@ -185,6 +185,29 @@ def test_unreadable_log_never_reports_a_false_clean(tmp_path: Path) -> None:
     assert "log scan failed (grep exit" in result.stderr
 
 
+def test_unreadable_log_dir_is_not_reported_absent(tmp_path: Path) -> None:
+    """An unreadable log DIR must NOT be reported as 'no daemon logs'.
+
+    A dir with mode 000 defeats the ``*.log`` glob — it expands to the literal
+    pattern, every ``[ -f ]`` guard fails, and the old code fell through to
+    ``no daemon logs at <dir>``, a FALSE absent (the same misleading-fallback
+    class as an unreadable file, bug class 2). The scan must surface the
+    unreadable dir distinctly and still exit 0 — a diagnostic never gates.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses chmod 000, so the unreadable path can't be forced")
+    logs = tmp_path / "logs"
+    _write_log(logs, "quarry-stderr.log", FIXTURE_STDERR)
+    logs.chmod(0o000)
+    try:
+        result = _run(logs)
+    finally:
+        logs.chmod(0o755)  # restore so tmp_path cleanup can remove it
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "no daemon logs" not in result.stdout, "must not claim absent"
+    assert "present but unreadable" in result.stderr, "the unreadable dir is surfaced"
+
+
 def test_recent_lines_streamed_and_tailed_on_large_log(tmp_path: Path) -> None:
     """The recent-lines block streams grep into tail and shows only the last N.
 
@@ -240,6 +263,34 @@ def test_logs_tail_missing_log_is_graceful(tmp_path: Path) -> None:
     result = _run_tail(logs)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "no daemon stderr log at" in result.stdout
+
+
+def test_logs_tail_unreadable_log_is_not_reported_absent(tmp_path: Path) -> None:
+    """A present-but-unreadable stderr log must NOT be reported as absent.
+
+    ``[ -r ]`` is false for BOTH an absent file and a present-but-unreadable one
+    (chmod 000). The old single readability check collapsed the two, printing
+    "no daemon stderr log" for a log that is present — mis-reporting a read
+    failure as absence (the misleading-fallback class already closed in
+    logs-errors.sh, bug class 2). The three-state check must surface the
+    unreadable log distinctly on stderr, never claim it is absent, never print
+    its (unread) contents, and still exit 0 — a diagnostic never gates.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses chmod 000, so the unreadable path can't be forced")
+    logs = tmp_path / "logs"
+    _write_log(logs, "quarry-stderr.log", "secret daemon stderr line\n")
+    target = logs / "quarry-stderr.log"
+    target.chmod(0o000)
+    try:
+        result = _run_tail(logs)
+    finally:
+        target.chmod(0o644)  # restore so tmp_path cleanup can remove it
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "no daemon stderr log" not in result.stdout, "must not claim absent"
+    assert "secret daemon stderr line" not in result.stdout, "unread log not printed"
+    assert "present but unreadable" in result.stderr, "the unreadable log is surfaced"
+    assert str(target) in result.stderr, "the path of the unreadable log is named"
 
 
 def test_logs_tail_non_integer_log_lines_does_not_hide_present_log(

@@ -2,9 +2,12 @@
 # Tail the most recent lines of the quarry daemon stderr log.
 #
 # The convenience companion to logs-errors.sh: a raw, unfiltered window on the
-# freshest daemon stderr. Graceful in the two ways logs-errors.sh is, so the
-# two behave symmetrically:
+# freshest daemon stderr. Graceful in the ways logs-errors.sh is, so the two
+# behave symmetrically:
 #   - the log absent is the normal pre-daemon state (report it, exit 0);
+#   - a present-but-unreadable log is a READ FAILURE, not absence: it is
+#     surfaced distinctly on stderr and never mis-reported as absent (the
+#     misleading-fallback class, bug class 2);
 #   - a non-integer LOG_LINES falls back to 40 with a warning. Without this
 #     guard an unguarded `tail -n <junk>` fails, and the old `|| echo` fallback
 #     then LIED "no daemon stderr log" even when the log was present — the exact
@@ -35,10 +38,19 @@ esac
 
 stderr_log="$log_dir/quarry-stderr.log"
 
-# Distinguish "log absent/unreadable" (a clear message) from a bad LOG_LINES
-# (handled above): a present log is never mis-reported as missing.
-if [ ! -r "$stderr_log" ]; then
+# Three states, never collapsed: `[ -r ]` alone is false for BOTH an absent log
+# and a present-but-unreadable one, so testing only readability mis-reports a
+# present log as missing (the misleading-fallback class, bug class 2).
+#   (a) absent               → the normal pre-daemon state; report it, exit 0.
+#   (b) present, unreadable  → a READ FAILURE; say so on stderr, never claim
+#                              absence; exit 0 (a diagnostic never gates).
+#   (c) present, readable    → tail it.
+if [ ! -e "$stderr_log" ]; then
     echo "no daemon stderr log at $stderr_log"
+    exit 0
+fi
+if [ ! -r "$stderr_log" ]; then
+    echo "daemon stderr log present but unreadable: $stderr_log" >&2
     exit 0
 fi
 
