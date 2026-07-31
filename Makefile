@@ -168,8 +168,7 @@ logs-errors: ## Scan daemon logs for errors/failures (diagnostic, always exits 0
 	@LOG_DIR="$(LOG_DIR)" LOG_LINES="$(LOG_LINES)" bash scripts/logs-errors.sh
 
 logs-tail: ## Tail the most recent lines of the daemon stderr log
-	@tail -n $(LOG_LINES) "$(LOG_DIR)/quarry-stderr.log" 2>/dev/null \
-		|| echo "no daemon stderr log at $(LOG_DIR)/quarry-stderr.log"
+	@LOG_DIR="$(LOG_DIR)" LOG_LINES="$(LOG_LINES)" bash scripts/logs-tail.sh
 
 # Sync eval alongside dev so running the harness never uninstalls the toolchain.
 eval: ## Phase-1 retrieval eval harness — per-bucket MRR/success + pollution

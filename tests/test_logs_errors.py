@@ -1,4 +1,5 @@
-"""Tests for ``scripts/logs-errors.sh`` — the daemon-log error diagnostic.
+"""Tests for the daemon-log diagnostics ``scripts/logs-errors.sh`` and
+``scripts/logs-tail.sh``.
 
 The quarry daemon appends to ``~/.punt-labs/quarry/logs`` (quarry-stderr.log,
 quarry.log, quarry-stdout.log). Nothing surfaced the errors accruing there —
@@ -8,9 +9,10 @@ for weeks. ``make logs-errors`` (this script) closes that blind spot.
 
 Per CLAUDE.md Class 5 / testing rule 6, shell logic gets a mock/fixture test,
 not just shellcheck (shellcheck coverage for every ``scripts/*.sh`` lives in
-``test_build_scripts.py``). These drive the script against a synthetic fixture
-log dir and assert it (a) reports the known errors, (b) always exits 0 — it is a
-diagnostic, not a gate — and (c) handles a missing or empty log dir gracefully.
+``test_build_scripts.py``). These drive the scripts against a synthetic fixture
+log dir and assert they (a) report the known errors, (b) always exit 0 — a
+diagnostic, not a gate — (c) handle a missing or empty log dir gracefully, and
+(d) never report a false clean when a log is unreadable (bug class 2).
 """
 
 from __future__ import annotations
@@ -19,8 +21,11 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOGS_ERRORS = REPO_ROOT / "scripts" / "logs-errors.sh"
+LOGS_TAIL = REPO_ROOT / "scripts" / "logs-tail.sh"
 
 # A synthetic stderr log carrying two of the real signals the daemon emits: the
 # broken-watch line (the incident that motivated the target) and the historical
@@ -139,3 +144,84 @@ def test_rotated_logs_are_excluded(tmp_path: Path) -> None:
     result = _run(logs)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     assert "no errors found" in result.stdout
+
+
+def test_unreadable_log_never_reports_a_false_clean(tmp_path: Path) -> None:
+    """An unreadable ``*.log`` must NOT yield a false 'no errors found'.
+
+    grep exits 2 on a permission/IO read failure. The old ``|| true`` flattened
+    that into the benign no-match path, so the tool printed 'no errors found'
+    and exited 0 when it could not actually read the logs — a false clean, the
+    exact failure this diagnostic exists to catch (CLAUDE.md bug class 2). The
+    scan must surface the read failure, withhold the clean verdict, and still
+    exit 0 (a diagnostic never gates).
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses chmod 000, so the unreadable path can't be forced")
+    logs = tmp_path / "logs"
+    _write_log(logs, "quarry-stderr.log", FIXTURE_STDERR)
+    target = logs / "quarry-stderr.log"
+    target.chmod(0o000)
+    try:
+        result = _run(logs)
+    finally:
+        target.chmod(0o644)  # restore so tmp_path cleanup can remove it
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "no errors found" not in result.stdout, "must not report a false clean"
+    assert "log scan incomplete" in result.stdout, "the incomplete scan is surfaced"
+    combined = result.stdout + result.stderr
+    assert "unreadable" in combined or "scan failed" in combined
+
+
+def _run_tail(
+    log_dir: Path, log_lines: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Invoke ``logs-tail.sh`` against *log_dir* via the LOG_DIR override."""
+    env = {**os.environ, "LOG_DIR": str(log_dir)}
+    if log_lines is not None:
+        env["LOG_LINES"] = log_lines
+    return subprocess.run(
+        ["bash", str(LOGS_TAIL)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def test_logs_tail_prints_recent_lines(tmp_path: Path) -> None:
+    """logs-tail prints the last LOG_LINES lines of the stderr log."""
+    logs = tmp_path / "logs"
+    _write_log(logs, "quarry-stderr.log", "line1\nline2\nline3\n")
+    result = _run_tail(logs, log_lines="2")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "line2" in result.stdout
+    assert "line3" in result.stdout
+    assert "line1" not in result.stdout
+
+
+def test_logs_tail_missing_log_is_graceful(tmp_path: Path) -> None:
+    """An absent stderr log is reported plainly, exit 0 (bug class 2)."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    result = _run_tail(logs)
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "no daemon stderr log at" in result.stdout
+
+
+def test_logs_tail_non_integer_log_lines_does_not_hide_present_log(
+    tmp_path: Path,
+) -> None:
+    """A junk LOG_LINES falls back to 40 — a present log is never mis-reported.
+
+    Without the guard, ``tail -n junk`` fails and the old ``|| echo`` fallback
+    lied "no daemon stderr log" even though the log existed. The guard must warn
+    and still tail the present log.
+    """
+    logs = tmp_path / "logs"
+    _write_log(logs, "quarry-stderr.log", "hello world\n")
+    result = _run_tail(logs, log_lines="junk")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "is not a non-negative integer" in result.stderr
+    assert "hello world" in result.stdout
+    assert "no daemon stderr log" not in result.stdout

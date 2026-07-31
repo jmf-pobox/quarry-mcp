@@ -48,16 +48,29 @@ fi
 # Collect the primary *.log files. The glob deliberately excludes rotated
 # quarry.log.1..N (they match *.log.N, not *.log); the live files carry the
 # current state. `[ -f ]` guards the literal-glob case when nothing matches,
-# so an empty dir falls through to the no-logs branch below.
+# so an empty dir falls through to the no-logs branch below. Count the ones we
+# cannot read as we go: an unreadable log means every count below undercounts,
+# and a diagnostic that silently omits a file it cannot open would report the
+# logs "clean" when it is really just blind to them (bug class 2).
 files=()
+unreadable=0
 for f in "$log_dir"/*.log; do
-    [ -f "$f" ] && files+=("$f")
+    if [ -f "$f" ]; then
+        files+=("$f")
+        [ -r "$f" ] || unreadable=$((unreadable + 1))
+    fi
 done
 
 if [ "${#files[@]}" -eq 0 ]; then
     echo "no daemon logs at $log_dir"
     exit 0
 fi
+
+# Set the moment any log proves unreadable (here) or a grep read fails mid-scan
+# (below). It gates the clean verdict: results may undercount, so the scan must
+# never report "no errors found" once this is set.
+scan_failed=0
+[ "$unreadable" -gt 0 ] && scan_failed=1
 
 # Error signals to summarize, as parallel label/pattern arrays (Bash 3.2, the
 # macOS default, has no associative arrays). Patterns are matched
@@ -96,12 +109,39 @@ for p in "${patterns[@]}"; do
     fi
 done
 
+# Classify a grep exit code. Exit 1 is benign (no line matched); exit >1 is a
+# REAL read failure — an unreadable file, an IO error, or a bad regex — which
+# `|| true` used to flatten into the no-match path, so a run over logs it could
+# not read printed "no errors found" and exited 0 (a false clean, the exact
+# failure this tool exists to catch). On a real failure, warn and set
+# scan_failed so the clean verdict is withheld; a partial count from the
+# readable files is still emitted (better an undercount, clearly flagged, than
+# a lie).
+check_grep_rc() {
+    if [ "$1" -gt 1 ]; then
+        echo "warning: log scan failed (grep exit $1) for pattern '$2'" >&2
+        scan_failed=1
+    fi
+}
+
 # Sum per-file line counts for a pattern across all log files. `grep -c` prints
-# one `count` per file (filenames suppressed with -h); awk sums them. `|| true`
-# is load-bearing under `set -o pipefail`: grep exits non-zero when a file has
-# zero matches, which would otherwise abort the script.
+# one `count` per file (filenames suppressed with -h); awk sums them. grep's
+# exit code is captured (`|| rc=$?`) and classified rather than discarded, so a
+# read failure is surfaced instead of masked.
 count_signal() {
-    { grep -hicE "$1" -- "${files[@]}" || true; } | awk '{ s += $1 } END { print s + 0 }'
+    local out rc=0
+    out=$(grep -hicE "$1" -- "${files[@]}") || rc=$?
+    check_grep_rc "$rc" "$1"
+    printf '%s\n' "$out" | awk '{ s += $1 } END { print s + 0 }'
+}
+
+# The most recent matching lines across all logs. Same rc classification: a
+# read failure here is flagged, not silently dropped from the tail.
+recent_lines() {
+    local out rc=0
+    out=$(grep -hiE "$combined" -- "${files[@]}") || rc=$?
+    check_grep_rc "$rc" "$combined"
+    printf '%s\n' "$out" | tail -n "$log_lines"
 }
 
 names=""
@@ -121,14 +161,29 @@ while [ "$i" -lt "${#labels[@]}" ]; do
 done
 echo
 
-total=$({ grep -hicE "$combined" -- "${files[@]}" || true; } | awk '{ s += $1 } END { print s + 0 }')
+total=$(count_signal "$combined")
 
-if [ "$total" -eq 0 ]; then
-    echo "no errors found"
-    exit 0
+# A read failure means the counts above are a floor, not the truth — so the
+# clean verdict is withheld regardless of the total. Report the incomplete scan;
+# name the count of files we could not open when we know it (unreadable at glob
+# time), else report the generic mid-scan read failure surfaced by grep's rc.
+if [ "$scan_failed" -eq 1 ]; then
+    if [ "$unreadable" -gt 0 ]; then
+        echo "log scan incomplete: $unreadable file(s) unreadable — results may undercount"
+    else
+        echo "log scan incomplete: a log read failed — results may undercount"
+    fi
 fi
 
-echo "most recent $log_lines matching lines:"
-{ grep -hiE "$combined" -- "${files[@]}" || true; } | tail -n "$log_lines"
-echo
-echo "$total error lines found"
+if [ "$total" -gt 0 ]; then
+    echo "most recent $log_lines matching lines:"
+    recent_lines
+    echo
+    echo "$total error lines found"
+elif [ "$scan_failed" -eq 0 ]; then
+    echo "no errors found"
+fi
+
+# Always exit 0: this is a diagnostic, not a gate. Only the clean-verdict TEXT
+# is withheld on a read failure — the process still succeeds.
+exit 0
