@@ -284,8 +284,7 @@
           "uptime_seconds",
           "state",
           "api_version",
-          "quarry_version",
-          "fd"
+          "quarry_version"
         ],
         "title": "HealthResponse",
         "type": "object"
