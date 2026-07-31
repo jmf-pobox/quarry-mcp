@@ -1,4 +1,12 @@
-"""The resident daemon's file-descriptor envelope: raise RLIMIT_NOFILE once.
+"""The daemon's file-descriptor envelope: the two halves that size RLIMIT_NOFILE.
+
+The envelope has two halves applied at two different moments. :class:`FdEnvelope`
+raises the SOFT ``RLIMIT_NOFILE`` in-process at daemon start; :class:`FdServiceLimits`
+bakes the service-manager SOFT/HARD ceiling into the launchd plist / systemd unit
+BEFORE quarryd is spawned. The two are co-located because they are one design: the
+service manager (the only actor that can raise a non-root process's HARD limit)
+grants the ceiling, and ``FdEnvelope`` then lifts the soft off it at runtime. See
+DES-046.
 
 The daemon inherits launchd/systemd's soft ``RLIMIT_NOFILE`` (256 on macOS) and,
 post-DES-045, holds one persistent LanceDB connection per roster database. Each
@@ -24,6 +32,8 @@ import importlib
 import logging
 from types import ModuleType
 from typing import Self, final
+
+from quarry.config import DEFAULT_FD_LIMIT, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -92,3 +102,105 @@ class FdEnvelope:
         state = f"raised soft {soft} -> {effective} (hard {hard})"
         logger.info("fd envelope: %s", state)
         return state
+
+
+# The hard RLIMIT_NOFILE ceiling the service manager grants quarryd before spawn.
+# A freshly BOOTSTRAPPED launchd agent inherits hard=256, and a non-root process
+# cannot raise its own hard limit — so the in-daemon FdEnvelope (DES-046) clamps to
+# 256 and the daemon walks into EMFILE. The service manager is the one actor that
+# CAN raise the hard limit, so the generated plist/unit bake this generous ceiling;
+# FdEnvelope then lifts the SOFT limit toward QUARRY_FD_LIMIT at runtime within it.
+# 65536 is ~8x the 8192 default soft target — years of roster-growth headroom — and
+# sits well under macOS kern.maxfilesperproc (~92160) and any systemd hard limit.
+_SERVICE_FD_HARD = 65536
+
+
+@final
+class FdServiceLimits:
+    """The RLIMIT_NOFILE window the service manager bakes into the plist/unit.
+
+    The service manager sets the descriptor limits BEFORE spawning quarryd because
+    it — unlike the non-root daemon — can raise the hard limit above the 256 a fresh
+    launchd bootstrap inherits.  The hard ceiling is fixed and generous
+    (``_SERVICE_FD_HARD``); the soft is the configured target (``Settings.fd_limit``,
+    ``QUARRY_FD_LIMIT``-overridable), floored UNCONDITIONALLY at the safe default
+    (``DEFAULT_FD_LIMIT``) so the override can only RAISE it, and capped ABOVE at the
+    hard ceiling so the file stays valid (a soft above the hard is rejected).  The
+    constructor rejects a ``hard`` below the floor — clamping against a too-low
+    ceiling would silently re-admit a soft below ``DEFAULT_FD_LIMIT``, defeating it.
+
+    ``QUARRY_FD_LIMIT`` is applied at INSTALL time, not at runtime: ``quarry install``
+    bakes the soft limit into the plist ``SoftResourceLimits`` / systemd
+    ``LimitNOFILE`` from ``Settings().fd_limit``.  It is in neither the plist
+    ``EnvironmentVariables`` nor the systemd ``EnvironmentFile``, so the running
+    daemon's :class:`FdEnvelope` reads only the default — changing the override
+    therefore requires re-running ``quarry install`` (a reinstall), not a mere daemon
+    restart.  FdEnvelope lifts the soft off the baked ceiling at runtime and never
+    lowers an already-higher inherited soft limit.
+    """
+
+    __slots__ = ("_hard", "_soft")
+
+    _soft: int
+    _hard: int
+
+    def __new__(cls, *, soft: int, hard: int) -> Self:
+        if hard < DEFAULT_FD_LIMIT:
+            msg = (
+                f"hard fd ceiling {hard} is below the safe default "
+                f"{DEFAULT_FD_LIMIT} — the soft floor could not hold"
+            )
+            raise ValueError(msg)
+        self = super().__new__(cls)
+        # Floor to the safe default and cap at the hard ceiling, so QUARRY_FD_LIMIT
+        # may only RAISE the soft limit — never lower it into the EMFILE range
+        # (config._coerce_fd_limit accepts any positive int, e.g. 100).  The guard
+        # above keeps the floor unconditional: max() always wins over a valid hard.
+        self._soft = min(max(soft, DEFAULT_FD_LIMIT), hard)
+        self._hard = hard
+        return self
+
+    @classmethod
+    def from_settings(cls) -> Self:
+        """Build the ceiling from config: soft = ``QUARRY_FD_LIMIT``, hard = fixed."""
+        return cls(soft=Settings().fd_limit, hard=_SERVICE_FD_HARD)
+
+    @property
+    def soft(self) -> int:
+        """Return the soft descriptor limit baked in (clamped to the hard ceiling)."""
+        return self._soft
+
+    @property
+    def hard(self) -> int:
+        """Return the fixed hard descriptor ceiling the service manager grants."""
+        return self._hard
+
+    def launchd_fragment(self) -> str:
+        """Return the ``SoftResourceLimits`` + ``HardResourceLimits`` plist dicts.
+
+        Indented to match the sibling ``EnvironmentVariables`` block and ending in
+        the 8-space pad the next top-level ``<key>`` rides on, so the outer
+        ``textwrap.dedent`` in ``_launchd_plist_content`` renders valid XML.
+        """
+        return (
+            "<key>SoftResourceLimits</key>\n"
+            "        <dict>\n"
+            "            <key>NumberOfFiles</key>\n"
+            f"            <integer>{self._soft}</integer>\n"
+            "        </dict>\n"
+            "        <key>HardResourceLimits</key>\n"
+            "        <dict>\n"
+            "            <key>NumberOfFiles</key>\n"
+            f"            <integer>{self._hard}</integer>\n"
+            "        </dict>\n"
+            "        "
+        )
+
+    def systemd_directive(self) -> str:
+        """Return the ``LimitNOFILE=<soft>:<hard>`` directive for the [Service] block.
+
+        systemd's ``LimitNOFILE`` takes ``soft:hard`` and raises the daemon's hard
+        limit above the login-session default, the Linux analogue of the launchd
+        ``HardResourceLimits`` ceiling.
+        """
+        return f"LimitNOFILE={self._soft}:{self._hard}"

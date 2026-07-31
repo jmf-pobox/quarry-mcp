@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **infra (daemon)**: the daemon file-descriptor fix now actually engages on a
+  fresh install, and `quarry doctor` finally reports the **daemon's** fd headroom
+  instead of the CLI shell's. 2.0.1's in-process `RLIMIT_NOFILE` raise was correct
+  in isolation but silently no-op'd on a fresh `quarry install`: a freshly
+  bootstrapped launchd agent inherits a hard limit of 256, and a non-root process
+  cannot raise its own hard limit, so the in-process raise clamped and lifted
+  nothing. The service manager now bakes the ceiling **before** spawn — launchd
+  `SoftResourceLimits`/`HardResourceLimits` and systemd `LimitNOFILE` at 8192:65536,
+  derived from `QUARRY_FD_LIMIT` (floored to the safe default so the override can
+  only raise). Separately, `quarry doctor`'s FD-headroom check had been sampling the
+  short-lived CLI's own `ulimit`, never the resident daemon — it now reads the
+  daemon's fd headroom from `/health` (degrading cleanly when the daemon is
+  unreachable, never falling back to a local sample). See the DES-046 amendment.
+
 ## [2.0.1] - 2026-07-29
 
 ### Fixed

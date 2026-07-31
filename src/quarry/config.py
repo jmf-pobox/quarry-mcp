@@ -20,7 +20,7 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # The resident daemon's file-descriptor budget: the soft RLIMIT_NOFILE FdEnvelope
 # raises to at daemon start (DES-046). ~25x the bounded working set of a ~21-db
 # roster, well under any reasonable hard limit — years of roster growth headroom.
-_DEFAULT_FD_LIMIT = 8192
+DEFAULT_FD_LIMIT = 8192
 
 
 class Settings(BaseSettings):
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # degrades to the default with one logged warning rather than crashing the
     # daemon at construction (Bug-class-2) — the whole point of the raise is to
     # survive, so a typo in the override must not defeat it.
-    fd_limit: int = Field(default=_DEFAULT_FD_LIMIT, validation_alias="QUARRY_FD_LIMIT")
+    fd_limit: int = Field(default=DEFAULT_FD_LIMIT, validation_alias="QUARRY_FD_LIMIT")
 
     @field_validator("fd_limit", mode="before")
     @classmethod
@@ -90,14 +90,14 @@ class Settings(BaseSettings):
             logger.warning(
                 "QUARRY_FD_LIMIT=%r is not an integer; using %d",
                 value,
-                _DEFAULT_FD_LIMIT,
+                DEFAULT_FD_LIMIT,
             )
-            return _DEFAULT_FD_LIMIT
+            return DEFAULT_FD_LIMIT
         if parsed < 1:
             logger.warning(
-                "QUARRY_FD_LIMIT=%r is not positive; using %d", value, _DEFAULT_FD_LIMIT
+                "QUARRY_FD_LIMIT=%r is not positive; using %d", value, DEFAULT_FD_LIMIT
             )
-            return _DEFAULT_FD_LIMIT
+            return DEFAULT_FD_LIMIT
         return parsed
 
     model_config = {"env_file": ".env", "extra": "ignore"}

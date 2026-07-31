@@ -16,7 +16,6 @@ from pathlib import Path
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
-from quarry.doctor_resources import ResourceDiagnostics
 from quarry.results import CheckResult
 
 
@@ -1049,7 +1048,7 @@ def check_environment(*, _skip_header: bool = False) -> int:
             _check_storage(),
             DaemonDiagnostics.reachability(),
             DaemonDiagnostics.serve_token(),
-            ResourceDiagnostics.fd_headroom(),
+            DaemonDiagnostics.fd_headroom(),
             _check_fts_health(settings.lancedb_path),
             _check_sync_health(settings.registry_path),
             _check_sync_directories(settings.registry_path),
