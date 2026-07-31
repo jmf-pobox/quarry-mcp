@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-07-30
+
 ### Fixed
 
 - **infra (daemon)**: the daemon file-descriptor fix now actually engages on a
