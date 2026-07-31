@@ -14,6 +14,23 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **`make logs-errors`** (and `make logs-tail`) — a daemon-log diagnostic that
+  scans the quarry daemon's log directory (`~/.punt-labs/quarry/logs`, override
+  with `LOG_DIR`) for error/failure signals — `ERROR`, `Traceback`, `EMFILE`/
+  "Too many open files", `Watch index failed`, `Delete failed`, and more —
+  printing a per-signal count summary and the most recent matching lines
+  (`LOG_LINES`, default 40). Always exits 0; it is a diagnostic, not a gate.
+  Surfaces daemon incidents that `quarry doctor` does not scan.
+
+### Fixed
+
+- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
+  `required`, matching the source: the field is optional (`FdHealth | None`) so a
+  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
+  does not fail validation. The committed schema had drifted from the source.
+
 ## [2.0.2] - 2026-07-30
 
 ### Fixed
