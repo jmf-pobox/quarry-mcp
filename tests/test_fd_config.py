@@ -13,8 +13,8 @@ from typing import ClassVar, Self, final
 import pytest
 
 from quarry import fd_config
-from quarry.config import Settings
-from quarry.fd_config import FdEnvelope
+from quarry.config import DEFAULT_FD_LIMIT, Settings
+from quarry.fd_config import _SERVICE_FD_HARD, FdEnvelope, FdServiceLimits
 
 
 @final
@@ -146,3 +146,93 @@ def test_fd_limit_malformed_degrades(
 def test_fd_limit_nonpositive_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QUARRY_FD_LIMIT", "0")
     assert Settings().fd_limit == 8192
+
+
+class TestFdServiceLimits:
+    """Unit tests for the FdServiceLimits value class (RLIMIT_NOFILE ceiling).
+
+    The service manager bakes these limits BEFORE spawning quarryd because it can
+    raise the hard limit above the 256 a fresh launchd bootstrap inherits — the
+    root cause of ``FD headroom: 9/256`` (quarry-fnzh).  FdEnvelope (DES-046) then
+    lifts the soft limit off this ceiling at runtime instead of clamping to 256.
+    """
+
+    def test_from_settings_default_soft_and_hard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default: soft = 8192 (Settings.fd_limit), hard = _SERVICE_FD_HARD (65536)."""
+        monkeypatch.delenv("QUARRY_FD_LIMIT", raising=False)
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 8192
+        assert limits.hard == _SERVICE_FD_HARD == 65536
+
+    def test_soft_follows_fd_limit_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_FD_LIMIT raises the baked soft floor; the hard ceiling is fixed."""
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "16384")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 16384
+        assert limits.hard == 65536
+
+    def test_soft_clamped_to_hard(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A QUARRY_FD_LIMIT above the hard ceiling clamps — soft may not exceed hard.
+
+        A plist/unit whose soft limit exceeds its hard limit is rejected by the
+        service manager, so the class clamps rather than emit an invalid file.
+        """
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "999999")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 65536
+        assert limits.hard == 65536
+
+    def test_soft_floored_to_default_when_below(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_FD_LIMIT below the safe default is FLOORED — it may only RAISE.
+
+        config._coerce_fd_limit accepts any positive int, so QUARRY_FD_LIMIT=100
+        would otherwise bake SoftResourceLimits=100 and silently reintroduce the
+        exact EMFILE condition this ceiling fixes.  The floor is _DEFAULT_FD_LIMIT.
+        """
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "100")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 8192
+        assert limits.hard == 65536
+
+    def test_soft_raised_above_default_not_floored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A QUARRY_FD_LIMIT above the default raises the soft floor, still <= hard."""
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "30000")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 30000
+        assert limits.hard == 65536
+
+    def test_hard_below_default_raises(self) -> None:
+        """A hard ceiling under DEFAULT_FD_LIMIT is rejected at construction.
+
+        The keyword constructor is public.  With hard < DEFAULT_FD_LIMIT the
+        clamp ``min(max(soft, DEFAULT_FD_LIMIT), hard)`` collapses to hard,
+        silently re-admitting a soft below the EMFILE-safe floor.  Reject up
+        front (PY-CC-2) so the floor is genuinely unconditional, not just an
+        accident of the production hard=65536.
+        """
+        with pytest.raises(ValueError, match="below the safe default"):
+            FdServiceLimits(soft=100, hard=DEFAULT_FD_LIMIT - 1)
+
+    def test_launchd_fragment_carries_both_numberoffiles(self) -> None:
+        """The plist fragment names Soft/Hard ResourceLimits with NumberOfFiles."""
+        fragment = FdServiceLimits(soft=8192, hard=65536).launchd_fragment()
+        assert "<key>SoftResourceLimits</key>" in fragment
+        assert "<key>HardResourceLimits</key>" in fragment
+        assert fragment.count("<key>NumberOfFiles</key>") == 2
+        assert "<integer>8192</integer>" in fragment
+        assert "<integer>65536</integer>" in fragment
+
+    def test_systemd_directive_format(self) -> None:
+        """The systemd directive is ``LimitNOFILE=<soft>:<hard>``."""
+        assert (
+            FdServiceLimits(soft=8192, hard=65536).systemd_directive()
+            == "LimitNOFILE=8192:65536"
+        )
