@@ -193,7 +193,7 @@ class TestFdServiceLimits:
 
         config._coerce_fd_limit accepts any positive int, so QUARRY_FD_LIMIT=100
         would otherwise bake SoftResourceLimits=100 and silently reintroduce the
-        exact EMFILE condition this ceiling fixes.  The floor is _DEFAULT_FD_LIMIT.
+        exact EMFILE condition this ceiling fixes.  The floor is DEFAULT_FD_LIMIT.
         """
         monkeypatch.setenv("QUARRY_FD_LIMIT", "100")
         limits = FdServiceLimits.from_settings()

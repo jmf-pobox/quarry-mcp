@@ -7,9 +7,9 @@ health check and the serve-time telemetry can warn before the wall is hit.
 
 The measurement itself needs a file descriptor (the ``iterdir`` scan opens a
 directory handle) — at real exhaustion the sample *is what fails*, so ``sample``
-lets that ``OSError`` propagate rather than masking it as healthy. Its sole caller
-(the daemon ``/health`` route) catches ``OSError`` generically and reports
-``fd: null`` — collapsing exhaustion and platform-absence, not branching on errno.
+lets that ``OSError`` propagate rather than masking it as healthy. Both callers
+absorb it without reading ``errno``: the ``/health`` route (``routes/meta.py``)
+reports ``fd: null``; ``fd_telemetry`` logs one line and keeps sampling.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ class FdHeadroom:
         Propagates ``OSError`` when the scan cannot run: descriptor exhaustion
         (the ``EMFILE``/``ENFILE`` case where the scan itself is what fails) or an
         errno-less ``OSError`` for a missing fd directory or an absent POSIX
-        ``resource`` module. The sole caller collapses every case to ``fd: null``
-        (a degraded advisory); it never branches on ``errno``.
+        ``resource`` module. Neither caller branches on ``errno``: the ``/health``
+        route reports ``fd: null``; the telemetry loop logs and keeps sampling.
         """
         rlimits = resource
         if rlimits is None:

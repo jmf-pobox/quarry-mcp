@@ -3637,3 +3637,42 @@ class TestResponseModelParity:
         refs = {opt.get("$ref", "") for opt in schema.get("anyOf", [])}
         assert any(r.endswith("/ShowPageResponse") for r in refs), refs
         assert any(r.endswith("/DocumentInfo") for r in refs), refs
+
+
+class TestHealthResponseFdOptional:
+    """``HealthResponse.fd`` is optional+nullable for the upgrade window.
+
+    A package upgrade installs the new client before the still-running daemon is
+    reinstalled, so a NEW client briefly validates an OLD daemon's /health
+    response that predates the ``fd`` field. An absent key must deserialize to
+    ``None`` rather than raising — otherwise ``quarry remote list --ping``, which
+    parses through this model, crashes mid-upgrade.
+    """
+
+    @staticmethod
+    def _base_payload() -> dict[str, object]:
+        # Wire payload the daemon emits; ``object`` values match JSON at the boundary.
+        return {
+            "status": "ok",
+            "uptime_seconds": 1.0,
+            "state": "ready",
+            "api_version": "1",
+            "quarry_version": "2.0.0",
+        }
+
+    def test_absent_fd_validates_to_none(self) -> None:
+        """An old daemon that omits ``fd`` entirely deserializes with ``fd is None``."""
+        health = HealthResponse.model_validate(self._base_payload())
+        assert health.fd is None
+
+    def test_explicit_null_fd_validates_to_none(self) -> None:
+        """A daemon that could not sample its descriptors reports ``fd: null``."""
+        payload = self._base_payload() | {"fd": None}
+        assert HealthResponse.model_validate(payload).fd is None
+
+    def test_populated_fd_validates(self) -> None:
+        """A healthy daemon's ``fd`` object round-trips into ``FdHealth``."""
+        payload = self._base_payload() | {"fd": {"open_fds": 42, "soft_limit": 8192}}
+        health = HealthResponse.model_validate(payload)
+        assert health.fd is not None
+        assert (health.fd.open_fds, health.fd.soft_limit) == (42, 8192)

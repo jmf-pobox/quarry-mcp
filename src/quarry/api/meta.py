@@ -29,11 +29,12 @@ class HealthResponse(BaseModel):
     state: str
     api_version: str
     quarry_version: str
-    # None when the daemon could not sample its own descriptors — the fd scan
-    # itself needs a descriptor, so at real EMFILE exhaustion (or on a platform
-    # with no fd directory) the sample raises and the daemon reports null rather
-    # than 500 the health endpoint on the very condition this field surfaces.
-    fd: FdHealth | None
+    # ``None`` in two benign cases. The daemon's own fd scan raised — EMFILE, or
+    # a platform with no fd directory — so it emits ``fd: null`` rather than
+    # 500-ing the endpoint on the exhaustion this field exists to surface. Or a
+    # client parses an older daemon whose response predates this field, and the
+    # default maps that absent key to ``None`` (the upgrade-before-reinstall window).
+    fd: FdHealth | None = None
 
 
 class StatusResponse(BaseModel):
