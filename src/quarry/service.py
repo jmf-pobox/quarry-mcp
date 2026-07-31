@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Protocol, Self, final, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
-from quarry.config import DEFAULT_PORT, Settings
+from quarry.config import DEFAULT_FD_LIMIT, DEFAULT_PORT, Settings
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
@@ -74,17 +74,19 @@ class FdServiceLimits:
     The service manager sets the descriptor limits BEFORE spawning quarryd because
     it — unlike the non-root daemon — can raise the hard limit above the 256 a fresh
     launchd bootstrap inherits.  The hard ceiling is fixed and generous
-    (``_SERVICE_FD_HARD``); the soft floor is the configured target
-    (``Settings.fd_limit``, ``QUARRY_FD_LIMIT``-overridable), clamped to the hard
-    ceiling so the generated file stays valid — a plist/unit whose soft limit exceeds
-    its hard limit is rejected.
+    (``_SERVICE_FD_HARD``); the soft is the configured target (``Settings.fd_limit``,
+    ``QUARRY_FD_LIMIT``-overridable), floored BELOW at the safe default
+    (``DEFAULT_FD_LIMIT``) so the override can only RAISE it, and capped ABOVE at the
+    hard ceiling so the file stays valid (a soft above the hard is rejected).
 
-    Division of labour with :class:`~quarry.fd_config.FdEnvelope`: the plist/unit give
-    the HARD headroom, FdEnvelope sets the SOFT at runtime.  So a ``QUARRY_FD_LIMIT``
-    override up to the hard ceiling takes effect on a daemon restart with no reinstall;
-    a value above the hard ceiling clamps (doctor/telemetry warn on descriptor
-    pressure).  FdEnvelope remains the cross-platform floor and never lowers an
-    already-higher inherited soft limit.
+    ``QUARRY_FD_LIMIT`` is applied at INSTALL time, not at runtime: ``quarry install``
+    bakes the soft limit into the plist ``SoftResourceLimits`` / systemd
+    ``LimitNOFILE`` from ``Settings().fd_limit``.  It is in neither the plist
+    ``EnvironmentVariables`` nor the systemd ``EnvironmentFile``, so the running
+    daemon's :class:`~quarry.fd_config.FdEnvelope` reads only the default — changing
+    the override therefore requires re-running ``quarry install`` (a reinstall), not a
+    mere daemon restart.  FdEnvelope lifts the soft off the baked ceiling at runtime
+    and never lowers an already-higher inherited soft limit.
     """
 
     __slots__ = ("_hard", "_soft")
@@ -94,7 +96,11 @@ class FdServiceLimits:
 
     def __new__(cls, *, soft: int, hard: int) -> Self:
         self = super().__new__(cls)
-        self._soft = min(soft, hard)  # a soft above the hard is an invalid plist/unit
+        # Floor BELOW to the safe default and cap ABOVE to the hard ceiling, so
+        # QUARRY_FD_LIMIT may only RAISE the soft limit — never lower it into the
+        # EMFILE range (config._coerce_fd_limit accepts any positive int, e.g. 100)
+        # — and a soft above the hard is never emitted (an invalid plist/unit).
+        self._soft = min(max(soft, DEFAULT_FD_LIMIT), hard)
         self._hard = hard
         return self
 

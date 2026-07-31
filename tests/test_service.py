@@ -1232,6 +1232,29 @@ class TestFdServiceLimits:
         assert limits.soft == 65536
         assert limits.hard == 65536
 
+    def test_soft_floored_to_default_when_below(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QUARRY_FD_LIMIT below the safe default is FLOORED — it may only RAISE.
+
+        config._coerce_fd_limit accepts any positive int, so QUARRY_FD_LIMIT=100
+        would otherwise bake SoftResourceLimits=100 and silently reintroduce the
+        exact EMFILE condition this ceiling fixes.  The floor is _DEFAULT_FD_LIMIT.
+        """
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "100")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 8192
+        assert limits.hard == 65536
+
+    def test_soft_raised_above_default_not_floored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A QUARRY_FD_LIMIT above the default raises the soft floor, still <= hard."""
+        monkeypatch.setenv("QUARRY_FD_LIMIT", "30000")
+        limits = FdServiceLimits.from_settings()
+        assert limits.soft == 30000
+        assert limits.hard == 65536
+
     def test_launchd_fragment_carries_both_numberoffiles(self) -> None:
         """The plist fragment names Soft/Hard ResourceLimits with NumberOfFiles."""
         fragment = FdServiceLimits(soft=8192, hard=65536).launchd_fragment()
