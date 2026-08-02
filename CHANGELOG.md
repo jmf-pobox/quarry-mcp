@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-02
+
 ### Changed
 
 - **`quarry doctor` Sync check** now reports the *newest* collection's sync age
