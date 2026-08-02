@@ -24,7 +24,7 @@ class CaptureDiagnostics:
 
     @staticmethod
     def unlinked(registry_path: Path, db_path: Path) -> CheckResult:
-        """Report captures collections whose backing directory is gone."""
+        """Report ``*-captures`` collections whose base has no registration."""
         result = partial(CheckResult, name="Unlinked captures", required=False)
         if not db_path.exists() or not registry_path.exists():
             return result(passed=True, message="no data yet")
@@ -34,19 +34,19 @@ class CaptureDiagnostics:
             return result(passed=False, message=f"check failed: {exc}")
         if unlinked:
             return result(passed=False, message=f"unlinked: {', '.join(unlinked)}")
-        return result(passed=True, message="all captures have a source directory")
+        return result(passed=True, message="all captures map to a registered base")
 
     @staticmethod
     def _unlinked_names(registry_path: Path, db_path: Path) -> list[str]:
-        """Return sorted ``*-captures`` collections that lost their source dir."""
+        """Return sorted ``*-captures`` collections whose base is unregistered."""
         from quarry.db.facade import Database  # noqa: PLC0415
         from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
         database = Database.connect(db_path)
         collections = {c["collection"] for c in database.catalog.list_collections()}
-        # Virtual capture collections have no source directory by design — the
+        # Virtual capture collections are unregistered by design — the
         # unregistered-dir fallback and the WebFetch bucket — so spare them; the
-        # check flags only a collection whose backing directory is gone.
+        # check flags only a *-captures collection whose base has no registration.
         col_names = collections - CapturesCollection.virtual_names()
         with contextlib.closing(SyncRegistry(registry_path)) as conn:
             registered = {r.collection for r in conn.list_registrations()}

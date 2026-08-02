@@ -1509,7 +1509,7 @@ class TestCheckUnlinkedCaptures:
         """default-captures is the live base-less fallback -- never unlinked."""
         result = self._run(tmp_path, collections=["default-captures"], registered=[])
         assert result.passed is True
-        assert result.message == "all captures have a source directory"
+        assert result.message == "all captures map to a registered base"
 
     def test_web_captures_bucket_not_flagged(self, tmp_path: Path) -> None:
         """web-captures is the WebFetch bucket -- directoryless by design, spared."""
@@ -1546,7 +1546,7 @@ class TestCheckUnlinkedCaptures:
             registered=["myproj"],
         )
         assert result.passed is True
-        assert result.message == "all captures have a source directory"
+        assert result.message == "all captures map to a registered base"
 
     def test_io_failure_returns_failed_result_not_raise(self, tmp_path: Path) -> None:
         """A broken DB must yield a failed CheckResult, not crash doctor."""
