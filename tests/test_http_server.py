@@ -1942,7 +1942,7 @@ class TestIngest:
             ),
             patch(
                 "quarry.captures_collection.CapturesCollection.for_registry_path",
-                return_value=CapturesCollection.fallback(),
+                return_value=CapturesCollection.resolve(None),
             ),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
             patch("quarry.ingestion.pipeline.ingest_auto") as auto,
