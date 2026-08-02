@@ -14,8 +14,12 @@ class TestCapturesCollection:
     def test_resolve_none_is_default(self) -> None:
         assert CapturesCollection.resolve(None).name == "default-captures"
 
-    def test_fallback_is_default_captures(self) -> None:
-        assert CapturesCollection.fallback().name == "default-captures"
+    def test_virtual_names_spares_directoryless_buckets(self) -> None:
+        """The fallback and WebFetch buckets are the directoryless collections."""
+        assert CapturesCollection.virtual_names() == {
+            "default-captures",
+            "web-captures",
+        }
 
     def test_for_cwd_registered_ancestor(self) -> None:
         regs = {"/projects/myapp": "myapp"}

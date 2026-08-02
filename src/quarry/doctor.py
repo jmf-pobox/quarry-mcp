@@ -10,12 +10,12 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Generator
-from datetime import UTC, datetime
 from pathlib import Path
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
+from quarry.doctor_sync import SyncDiagnostics
 from quarry.results import CheckResult
 
 
@@ -227,165 +227,6 @@ def _check_fts_health(db_path: Path) -> CheckResult:
             message=f"error: {exc}",
             required=False,
         )
-
-
-def _sync_age_result(count: int, oldest_age: float) -> CheckResult:
-    """Build a CheckResult for sync recency based on oldest collection age."""
-    stale_seconds = 24 * 3600
-    hours = int(oldest_age / 3600)
-    if oldest_age > stale_seconds:
-        return CheckResult(
-            name="Sync",
-            passed=False,
-            message=f"{count} collections, oldest sync {hours}h ago (>24h stale)",
-            required=False,
-        )
-    age_str = f"{hours}h ago" if hours > 0 else f"{int(oldest_age / 60)}m ago"
-    return CheckResult(
-        name="Sync",
-        passed=True,
-        message=f"{count} collections, oldest sync {age_str}",
-        required=False,
-    )
-
-
-def _check_sync_health(registry_path: Path) -> CheckResult:
-    """Check sync recency across all registered collections."""
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    if not registry_path.exists():
-        return CheckResult(
-            name="Sync",
-            passed=True,
-            message="no registrations",
-            required=False,
-        )
-    try:
-        with contextlib.closing(SyncRegistry(registry_path)) as conn:
-            regs = conn.list_registrations()
-            if not regs:
-                return CheckResult(
-                    name="Sync",
-                    passed=True,
-                    message="no registrations",
-                    required=False,
-                )
-            # Find the most recent ingested_at per collection from the files table
-            now = datetime.now(UTC)
-            count = len(regs)
-            oldest_age: float | None = None
-            never_synced: list[str] = []
-            for reg in regs:
-                row = conn.execute(
-                    "SELECT MAX(ingested_at) FROM files WHERE collection = ?",
-                    (reg.collection,),
-                ).fetchone()
-                last_ingested: str | None = row[0] if row else None
-                if last_ingested is None:
-                    never_synced.append(reg.collection)
-                else:
-                    age = now - datetime.fromisoformat(last_ingested)
-                    age_seconds = age.total_seconds()
-                    if oldest_age is None or age_seconds > oldest_age:
-                        oldest_age = age_seconds
-            if never_synced:
-                names = ", ".join(never_synced[:3])
-                msg = f"{count} collections, {len(never_synced)} never synced: {names}"
-                return CheckResult(
-                    name="Sync",
-                    passed=False,
-                    message=msg,
-                    required=False,
-                )
-            # All regs have files when never_synced is empty.
-            if oldest_age is None:  # pragma: no cover
-                oldest_age = 0.0
-            return _sync_age_result(count, oldest_age)
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="Sync",
-            passed=False,
-            message=f"registry error: {exc}",
-            required=False,
-        )
-
-
-def _check_sync_directories(registry_path: Path) -> CheckResult:
-    """Verify registered sync directories exist on disk."""
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    if not registry_path.exists():
-        return CheckResult(
-            name="Sync directories",
-            passed=True,
-            message="no registrations",
-            required=False,
-        )
-    try:
-        with contextlib.closing(SyncRegistry(registry_path)) as conn:
-            regs = conn.list_registrations()
-            if not regs:
-                return CheckResult(
-                    name="Sync directories",
-                    passed=True,
-                    message="no registrations",
-                    required=False,
-                )
-            missing = [
-                reg.collection for reg in regs if not Path(reg.directory).is_dir()
-            ]
-            if missing:
-                names = ", ".join(missing[:3])
-                return CheckResult(
-                    name="Sync directories",
-                    passed=False,
-                    message=f"{len(missing)} missing: {names}",
-                    required=False,
-                )
-            return CheckResult(
-                name="Sync directories",
-                passed=True,
-                message=f"{len(regs)} directories OK",
-                required=False,
-            )
-    except Exception as exc:  # noqa: BLE001
-        return CheckResult(
-            name="Sync directories",
-            passed=False,
-            message=f"registry error: {exc}",
-            required=False,
-        )
-
-
-def _check_enable_status(registry_path: Path, cwd: str) -> CheckResult:
-    """Check if the cwd has quarry enabled."""
-    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-    conn = SyncRegistry(registry_path)
-    try:
-        collection = CollectionResolver(conn).covering_collection(cwd) if cwd else None
-    finally:
-        conn.close()
-    if collection is None:
-        return CheckResult(
-            name="Enable status",
-            passed=False,
-            message="not enabled -- run 'quarry enable'",
-            required=False,
-        )
-    captures = f"{collection}-captures"
-    config_path = Path(cwd) / ".punt-labs" / "quarry" / "config.md"
-    config_exists = config_path.is_file()
-    parts = [f"collection: {collection}, captures: {captures}"]
-    if not config_exists:
-        parts.append("config.md missing (run 'quarry enable')")
-    return CheckResult(
-        name="Enable status",
-        passed=config_exists,
-        message=", ".join(parts),
-        required=False,
-    )
 
 
 _MCP_SERVER_NAME = "quarry"
@@ -1050,10 +891,10 @@ def check_environment(*, _skip_header: bool = False) -> int:
             DaemonDiagnostics.serve_token(),
             DaemonDiagnostics.fd_headroom(),
             _check_fts_health(settings.lancedb_path),
-            _check_sync_health(settings.registry_path),
-            _check_sync_directories(settings.registry_path),
-            _check_enable_status(settings.registry_path, cwd),
-            CaptureDiagnostics.orphaned(settings.registry_path, settings.lancedb_path),
+            SyncDiagnostics.recency(settings.registry_path),
+            SyncDiagnostics.directories(settings.registry_path),
+            SyncDiagnostics.enable_status(settings.registry_path, cwd),
+            CaptureDiagnostics.unlinked(settings.registry_path, settings.lancedb_path),
             CaptureDiagnostics.shadow_repo(cwd),
         ]
         checks: list[CheckResult] = [c for c in all_results if c is not None]

@@ -14,6 +14,17 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- **`quarry doctor` Sync check** now reports the *newest* collection's sync age
+  — a pipeline-liveness signal ("has anything been ingested recently?") — instead
+  of the oldest. Quiet, unchanged reference collections no longer trigger a false
+  ">24h stale" warning; the check only flags stale when *nothing* has synced in
+  24h. (The correct index-vs-filesystem drift check is tracked separately.)
+- **`quarry doctor` captures check** no longer flags by-design non-directory
+  capture collections (e.g. `web-captures`) as detached, and uses neutral wording
+  ("unlinked") in place of "orphaned".
+
 ### Added
 
 - **`make logs-errors`** (and `make logs-tail`) — a daemon-log diagnostic that

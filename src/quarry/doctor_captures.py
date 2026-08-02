@@ -1,4 +1,4 @@
-"""Capture-related doctor checks: orphaned captures and the private shadow repo."""
+"""Capture-related doctor checks: unlinked captures and the private shadow repo."""
 
 from __future__ import annotations
 
@@ -23,31 +23,31 @@ class CaptureDiagnostics:
     __slots__ = ()
 
     @staticmethod
-    def orphaned(registry_path: Path, db_path: Path) -> CheckResult:
-        """Report captures collections whose base has no registration."""
-        result = partial(CheckResult, name="Orphaned captures", required=False)
+    def unlinked(registry_path: Path, db_path: Path) -> CheckResult:
+        """Report ``*-captures`` collections whose base has no registration."""
+        result = partial(CheckResult, name="Unlinked captures", required=False)
         if not db_path.exists() or not registry_path.exists():
             return result(passed=True, message="no data yet")
         try:
-            orphans = CaptureDiagnostics._orphan_names(registry_path, db_path)
+            unlinked = CaptureDiagnostics._unlinked_names(registry_path, db_path)
         except Exception as exc:  # noqa: BLE001
             return result(passed=False, message=f"check failed: {exc}")
-        if orphans:
-            return result(passed=False, message=f"orphaned: {', '.join(orphans)}")
-        return result(passed=True, message="no orphaned captures collections")
+        if unlinked:
+            return result(passed=False, message=f"unlinked: {', '.join(unlinked)}")
+        return result(passed=True, message="all captures map to a registered base")
 
     @staticmethod
-    def _orphan_names(registry_path: Path, db_path: Path) -> list[str]:
+    def _unlinked_names(registry_path: Path, db_path: Path) -> list[str]:
         """Return sorted ``*-captures`` collections whose base is unregistered."""
         from quarry.db.facade import Database  # noqa: PLC0415
         from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
 
         database = Database.connect(db_path)
         collections = {c["collection"] for c in database.catalog.list_collections()}
-        # ``default-captures`` is the live fallback for an unregistered directory;
-        # its base "default" is never registered by design, so spare it from the
-        # orphan test (else any unregistered-dir capture flags a false positive).
-        col_names = collections - {CapturesCollection.fallback().name}
+        # Virtual capture collections are unregistered by design — the
+        # unregistered-dir fallback and the WebFetch bucket — so spare them; the
+        # check flags only a *-captures collection whose base has no registration.
+        col_names = collections - CapturesCollection.virtual_names()
         with contextlib.closing(SyncRegistry(registry_path)) as conn:
             registered = {r.collection for r in conn.list_registrations()}
         return sorted(

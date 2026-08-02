@@ -338,17 +338,17 @@
     "public_attr_violations": 0.0
   },
   "src/quarry/captures_collection.py": {
-    "avg_complexity": 1.88,
-    "avg_params": 1.12,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 6.0,
     "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.12,
+    "max_complexity": 6.0,
+    "avg_complexity": 1.88,
     "module_size": 89.0,
-    "public_attr_violations": 0.0
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/claude_import.py": {
     "method_ratio": 1.0,
@@ -1263,10 +1263,10 @@
   "src/quarry/doctor.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.74,
-    "max_complexity": 10.0,
-    "avg_complexity": 3.94,
-    "module_size": 922.0,
+    "avg_params": 0.63,
+    "max_complexity": 9.0,
+    "avg_complexity": 3.73,
+    "module_size": 774.0,
     "classes_per_module": 0.0,
     "class_to_func_ratio": 0.0,
     "init_violations": 0.0,
@@ -1274,17 +1274,17 @@
     "future_annotations": 1.0
   },
   "src/quarry/doctor_captures.py": {
-    "avg_complexity": 3.71,
-    "avg_params": 1.29,
-    "class_to_func_ratio": 1.0,
-    "classes_per_module": 1.0,
-    "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
-    "max_complexity": 6.0,
     "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.29,
+    "max_complexity": 6.0,
+    "avg_complexity": 3.71,
     "module_size": 135.0,
-    "public_attr_violations": 0.0
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/doctor_daemon.py": {
     "method_ratio": 1.0,
@@ -1307,6 +1307,19 @@
     "avg_complexity": 2.5,
     "module_size": 55.0,
     "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/doctor_sync.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 1.0,
+    "max_complexity": 7.0,
+    "avg_complexity": 3.43,
+    "module_size": 164.0,
+    "classes_per_module": 2.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,

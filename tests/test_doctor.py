@@ -16,8 +16,6 @@ from quarry.doctor import (
     _check_imports,
     _check_python_version,
     _check_storage,
-    _check_sync_directories,
-    _check_sync_health,
     _configure_claude_code,
     _configure_claude_desktop,
     _configure_ethos_ext,
@@ -29,6 +27,7 @@ from quarry.doctor import (
 )
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
+from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
 from quarry.results import CheckResult
 
@@ -464,13 +463,13 @@ class TestCheckEnvironment:
             ),
         )
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_sync_health",
+            SyncDiagnostics,
+            "recency",
             lambda _p: _ok(name="Sync", passed=True, message="mocked", required=False),
         )
         monkeypatch.setattr(
-            doctor_mod,
-            "_check_sync_directories",
+            SyncDiagnostics,
+            "directories",
             lambda _p: _ok(
                 name="Sync directories",
                 passed=True,
@@ -811,7 +810,7 @@ class TestCheckSyncHealth:
 
     def test_no_registry_file(self, tmp_path: Path) -> None:
         registry_path = tmp_path / "nonexistent" / "registry.db"
-        result = _check_sync_health(registry_path)
+        result = SyncDiagnostics.recency(registry_path)
         assert result.passed is True
         assert result.required is False
         assert "no registrations" in result.message
@@ -822,12 +821,12 @@ class TestCheckSyncHealth:
         registry_path = tmp_path / "registry.db"
         conn = SyncRegistry(registry_path)
         conn.close()
-        result = _check_sync_health(registry_path)
+        result = SyncDiagnostics.recency(registry_path)
         assert result.passed is True
         assert "no registrations" in result.message
 
     def test_recent_sync(self, tmp_path: Path) -> None:
-        """Collections with recent ingested_at report healthy."""
+        """A collection synced within 24h reports the newest sync and passes."""
         from datetime import UTC, datetime
 
         from quarry.sync_registry import SyncRegistry
@@ -850,14 +849,14 @@ class TestCheckSyncHealth:
         conn.commit()
         conn.close()
 
-        result = _check_sync_health(registry_path)
+        result = SyncDiagnostics.recency(registry_path)
         assert result.passed is True
         assert "1 collections" in result.message
-        assert "oldest sync" in result.message
+        assert "newest sync" in result.message
         assert result.required is False
 
     def test_stale_sync(self, tmp_path: Path) -> None:
-        """Collection with ingested_at > 24h ago triggers warning."""
+        """The newest (only) sync being > 24h old means the pipeline is dead."""
         from datetime import UTC, datetime, timedelta
 
         from quarry.sync_registry import SyncRegistry
@@ -879,13 +878,51 @@ class TestCheckSyncHealth:
         conn.commit()
         conn.close()
 
-        result = _check_sync_health(registry_path)
+        result = SyncDiagnostics.recency(registry_path)
         assert result.passed is False
         assert ">24h stale" in result.message
         assert result.required is False
 
-    def test_never_synced(self, tmp_path: Path) -> None:
-        """Registration with no files reports never synced."""
+    def test_stale_reference_ignored_when_another_is_fresh(
+        self, tmp_path: Path
+    ) -> None:
+        """A quiet stale collection must not fail the check when another is fresh.
+
+        This is the false-alarm the newest-sync signal fixes: the old oldest-sync
+        logic was dominated by reference collections that simply never change.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from quarry.sync_registry import SyncRegistry
+
+        registry_path = tmp_path / "registry.db"
+        conn = SyncRegistry(registry_path)
+        now = datetime.now(UTC)
+        fresh_dir = tmp_path / "fresh"
+        fresh_dir.mkdir()
+        stale_dir = tmp_path / "stale"
+        stale_dir.mkdir()
+        conn.execute(_INSERT_DIR, (str(fresh_dir), "fresh-col", now.isoformat()))
+        conn.execute(_INSERT_DIR, (str(stale_dir), "stale-col", now.isoformat()))
+        conn.execute(
+            _INSERT_FILE,
+            (str(fresh_dir / "f.md"), "fresh-col", "f.md", 1000.0, 42, now.isoformat()),
+        )
+        stale_time = (now - timedelta(hours=683)).isoformat()
+        conn.execute(
+            _INSERT_FILE,
+            (str(stale_dir / "s.md"), "stale-col", "s.md", 1000.0, 42, stale_time),
+        )
+        conn.commit()
+        conn.close()
+
+        result = SyncDiagnostics.recency(registry_path)
+        assert result.passed is True
+        assert "newest sync" in result.message
+        assert ">24h stale" not in result.message
+
+    def test_never_synced_only_passes_as_info(self, tmp_path: Path) -> None:
+        """A registration that has never synced is info, not a hard failure."""
         from datetime import UTC, datetime
 
         from quarry.sync_registry import SyncRegistry
@@ -902,10 +939,39 @@ class TestCheckSyncHealth:
         conn.commit()
         conn.close()
 
-        result = _check_sync_health(registry_path)
-        assert result.passed is False
-        assert "never synced" in result.message
-        assert "empty-col" in result.message
+        result = SyncDiagnostics.recency(registry_path)
+        assert result.passed is True
+        assert "none synced yet" in result.message
+        assert result.required is False
+
+    def test_never_synced_does_not_fail_when_another_is_fresh(
+        self, tmp_path: Path
+    ) -> None:
+        """A never-synced collection does not fail the check while another is fresh."""
+        from datetime import UTC, datetime
+
+        from quarry.sync_registry import SyncRegistry
+
+        registry_path = tmp_path / "registry.db"
+        conn = SyncRegistry(registry_path)
+        now = datetime.now(UTC).isoformat()
+        fresh_dir = tmp_path / "fresh"
+        fresh_dir.mkdir()
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        conn.execute(_INSERT_DIR, (str(fresh_dir), "fresh-col", now))
+        conn.execute(_INSERT_DIR, (str(empty_dir), "empty-col", now))
+        conn.execute(
+            _INSERT_FILE,
+            (str(fresh_dir / "f.md"), "fresh-col", "f.md", 1000.0, 42, now),
+        )
+        conn.commit()
+        conn.close()
+
+        result = SyncDiagnostics.recency(registry_path)
+        assert result.passed is True
+        assert "2 collections, newest sync" in result.message
+        assert ">24h stale" not in result.message
         assert result.required is False
 
 
@@ -914,7 +980,7 @@ class TestCheckSyncDirectories:
 
     def test_no_registry_file(self, tmp_path: Path) -> None:
         registry_path = tmp_path / "nonexistent" / "registry.db"
-        result = _check_sync_directories(registry_path)
+        result = SyncDiagnostics.directories(registry_path)
         assert result.passed is True
         assert result.required is False
         assert "no registrations" in result.message
@@ -936,7 +1002,7 @@ class TestCheckSyncDirectories:
         conn.commit()
         conn.close()
 
-        result = _check_sync_directories(registry_path)
+        result = SyncDiagnostics.directories(registry_path)
         assert result.passed is True
         assert "1 directories OK" in result.message
         assert result.required is False
@@ -959,7 +1025,7 @@ class TestCheckSyncDirectories:
         conn.commit()
         conn.close()
 
-        result = _check_sync_directories(registry_path)
+        result = SyncDiagnostics.directories(registry_path)
         assert result.passed is False
         assert "1 missing" in result.message
         assert "file-col" in result.message
@@ -981,7 +1047,7 @@ class TestCheckSyncDirectories:
         conn.commit()
         conn.close()
 
-        result = _check_sync_directories(registry_path)
+        result = SyncDiagnostics.directories(registry_path)
         assert result.passed is False
         assert "1 missing" in result.message
         assert "gone-col" in result.message
@@ -994,7 +1060,7 @@ class TestCheckSyncDirectories:
         conn = SyncRegistry(registry_path)
         conn.close()
 
-        result = _check_sync_directories(registry_path)
+        result = SyncDiagnostics.directories(registry_path)
         assert result.passed is True
         assert "no registrations" in result.message
 
@@ -1402,8 +1468,8 @@ class TestRunInstall:
         assert "mcp-proxy is optional" in captured.out
 
 
-class TestCheckOrphanedCaptures:
-    """Tests for the orphaned captures collection check."""
+class TestCheckUnlinkedCaptures:
+    """Tests for the unlinked captures collection check."""
 
     @staticmethod
     def _run(
@@ -1436,42 +1502,51 @@ class TestCheckOrphanedCaptures:
             {"collection": name} for name in collections
         ]
         with patch.object(Database, "connect", return_value=facade):
-            return CaptureDiagnostics.orphaned(registry_path, db_path)
+            result: CheckResult = CaptureDiagnostics.unlinked(registry_path, db_path)
+        return result
 
     def test_default_captures_fallback_not_flagged(self, tmp_path: Path) -> None:
-        """default-captures is the live base-less fallback -- never orphaned."""
+        """default-captures is the live base-less fallback -- never unlinked."""
         result = self._run(tmp_path, collections=["default-captures"], registered=[])
         assert result.passed is True
-        assert "no orphaned" in result.message
+        assert result.message == "all captures map to a registered base"
 
-    def test_unregistered_project_captures_is_orphaned(self, tmp_path: Path) -> None:
-        """A <project>-captures with no <project> registration is orphaned."""
+    def test_web_captures_bucket_not_flagged(self, tmp_path: Path) -> None:
+        """web-captures is the WebFetch bucket -- directoryless by design, spared."""
+        result = self._run(tmp_path, collections=["web-captures"], registered=[])
+        assert result.passed is True
+        assert "web-captures" not in result.message
+
+    def test_unregistered_project_captures_is_unlinked(self, tmp_path: Path) -> None:
+        """A <project>-captures with no <project> registration is unlinked."""
         result = self._run(tmp_path, collections=["myproj-captures"], registered=[])
         assert result.passed is False
         assert "myproj-captures" in result.message
+        assert "unlinked" in result.message
 
-    def test_default_fallback_excluded_but_real_orphan_flagged(
+    def test_virtual_buckets_excluded_but_real_unlinked_flagged(
         self, tmp_path: Path
     ) -> None:
-        """The exclusion is precise: default-captures spared, real orphan flagged."""
+        """The exclusion is precise: virtual buckets spared, real one flagged."""
         result = self._run(
             tmp_path,
-            collections=["default-captures", "myproj-captures"],
+            collections=["default-captures", "web-captures", "myproj-captures"],
             registered=[],
         )
         assert result.passed is False
         assert "myproj-captures" in result.message
         assert "default-captures" not in result.message
+        assert "web-captures" not in result.message
 
     def test_registered_project_captures_not_flagged(self, tmp_path: Path) -> None:
-        """A <project>-captures whose <project> is registered is not orphaned."""
+        """A <project>-captures whose <project> is registered is not unlinked."""
         result = self._run(
             tmp_path,
             collections=["myproj-captures"],
             registered=["myproj"],
         )
         assert result.passed is True
-        assert "no orphaned" in result.message
+        assert result.message == "all captures map to a registered base"
 
     def test_io_failure_returns_failed_result_not_raise(self, tmp_path: Path) -> None:
         """A broken DB must yield a failed CheckResult, not crash doctor."""
@@ -1484,7 +1559,7 @@ class TestCheckOrphanedCaptures:
 
         boom = RuntimeError("corrupt lance table")
         with patch.object(Database, "connect", side_effect=boom):
-            result = CaptureDiagnostics.orphaned(registry_path, db_path)
+            result = CaptureDiagnostics.unlinked(registry_path, db_path)
 
         assert result.passed is False
         assert "corrupt lance table" in result.message
