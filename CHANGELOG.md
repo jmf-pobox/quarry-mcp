@@ -25,6 +25,22 @@ across `transform`, `index`, and `connector`).
   capture collections (e.g. `web-captures`) as detached, and uses neutral wording
   ("unlinked") in place of "orphaned".
 
+### Fixed
+
+- **Directory sync no longer crashes (or mass-deletes) on filesystem races.**
+  The reconcile's per-file `stat()` was unguarded, so a file removed from disk
+  between discovery and stat aborted the entire collection's reconcile — a
+  crash-loop that left the collection permanently behind. Now a vanished file is
+  reconciled to a delete, an unreadable file (permission/IO error) is skipped and
+  retried, and — critically — the delete pass is **refused when the registered
+  root itself cannot be resolved** (a transient NFS/SMB blip or `ESTALE`), so an
+  empty scan from an unavailable root can no longer wipe a whole collection's
+  index. A raced `.gitignore` deletion no longer aborts the directory walk either.
+- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
+  `required`, matching the source: the field is optional (`FdHealth | None`) so a
+  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
+  does not fail validation. The committed schema had drifted from the source.
+
 ### Added
 
 - **`make logs-errors`** (and `make logs-tail`) — a daemon-log diagnostic that
@@ -34,13 +50,6 @@ across `transform`, `index`, and `connector`).
   printing a per-signal count summary and the most recent matching lines
   (`LOG_LINES`, default 40). Always exits 0; it is a diagnostic, not a gate.
   Surfaces daemon incidents that `quarry doctor` does not scan.
-
-### Fixed
-
-- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
-  `required`, matching the source: the field is optional (`FdHealth | None`) so a
-  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
-  does not fail validation. The committed schema had drifted from the source.
 
 ## [2.0.2] - 2026-07-30
 

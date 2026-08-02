@@ -39,12 +39,19 @@ _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 class FileDiscovery:
     """Discover indexable files under a directory, respecting ignore rules."""
 
-    __slots__ = ("_directory", "_excluded", "_guard", "_root_resolved")
+    __slots__ = (
+        "_directory",
+        "_excluded",
+        "_guard",
+        "_root_resolved",
+        "_walk_complete",
+    )
 
     _directory: Path
     _root_resolved: Path | None
     _guard: ScratchGuard
     _excluded: bool
+    _walk_complete: bool
 
     def __new__(cls, directory: Path) -> Self:
         self = super().__new__(cls)
@@ -64,11 +71,43 @@ class FileDiscovery:
         )
         if self._excluded:
             logger.debug("Skipping scratch/temp root: %s", self._root_resolved)
+        self._walk_complete = True
         return self
 
     @property
     def directory(self) -> Path:
         return self._directory
+
+    @property
+    def root_available(self) -> bool:
+        """Whether the registered root resolved and is not a refused scratch root.
+
+        When ``False``, :meth:`discover` returns empty for a reason OTHER than
+        "every file was deleted" (the root could not be resolved, or is a
+        refused temp/scratch tree). Callers that compute deletions from an empty
+        discovery MUST fail closed on this — otherwise a transient root blip
+        reads as a full collection wipe.
+        """
+        return self._root_resolved is not None and not self._excluded
+
+    @property
+    def discovery_reliable(self) -> bool:
+        """Whether the last :meth:`discover` saw a complete, resolvable tree.
+
+        ``False`` when the root could not be resolved / is a refused scratch tree
+        (:attr:`root_available`) OR the ``os.walk`` enumeration hit an error
+        (permission loss, ``ESTALE``, or the directory vanishing mid-walk) — any
+        of which yields an empty or partial discovery for a reason OTHER than
+        deletion. Callers computing deletions MUST fail closed on this: an
+        incomplete disk view is not evidence that files were removed. Valid only
+        after :meth:`discover` has run.
+        """
+        return self.root_available and self._walk_complete
+
+    def _note_walk_error(self, exc: OSError) -> None:
+        """``os.walk`` onerror hook: a dir could not be listed → walk incomplete."""
+        logger.warning("Directory walk error under %s: %s", self._directory, exc)
+        self._walk_complete = False
 
     def discover(self, extensions: frozenset[str]) -> list[Path]:
         """Recursively find files matching *extensions* under the directory.
@@ -87,9 +126,12 @@ class FileDiscovery:
         if self._root_resolved is None or self._excluded:
             return []
 
+        self._walk_complete = True
         root_spec = self.load_ignore_spec()
         result: list[Path] = []
-        for dirpath_str, dirnames, filenames in os.walk(self._directory):
+        for dirpath_str, dirnames, filenames in os.walk(
+            self._directory, onerror=self._note_walk_error
+        ):
             dirpath = Path(dirpath_str)
             local_spec = (
                 self._read_local_ignore(dirpath) if dirpath != self._directory else None
@@ -233,18 +275,35 @@ class FileDiscovery:
         """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
         lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
         for name in (".gitignore", ".quarryignore"):
-            ignore_path = self._directory / name
-            if ignore_path.is_file():
-                lines.extend(ignore_path.read_text(encoding="utf-8").splitlines())
+            lines.extend(self._read_ignore_lines(self._directory / name))
         return pathspec.PathSpec.from_lines("gitignore", lines)
+
+    @staticmethod
+    def _read_ignore_lines(path: Path) -> list[str]:
+        """Return an ignore file's lines, or ``[]`` when absent/non-regular/unreadable.
+
+        ``is_file()`` inside the ``try`` (not before it) keeps a FIFO or a symlink
+        to a character device named ``.gitignore`` from blocking ``read_text()``
+        forever, while the ``OSError`` guard keeps a raced deletion — present at
+        the check, gone at the read — from aborting the whole ``discover()`` walk
+        (bug class 1/2).
+        """
+        try:
+            if not path.is_file():
+                return []
+            return path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logger.warning("Skipping unreadable ignore file %s: %s", path, exc)
+            return []
 
     @staticmethod
     def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
         """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
-        gitignore = dirpath / ".gitignore"
-        if not gitignore.is_file():
+        lines = FileDiscovery._read_ignore_lines(dirpath / ".gitignore")
+        if not lines:
             return None
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
         return pathspec.PathSpec.from_lines("gitignore", lines)
 
     def _symlink_inside_root(self, link: Path) -> bool:
