@@ -150,25 +150,9 @@ class FileDiscovery:
                 continue
             if local_spec is not None and local_spec.match_file(filename):
                 continue
-            if self._is_symlink_escaping(filepath):
+            if filepath.is_symlink() and not self._symlink_inside_root(filepath):
                 continue
             yield filepath.absolute()
-
-    def _is_symlink_escaping(self, filepath: Path) -> bool:
-        """Whether *filepath* is a symlink whose target escapes the registered root.
-
-        ``is_symlink()`` re-raises ``OSError`` for permission/IO errors (only
-        ``ENOENT``-class errors are swallowed), so an unreadable file would abort
-        the whole walk. Such a file is KEPT in the walk, not dropped: dropping it
-        would make the sync plan treat it as deleted and prune its indexed chunks
-        on a transient read error (bug class 1). ``stat`` skips it from ingest in
-        the plan; it is simply never removed on the strength of a read that failed.
-        """
-        try:
-            is_link = filepath.is_symlink()
-        except OSError:
-            return False
-        return is_link and not self._symlink_inside_root(filepath)
 
     def is_indexable(self, path: Path, extensions: frozenset[str]) -> bool:
         """Return whether *path* would be indexed by :meth:`discover` (live == bulk).
@@ -266,14 +250,17 @@ class FileDiscovery:
 
     @staticmethod
     def _read_ignore_lines(path: Path) -> list[str]:
-        """Return an ignore file's lines, or ``[]`` when absent or unreadable.
+        """Return an ignore file's lines, or ``[]`` when absent/non-regular/unreadable.
 
-        ``is_file()``-then-``read_text()`` races a deletion of the ignore file
-        itself: present at the check, gone at the read. Reading directly and
-        treating any ``OSError`` as "no ignore file" keeps a raced ``.gitignore``
-        from aborting the whole ``discover()`` walk (bug class 1/2).
+        ``is_file()`` inside the ``try`` (not before it) keeps a FIFO or a symlink
+        to a character device named ``.gitignore`` from blocking ``read_text()``
+        forever, while the ``OSError`` guard keeps a raced deletion — present at
+        the check, gone at the read — from aborting the whole ``discover()`` walk
+        (bug class 1/2).
         """
         try:
+            if not path.is_file():
+                return []
             return path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             return []

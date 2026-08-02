@@ -36,6 +36,10 @@ across `transform`, `index`, and `connector`).
   root itself cannot be resolved** (a transient NFS/SMB blip or `ESTALE`), so an
   empty scan from an unavailable root can no longer wipe a whole collection's
   index. A raced `.gitignore` deletion no longer aborts the directory walk either.
+- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
+  `required`, matching the source: the field is optional (`FdHealth | None`) so a
+  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
+  does not fail validation. The committed schema had drifted from the source.
 
 ### Added
 
@@ -46,13 +50,6 @@ across `transform`, `index`, and `connector`).
   printing a per-signal count summary and the most recent matching lines
   (`LOG_LINES`, default 40). Always exits 0; it is a diagnostic, not a gate.
   Surfaces daemon incidents that `quarry doctor` does not scan.
-
-### Fixed
-
-- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
-  `required`, matching the source: the field is optional (`FdHealth | None`) so a
-  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
-  does not fail validation. The committed schema had drifted from the source.
 
 ## [2.0.2] - 2026-07-30
 

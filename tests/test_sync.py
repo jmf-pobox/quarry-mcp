@@ -861,10 +861,10 @@ class TestComputeSyncPlan:
 
         real_stat = Path.stat
 
-        def flaky_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
-            if self.name == "gone.pdf":
+        def flaky_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "gone.pdf" and follow_symlinks:
                 raise FileNotFoundError(2, "No such file or directory", str(self))
-            return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+            return real_stat(self, follow_symlinks=follow_symlinks)
 
         monkeypatch.setattr(Path, "stat", flaky_stat)
         plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
@@ -884,10 +884,10 @@ class TestComputeSyncPlan:
 
         real_stat = Path.stat
 
-        def denied_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
-            if self.name == "locked.pdf":
+        def denied_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "locked.pdf" and follow_symlinks:
                 raise PermissionError(13, "Permission denied", str(self))
-            return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+            return real_stat(self, follow_symlinks=follow_symlinks)
 
         monkeypatch.setattr(Path, "stat", denied_stat)
         plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
@@ -908,10 +908,10 @@ class TestComputeSyncPlan:
 
         real_stat = Path.stat
 
-        def io_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
-            if self.name == "flaky.pdf":
+        def io_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "flaky.pdf" and follow_symlinks:
                 raise OSError(errno.EIO, "I/O error", str(self))
-            return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+            return real_stat(self, follow_symlinks=follow_symlinks)
 
         monkeypatch.setattr(Path, "stat", io_stat)
         plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
