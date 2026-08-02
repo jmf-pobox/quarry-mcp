@@ -1260,11 +1260,11 @@
     "public_names": 1.0
   },
   "src/quarry/sync.py": {
-    "avg_lcom": 0.0,
+    "efferent_coupling": 11.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 10.0,
     "max_lcom": 0.0,
-    "public_names": 6.0
+    "avg_lcom": 0.0
   },
   "src/quarry/sync_delete_reconciler.py": {
     "avg_lcom": 0.667,
@@ -1274,11 +1274,11 @@
     "public_names": 1.0
   },
   "src/quarry/sync_discovery.py": {
-    "avg_lcom": 0.111,
-    "circular_imports": 0.0,
     "efferent_coupling": 1.0,
-    "max_lcom": 0.111,
-    "public_names": 2.0
+    "public_names": 2.0,
+    "circular_imports": 0.0,
+    "max_lcom": 0.318,
+    "avg_lcom": 0.318
   },
   "src/quarry/sync_file_store.py": {
     "avg_lcom": 0.5,

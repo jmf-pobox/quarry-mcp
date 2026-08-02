@@ -25,6 +25,18 @@ across `transform`, `index`, and `connector`).
   capture collections (e.g. `web-captures`) as detached, and uses neutral wording
   ("unlinked") in place of "orphaned".
 
+### Fixed
+
+- **Directory sync no longer crashes (or mass-deletes) on filesystem races.**
+  The reconcile's per-file `stat()` was unguarded, so a file removed from disk
+  between discovery and stat aborted the entire collection's reconcile — a
+  crash-loop that left the collection permanently behind. Now a vanished file is
+  reconciled to a delete, an unreadable file (permission/IO error) is skipped and
+  retried, and — critically — the delete pass is **refused when the registered
+  root itself cannot be resolved** (a transient NFS/SMB blip or `ESTALE`), so an
+  empty scan from an unavailable root can no longer wipe a whole collection's
+  index. A raced `.gitignore` deletion no longer aborts the directory walk either.
+
 ### Added
 
 - **`make logs-errors`** (and `make logs-tail`) — a daemon-log diagnostic that

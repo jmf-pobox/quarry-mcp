@@ -70,6 +70,18 @@ class FileDiscovery:
     def directory(self) -> Path:
         return self._directory
 
+    @property
+    def root_available(self) -> bool:
+        """Whether the registered root resolved and is not a refused scratch root.
+
+        When ``False``, :meth:`discover` returns empty for a reason OTHER than
+        "every file was deleted" (the root could not be resolved, or is a
+        refused temp/scratch tree). Callers that compute deletions from an empty
+        discovery MUST fail closed on this — otherwise a transient root blip
+        reads as a full collection wipe.
+        """
+        return self._root_resolved is not None and not self._excluded
+
     def discover(self, extensions: frozenset[str]) -> list[Path]:
         """Recursively find files matching *extensions* under the directory.
 
@@ -138,9 +150,25 @@ class FileDiscovery:
                 continue
             if local_spec is not None and local_spec.match_file(filename):
                 continue
-            if filepath.is_symlink() and not self._symlink_inside_root(filepath):
+            if self._is_symlink_escaping(filepath):
                 continue
             yield filepath.absolute()
+
+    def _is_symlink_escaping(self, filepath: Path) -> bool:
+        """Whether *filepath* is a symlink whose target escapes the registered root.
+
+        ``is_symlink()`` re-raises ``OSError`` for permission/IO errors (only
+        ``ENOENT``-class errors are swallowed), so an unreadable file would abort
+        the whole walk. Such a file is KEPT in the walk, not dropped: dropping it
+        would make the sync plan treat it as deleted and prune its indexed chunks
+        on a transient read error (bug class 1). ``stat`` skips it from ingest in
+        the plan; it is simply never removed on the strength of a read that failed.
+        """
+        try:
+            is_link = filepath.is_symlink()
+        except OSError:
+            return False
+        return is_link and not self._symlink_inside_root(filepath)
 
     def is_indexable(self, path: Path, extensions: frozenset[str]) -> bool:
         """Return whether *path* would be indexed by :meth:`discover` (live == bulk).
@@ -233,18 +261,32 @@ class FileDiscovery:
         """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
         lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
         for name in (".gitignore", ".quarryignore"):
-            ignore_path = self._directory / name
-            if ignore_path.is_file():
-                lines.extend(ignore_path.read_text(encoding="utf-8").splitlines())
+            lines.extend(self._read_ignore_lines(self._directory / name))
         return pathspec.PathSpec.from_lines("gitignore", lines)
+
+    @staticmethod
+    def _read_ignore_lines(path: Path) -> list[str]:
+        """Return an ignore file's lines, or ``[]`` when absent or unreadable.
+
+        ``is_file()``-then-``read_text()`` races a deletion of the ignore file
+        itself: present at the check, gone at the read. Reading directly and
+        treating any ``OSError`` as "no ignore file" keeps a raced ``.gitignore``
+        from aborting the whole ``discover()`` walk (bug class 1/2).
+        """
+        try:
+            return path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            logger.warning("Skipping unreadable ignore file %s: %s", path, exc)
+            return []
 
     @staticmethod
     def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
         """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
-        gitignore = dirpath / ".gitignore"
-        if not gitignore.is_file():
+        lines = FileDiscovery._read_ignore_lines(dirpath / ".gitignore")
+        if not lines:
             return None
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
         return pathspec.PathSpec.from_lines("gitignore", lines)
 
     def _symlink_inside_root(self, link: Path) -> bool:
