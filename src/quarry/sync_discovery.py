@@ -39,12 +39,19 @@ _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 class FileDiscovery:
     """Discover indexable files under a directory, respecting ignore rules."""
 
-    __slots__ = ("_directory", "_excluded", "_guard", "_root_resolved")
+    __slots__ = (
+        "_directory",
+        "_excluded",
+        "_guard",
+        "_root_resolved",
+        "_walk_complete",
+    )
 
     _directory: Path
     _root_resolved: Path | None
     _guard: ScratchGuard
     _excluded: bool
+    _walk_complete: bool
 
     def __new__(cls, directory: Path) -> Self:
         self = super().__new__(cls)
@@ -64,6 +71,7 @@ class FileDiscovery:
         )
         if self._excluded:
             logger.debug("Skipping scratch/temp root: %s", self._root_resolved)
+        self._walk_complete = True
         return self
 
     @property
@@ -82,6 +90,25 @@ class FileDiscovery:
         """
         return self._root_resolved is not None and not self._excluded
 
+    @property
+    def discovery_reliable(self) -> bool:
+        """Whether the last :meth:`discover` saw a complete, resolvable tree.
+
+        ``False`` when the root could not be resolved / is a refused scratch tree
+        (:attr:`root_available`) OR the ``os.walk`` enumeration hit an error
+        (permission loss, ``ESTALE``, or the directory vanishing mid-walk) — any
+        of which yields an empty or partial discovery for a reason OTHER than
+        deletion. Callers computing deletions MUST fail closed on this: an
+        incomplete disk view is not evidence that files were removed. Valid only
+        after :meth:`discover` has run.
+        """
+        return self.root_available and self._walk_complete
+
+    def _note_walk_error(self, exc: OSError) -> None:
+        """``os.walk`` onerror hook: a dir could not be listed → walk incomplete."""
+        logger.warning("Directory walk error under %s: %s", self._directory, exc)
+        self._walk_complete = False
+
     def discover(self, extensions: frozenset[str]) -> list[Path]:
         """Recursively find files matching *extensions* under the directory.
 
@@ -99,9 +126,12 @@ class FileDiscovery:
         if self._root_resolved is None or self._excluded:
             return []
 
+        self._walk_complete = True
         root_spec = self.load_ignore_spec()
         result: list[Path] = []
-        for dirpath_str, dirnames, filenames in os.walk(self._directory):
+        for dirpath_str, dirnames, filenames in os.walk(
+            self._directory, onerror=self._note_walk_error
+        ):
             dirpath = Path(dirpath_str)
             local_spec = (
                 self._read_local_ignore(dirpath) if dirpath != self._directory else None

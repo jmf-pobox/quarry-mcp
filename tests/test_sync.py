@@ -975,6 +975,41 @@ class TestComputeSyncPlan:
         assert plan.to_delete == []  # fail-closed: no wipe on unresolvable root
         conn.close()
 
+    def test_walk_enumeration_error_skips_all_deletions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A root that resolves but becomes unlistable mid-walk deletes nothing.
+
+        ``os.walk`` swallows enumeration errors (skips the failing dir), so an
+        empty discovery from a permission loss / ``ESTALE`` / vanish during the
+        walk would otherwise look identical to "every file deleted". The onerror
+        hook marks the discovery unreliable so deletions fail closed.
+        """
+        conn, d = self._setup(tmp_path)
+        conn.files.upsert_file(
+            FileRecord(
+                path=str((d / "keep.pdf").resolve()),
+                collection="col",
+                document_name="keep.pdf",
+                mtime=100.0,
+                size=50,
+                ingested_at="2025-01-01",
+            ),
+        )
+
+        def failing_walk(
+            top: object, *, topdown: bool = True, onerror: object = None, **_kw: object
+        ) -> object:
+            if callable(onerror):
+                onerror(OSError("permission denied enumerating tree"))
+            return iter([])
+
+        monkeypatch.setattr("quarry.sync_discovery.os.walk", failing_walk)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.deletions_safe is False
+        assert plan.to_delete == []  # fail-closed on an incomplete walk
+        conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Progressive sync against a real LanceDB with a deterministic fake embedder
@@ -1202,6 +1237,43 @@ class TestSyncCollectionProgressive:
         assert _docnames(db) == {"a.txt"}  # chunks preserved
         assert ChunkStore(db).count(collection_filter="col") == chunks_before
         assert len(conn.files.list_files("col")) == rows_before  # rows preserved
+        conn.close()
+
+    def test_walk_error_skips_reconciler_on_readopt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A walk enumeration error skips EVERY delete path, incl. DeleteReconciler.
+
+        On re-adopt the registry is blank, so DeleteReconciler runs its
+        LanceDB-vs-disk prune. If the walk failed to enumerate, that prune would
+        wipe the collection — deletions_safe must gate it too, not just to_delete.
+        """
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert _docnames(db) == {"a.txt"}
+        chunks_before = ChunkStore(db).count(collection_filter="col")
+
+        # Re-adopt: registry rows gone, chunks kept → DeleteReconciler would prune.
+        conn.deregister_directory("col", keep_data=True)
+        conn.register_directory(d, "col")
+
+        def failing_walk(
+            top: object, *, topdown: bool = True, onerror: object = None, **_kw: object
+        ) -> object:
+            if callable(onerror):
+                onerror(OSError("enumeration failed"))
+            return iter([])
+
+        monkeypatch.setattr("quarry.sync_discovery.os.walk", failing_walk)
+        with _patched_embedder(_FakeEmbedder()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.deleted == 0  # DeleteReconciler skipped too — no wipe
+        assert _docnames(db) == {"a.txt"}
+        assert ChunkStore(db).count(collection_filter="col") == chunks_before
         conn.close()
 
 

@@ -47,6 +47,10 @@ class SyncPlan:
     # False when it holds none -- a re-adopt (keep-data disable deleted them) or a
     # never-indexed first sync -- so DeleteReconciler runs the LanceDB-vs-disk prune.
     registry_tracked: bool
+    # False when the disk view was unreliable (root unresolvable/excluded, or the
+    # walk could not fully enumerate the tree): callers MUST refuse EVERY deletion
+    # path -- both to_delete and DeleteReconciler's stale-doc prune -- this scan.
+    deletions_safe: bool
 
 
 @final
@@ -97,6 +101,7 @@ class SyncPlanner:
         ``disk_paths`` so it reconciles into ``to_delete``.
         """
         disk_files = self._discovery.discover(self._extensions)
+        deletions_safe = self._discovery.discovery_reliable
         disk_paths = {str(p) for p in disk_files}
         known_files = {r.path: r for r in self._conn.files.list_files(self._collection)}
 
@@ -106,9 +111,10 @@ class SyncPlanner:
         return SyncPlan(
             to_ingest=to_ingest,
             to_refresh=to_refresh,
-            to_delete=self._deletions(disk_paths, known_files),
+            to_delete=self._deletions(disk_paths, known_files, safe=deletions_safe),
             unchanged=unchanged,
             registry_tracked=bool(known_files),
+            deletions_safe=deletions_safe,
         )
 
     def _categorize(
@@ -167,21 +173,21 @@ class SyncPlanner:
             return None
 
     def _deletions(
-        self, disk_paths: set[str], known_files: dict[str, FileRecord]
+        self, disk_paths: set[str], known_files: dict[str, FileRecord], *, safe: bool
     ) -> list[str]:
         """Registry documents whose path is no longer on disk.
 
-        Fail-closed: when the root could not be resolved (a transient NFS/SMB
-        blip, ``ESTALE``, a momentary permission loss on the root), ``discover()``
-        returns empty for a reason OTHER than deletion. Producing deletions here
-        would treat every registered file as gone and wipe the whole collection,
-        which is strictly worse than skipping this scan. So when the root is not
-        available, delete nothing and retry next scan. A legitimately empty
-        directory (root available, nothing discovered) still deletes correctly.
+        Fail-closed on *safe* (``FileDiscovery.discovery_reliable``): when the
+        root could not be resolved/is excluded OR the walk could not fully
+        enumerate the tree (permission loss, ``ESTALE``, or a vanish mid-walk),
+        ``discover()`` returns empty/partial for a reason OTHER than deletion.
+        Producing deletions then would wipe every registered document on a
+        transient blip — strictly worse than skipping this scan. A legitimately
+        empty directory (reliable discovery, nothing found) still deletes.
         """
-        if not self._discovery.root_available:
+        if not safe:
             logger.warning(
-                "Sync plan: root unavailable for %s — skipping deletions this scan",
+                "Sync plan: unreliable discovery for %s — skipping deletions this scan",
                 self._collection,
             )
             return []

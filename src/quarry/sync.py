@@ -170,8 +170,16 @@ def sync_collection(
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
-    to_delete = DeleteReconciler(db, collection).to_delete(
-        plan.to_delete, registry_tracked=plan.registry_tracked
+    # deletions_safe gates EVERY deletion path: when the disk view is unreliable
+    # (root unresolvable/excluded, or the walk could not fully enumerate the tree)
+    # neither the plan's to_delete NOR DeleteReconciler's LanceDB-vs-disk prune may
+    # run — an incomplete scan is not evidence that documents were removed.
+    to_delete = (
+        DeleteReconciler(db, collection).to_delete(
+            plan.to_delete, registry_tracked=plan.registry_tracked
+        )
+        if plan.deletions_safe
+        else []
     )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "
