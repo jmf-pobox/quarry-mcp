@@ -13,6 +13,7 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -22,11 +23,14 @@ from cryptography.hazmat.primitives.asymmetric import (
     ed448,
     ed25519,
     rsa,
-    x448,
-    x25519,
 )
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.types import (
+        CertificatePublicKeyTypes,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +45,7 @@ def _now_utc() -> datetime.datetime:
 
 
 def _signing_public_key(
-    pub: rsa.RSAPublicKey
-    | ec.EllipticCurvePublicKey
-    | dsa.DSAPublicKey
-    | ed25519.Ed25519PublicKey
-    | ed448.Ed448PublicKey
-    | x25519.X25519PublicKey
-    | x448.X448PublicKey,
+    pub: CertificatePublicKeyTypes,
 ) -> (
     rsa.RSAPublicKey
     | ec.EllipticCurvePublicKey
@@ -55,10 +53,18 @@ def _signing_public_key(
     | ed25519.Ed25519PublicKey
     | ed448.Ed448PublicKey
 ):
-    """Narrow a public key to the signing-key types accepted by AuthorityKeyIdentifier.
+    """Narrow a certificate public key to the classic signing types.
 
-    X25519 and X448 are key-agreement keys and cannot sign certificates.
-    Our CA always uses EC P-256, so this assertion is always satisfied.
+    ``Certificate.public_key()`` can return any key type X.509 permits,
+    including key-agreement keys (X25519, X448), post-quantum
+    key-encapsulation keys (ML-KEM), and post-quantum signature keys
+    (ML-DSA). Of these, only the five classic asymmetric types below can
+    sign the certificates this CA issues. Key-agreement and ML-KEM keys
+    cannot sign at all; ML-DSA keys are not produced by this CA. Anything
+    outside the classic set is rejected here so a non-signing or
+    unexpected key can never reach certificate signing. Our CA always
+    uses EC P-256, so the guard is always satisfied in practice; it
+    fails closed on any deviation.
     """
     if not isinstance(
         pub,
@@ -73,6 +79,32 @@ def _signing_public_key(
         msg = f"CA public key must be a signing key, got {type(pub).__name__}"
         raise TypeError(msg)
     return pub
+
+
+def _verify_ca_keypair(ca_cert_pem: bytes, ca_key_pem: bytes) -> None:
+    """Reject a CA whose certificate and private key do not match.
+
+    A mismatched ca.crt/ca.key pair yields server certificates no client
+    can verify. Compare the public key embedded in the certificate against
+    the public key derived from the private key; raise if they differ so
+    the caller fails closed instead of writing unusable certs.
+    """
+    cert = x509.load_pem_x509_certificate(ca_cert_pem)
+    key = serialization.load_pem_private_key(ca_key_pem, password=None)
+    cert_pub = cert.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    key_pub = key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if cert_pub != key_pub:
+        msg = (
+            f"CA cert and key at {TLS_DIR} do not match. "
+            "Delete ca.crt and ca.key and re-run 'quarry install'."
+        )
+        raise ValueError(msg)
 
 
 def generate_ca() -> tuple[bytes, bytes]:
@@ -290,24 +322,7 @@ def write_tls_files(hostname: str) -> bool:
         logger.info("Reusing existing CA at %s", TLS_DIR)
         ca_cert_pem = ca_crt_path.read_bytes()
         ca_key_pem = ca_key_path.read_bytes()
-        # Verify the CA keypair is consistent — mismatched files would produce
-        # certificates that clients cannot verify.
-        _ca_check = x509.load_pem_x509_certificate(ca_cert_pem)
-        _ca_key_check = serialization.load_pem_private_key(ca_key_pem, password=None)
-        _cert_pub = _ca_check.public_key().public_bytes(
-            serialization.Encoding.DER,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        _key_pub = _ca_key_check.public_key().public_bytes(
-            serialization.Encoding.DER,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        if _cert_pub != _key_pub:
-            msg = (
-                f"CA cert and key at {TLS_DIR} do not match. "
-                "Delete ca.crt and ca.key and re-run 'quarry install'."
-            )
-            raise ValueError(msg)
+        _verify_ca_keypair(ca_cert_pem, ca_key_pem)
     elif ca_crt_exists or ca_key_exists:
         # Partial CA state — refuse to proceed rather than silently overwrite.
         # Silently regenerating the CA would break clients that pinned the old cert.

@@ -10,11 +10,14 @@ from unittest.mock import patch
 
 import pytest
 from cryptography import x509
+from cryptography.hazmat.primitives.asymmetric import ec, mldsa, mlkem, x448, x25519
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
 from quarry.tls import (
     TLS_DIR,
+    _signing_public_key,
+    _verify_ca_keypair,
     _write_file,
     cert_fingerprint,
     generate_ca,
@@ -70,6 +73,64 @@ class TestGenerateCa:
         assert ku.digital_signature is False
         assert ku.key_encipherment is False
         assert ku.key_agreement is False
+
+
+class TestSigningPublicKey:
+    """The guard that keeps non-signing keys out of certificate signing.
+
+    Threat: ``Certificate.public_key()`` returns a wide union — since
+    cryptography 50 it includes post-quantum key-encapsulation keys
+    (ML-KEM) and signature keys (ML-DSA) alongside the classic
+    key-agreement keys (X25519, X448). Only the five classic asymmetric
+    types this CA uses may reach ``AuthorityKeyIdentifier`` signing. A
+    key-agreement or key-encapsulation key cannot sign; every non-signing
+    input must fail closed with ``TypeError`` before it reaches signing.
+    """
+
+    def test_accepts_ec_signing_key(self) -> None:
+        pub = ec.generate_private_key(ec.SECP256R1()).public_key()
+        assert _signing_public_key(pub) is pub
+
+    def test_rejects_x25519_key_agreement(self) -> None:
+        pub = x25519.X25519PrivateKey.generate().public_key()
+        with pytest.raises(TypeError):
+            _signing_public_key(pub)
+
+    def test_rejects_x448_key_agreement(self) -> None:
+        pub = x448.X448PrivateKey.generate().public_key()
+        with pytest.raises(TypeError):
+            _signing_public_key(pub)
+
+    def test_rejects_mlkem_key_encapsulation(self) -> None:
+        pub = mlkem.MLKEM768PrivateKey.generate().public_key()
+        with pytest.raises(TypeError):
+            _signing_public_key(pub)
+
+    def test_rejects_mldsa_not_produced_by_this_ca(self) -> None:
+        # ML-DSA is a post-quantum signature scheme, but this CA never
+        # produces ML-DSA keys; the guard fails closed on it too.
+        pub = mldsa.MLDSA65PrivateKey.generate().public_key()
+        with pytest.raises(TypeError):
+            _signing_public_key(pub)
+
+
+class TestVerifyCaKeypair:
+    """Guard against a mismatched CA cert/key pair.
+
+    A ca.crt paired with an unrelated ca.key would sign server
+    certificates that no pinned client can verify. The check must fail
+    closed with ``ValueError`` before any such cert is produced.
+    """
+
+    def test_matching_pair_accepted(self) -> None:
+        cert_pem, key_pem = generate_ca()
+        _verify_ca_keypair(cert_pem, key_pem)  # does not raise
+
+    def test_mismatched_pair_rejected(self) -> None:
+        cert_pem, _ = generate_ca()
+        _, other_key_pem = generate_ca()
+        with pytest.raises(ValueError, match="do not match"):
+            _verify_ca_keypair(cert_pem, other_key_pem)
 
 
 class TestGenerateServerCert:
