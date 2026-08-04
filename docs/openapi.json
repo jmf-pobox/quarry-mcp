@@ -224,12 +224,43 @@
         "title": "ErrorBody",
         "type": "object"
       },
+      "FdHealth": {
+        "description": "The daemon's open file descriptors against its soft ``RLIMIT_NOFILE``.\n\nSampled inside the daemon process, so it is the resident daemon's own fd\nstate \u2014 the number a health check must report, never the short-lived CLI's.",
+        "properties": {
+          "open_fds": {
+            "minimum": 0.0,
+            "title": "Open Fds",
+            "type": "integer"
+          },
+          "soft_limit": {
+            "exclusiveMinimum": 0.0,
+            "title": "Soft Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "open_fds",
+          "soft_limit"
+        ],
+        "title": "FdHealth",
+        "type": "object"
+      },
       "HealthResponse": {
-        "description": "The daemon's liveness and readiness snapshot (unversioned; auth-exempt).\n\nCarries liveness (``status``), process uptime, warm/ready ``state``, the wire\n``api_version`` a client negotiates against, and the running ``quarry_version``.",
+        "description": "The daemon's liveness and readiness snapshot (unversioned; auth-exempt).\n\nCarries liveness (``status``), process uptime, warm/ready ``state``, the wire\n``api_version`` a client negotiates against, the running ``quarry_version``,\nand the daemon's own file-descriptor headroom.",
         "properties": {
           "api_version": {
             "title": "Api Version",
             "type": "string"
+          },
+          "fd": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FdHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "quarry_version": {
             "title": "Quarry Version",
@@ -599,7 +630,7 @@
     },
     "/health": {
       "get": {
-        "description": "Return liveness plus warm ``state`` and version negotiation fields.",
+        "description": "Return liveness, warm ``state``, version fields, and daemon fd headroom.",
         "operationId": "health_health_get",
         "responses": {
           "200": {

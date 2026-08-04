@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 from xml.sax.saxutils import escape as _xml_escape
 
 from quarry.config import DEFAULT_PORT
+from quarry.fd_config import FdServiceLimits
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR, cert_fingerprint, write_tls_files
 
@@ -194,6 +195,10 @@ def _launchd_plist_content() -> str:
         "        </dict>\n"
         "        "
     )
+    # Bake the descriptor ceiling into the plist: launchd raises the daemon's hard
+    # limit above the 256 a fresh bootstrap inherits, so the in-daemon FdEnvelope
+    # can lift the soft limit off it instead of clamping to 256 (DES-046 / quarry-fnzh).
+    fd_limits_block = FdServiceLimits.from_settings().launchd_fragment()
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -206,7 +211,7 @@ def _launchd_plist_content() -> str:
             <array>
         {program_args}
             </array>
-            {env_vars_block}<key>ProcessType</key>
+            {env_vars_block}{fd_limits_block}<key>ProcessType</key>
             <string>Interactive</string>
             <key>RunAtLoad</key>
             <true/>
@@ -314,6 +319,10 @@ def _systemd_unit_content() -> str:
     args = _quarryd_exec_args()
     exec_start = " ".join(_systemd_escape(a) for a in args)
     env_file_path = str(_ENV_FILE)
+    # Bake the descriptor ceiling into the unit: systemd raises the daemon's hard
+    # limit above the login-session default so the in-daemon FdEnvelope lifts the
+    # soft limit off it instead of clamping to it (DES-046 / quarry-fnzh).
+    fd_limits_directive = FdServiceLimits.from_settings().systemd_directive()
     return textwrap.dedent(f"""\
         [Unit]
         Description=Quarry semantic search daemon
@@ -325,6 +334,7 @@ def _systemd_unit_content() -> str:
         Restart=always
         RestartSec=5
         Nice=-5
+        {fd_limits_directive}
 
         [Install]
         WantedBy=default.target

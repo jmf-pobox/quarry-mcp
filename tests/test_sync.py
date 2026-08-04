@@ -23,11 +23,12 @@ from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
 from quarry.scratch_paths import ScratchGuard
-from quarry.sync import compute_sync_plan, sync_collection
+from quarry.sync import sync_collection
 from quarry.sync_discovery import _DEFAULT_IGNORE_PATTERNS, FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
 from quarry.sync_messages import FileMeta
+from quarry.sync_planner import SyncPlanner
 from quarry.sync_registry import SyncRegistry
 from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
 
@@ -559,6 +560,22 @@ class TestLoadIgnoreSpec:
         assert spec.match_file("debug.log")
         assert not spec.match_file("# comment")
 
+    def test_read_ignore_lines_absent_returns_empty(self, tmp_path: Path):
+        """An absent ignore file yields no lines (not a crash)."""
+        assert FileDiscovery._read_ignore_lines(tmp_path / ".gitignore") == []
+
+    def test_read_ignore_lines_unreadable_returns_empty(self, tmp_path: Path):
+        """An unreadable ignore file (a directory) yields no lines, no raise."""
+        (tmp_path / ".gitignore").mkdir()  # read_text → IsADirectoryError (OSError)
+        assert FileDiscovery._read_ignore_lines(tmp_path / ".gitignore") == []
+
+    def test_discover_survives_unreadable_gitignore(self, tmp_path: Path):
+        """A raced/unreadable .gitignore does not abort the whole discover() walk."""
+        (tmp_path / ".gitignore").mkdir()  # unreadable ignore → skipped, walk continues
+        (tmp_path / "keep.txt").write_text("body")
+        result = FileDiscovery(tmp_path).discover(frozenset({".txt"}))
+        assert [p.name for p in result] == ["keep.txt"]
+
 
 class TestComputeSyncPlan:
     EXTS = frozenset({".pdf", ".txt"})
@@ -574,7 +591,7 @@ class TestComputeSyncPlan:
     def test_new_file_detected(self, tmp_path: Path):
         conn, d = self._setup(tmp_path)
         (d / "new.pdf").write_bytes(b"data")
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "new.pdf"
         assert plan.to_delete == []
@@ -596,7 +613,7 @@ class TestComputeSyncPlan:
                 ingested_at="2025-01-01",
             ),
         )
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert plan.to_ingest == []
         assert plan.unchanged == 1
         conn.close()
@@ -618,7 +635,7 @@ class TestComputeSyncPlan:
         # Modify the file and force a distinct mtime via os.utime
         f.write_bytes(b"new content that is longer")
         os.utime(f, (f.stat().st_atime, f.stat().st_mtime + 10))
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "changed.pdf"
         conn.close()
@@ -635,7 +652,7 @@ class TestComputeSyncPlan:
                 ingested_at="2025-01-01",
             ),
         )
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert plan.to_delete == ["gone.pdf"]
         conn.close()
 
@@ -671,7 +688,7 @@ class TestComputeSyncPlan:
             ),
         )
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "brand-new.txt"
         assert plan.to_delete == ["removed.pdf"]
@@ -711,7 +728,7 @@ class TestComputeSyncPlan:
         stat = f.stat()
         os.utime(f, (stat.st_atime, stat.st_mtime + 100))
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert plan.to_ingest == []
         assert len(plan.to_refresh) == 1
         assert plan.to_refresh[0][0].name == "same.txt"
@@ -732,7 +749,7 @@ class TestComputeSyncPlan:
         stat = f.stat()
         os.utime(f, (stat.st_atime, stat.st_mtime + 10))
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "edit.txt"
         assert plan.to_refresh == []
@@ -747,7 +764,7 @@ class TestComputeSyncPlan:
         with f.open("ab") as fh:
             fh.write(b"-longer-now")
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "grow.txt"
         assert plan.to_refresh == []
@@ -762,7 +779,7 @@ class TestComputeSyncPlan:
         stat = f.stat()
         os.utime(f, (stat.st_atime, stat.st_mtime + 10))
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "legacy.txt"
         assert plan.to_refresh == []
@@ -786,7 +803,7 @@ class TestComputeSyncPlan:
             "quarry.sync.FileDiscovery.content_hash", staticmethod(_boom)
         )
 
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert len(plan.to_ingest) == 1
         assert plan.to_ingest[0].name == "sadfile.txt"
         assert plan.to_refresh == []
@@ -811,9 +828,186 @@ class TestComputeSyncPlan:
                 partial_hash="h",  # mid-file — must resume
             ),
         )
-        plan = compute_sync_plan(d, "col", conn, self.EXTS)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
         assert [p.name for p in plan.to_ingest] == ["resume.txt"]
         assert plan.unchanged == 0
+        conn.close()
+
+    def _register(self, conn: SyncRegistry, f: Path) -> None:
+        """Register *f* in the 'col' collection matching its current disk state."""
+        stat = f.stat()
+        conn.files.upsert_file(
+            FileRecord(
+                path=str(f.resolve()),
+                collection="col",
+                document_name=f.name,
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+                ingested_at="2025-01-01",
+            ),
+        )
+
+    def test_vanished_file_midscan_routes_to_delete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A file gone between discovery and stat() becomes a delete, not a crash."""
+        conn, d = self._setup(tmp_path)
+        gone = d / "gone.pdf"
+        gone.write_bytes(b"data")
+        keep = d / "keep.pdf"
+        keep.write_bytes(b"data")
+        self._register(conn, gone)
+        self._register(conn, keep)
+
+        real_stat = Path.stat
+
+        def flaky_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "gone.pdf" and follow_symlinks:
+                raise FileNotFoundError(2, "No such file or directory", str(self))
+            return real_stat(self, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "stat", flaky_stat)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.to_delete == ["gone.pdf"]  # vanished → delete, scan did not crash
+        assert plan.to_ingest == []  # keep unchanged; gone not re-ingested
+        assert plan.unchanged == 1  # keep survived
+        conn.close()
+
+    def test_unreadable_file_kept_not_deleted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An unreadable file is skipped and kept, never deleted (fail-safe)."""
+        conn, d = self._setup(tmp_path)
+        f = d / "locked.pdf"
+        f.write_bytes(b"data")
+        self._register(conn, f)
+
+        real_stat = Path.stat
+
+        def denied_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "locked.pdf" and follow_symlinks:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_stat(self, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "stat", denied_stat)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.to_delete == []  # a read error is not a deletion
+        assert plan.to_ingest == []
+        conn.close()
+
+    def test_io_error_file_kept_not_deleted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An EIO stat error is kept, never misread as 'file gone' → delete."""
+        import errno
+
+        conn, d = self._setup(tmp_path)
+        f = d / "flaky.pdf"
+        f.write_bytes(b"data")
+        self._register(conn, f)
+
+        real_stat = Path.stat
+
+        def io_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+            if self.name == "flaky.pdf" and follow_symlinks:
+                raise OSError(errno.EIO, "I/O error", str(self))
+            return real_stat(self, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "stat", io_stat)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.to_delete == []
+        conn.close()
+
+    def test_excluded_scratch_root_skips_all_deletions(self, tmp_path: Path):
+        """A refused scratch-tree root deletes nothing (fail-closed).
+
+        ``discover()`` returns empty for an excluded root — not a signal that
+        every registered file was deleted, so the plan must not wipe them.
+        """
+        (tmp_path / ".git").mkdir()  # mark tmp_path a repo root
+        scratch = tmp_path / ".tmp" / "docs"
+        scratch.mkdir(parents=True)
+        conn = SyncRegistry(tmp_path / "r.db")
+        conn.register_directory(scratch, "col")
+        conn.files.upsert_file(
+            FileRecord(
+                path=str((scratch / "a.pdf").resolve()),
+                collection="col",
+                document_name="a.pdf",
+                mtime=100.0,
+                size=50,
+                ingested_at="2025-01-01",
+            ),
+        )
+        plan = SyncPlanner(scratch, "col", conn, self.EXTS).compute()
+        assert plan.to_delete == []  # excluded root → no wipe
+        conn.close()
+
+    def test_unresolvable_root_skips_all_deletions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A transient root-resolve failure deletes nothing — no full wipe.
+
+        The severe fail-open case: an empty ``discover()`` because the root could
+        not be resolved (NFS/SMB blip, ESTALE) must not treat every registered
+        file as vanished and destroy the index.
+        """
+        conn, d = self._setup(tmp_path)
+        conn.files.upsert_file(
+            FileRecord(
+                path=str((d / "keep.pdf").resolve()),
+                collection="col",
+                document_name="keep.pdf",
+                mtime=100.0,
+                size=50,
+                ingested_at="2025-01-01",
+            ),
+        )
+        real_resolve = Path.resolve
+
+        def failing_resolve(self: Path, *, strict: bool = False) -> Path:
+            if strict:
+                raise OSError("transient root failure")
+            return real_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", failing_resolve)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.to_delete == []  # fail-closed: no wipe on unresolvable root
+        conn.close()
+
+    def test_walk_enumeration_error_skips_all_deletions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A root that resolves but becomes unlistable mid-walk deletes nothing.
+
+        ``os.walk`` swallows enumeration errors (skips the failing dir), so an
+        empty discovery from a permission loss / ``ESTALE`` / vanish during the
+        walk would otherwise look identical to "every file deleted". The onerror
+        hook marks the discovery unreliable so deletions fail closed.
+        """
+        conn, d = self._setup(tmp_path)
+        conn.files.upsert_file(
+            FileRecord(
+                path=str((d / "keep.pdf").resolve()),
+                collection="col",
+                document_name="keep.pdf",
+                mtime=100.0,
+                size=50,
+                ingested_at="2025-01-01",
+            ),
+        )
+
+        def failing_walk(
+            top: object, *, topdown: bool = True, onerror: object = None, **_kw: object
+        ) -> object:
+            if callable(onerror):
+                onerror(OSError("permission denied enumerating tree"))
+            return iter([])
+
+        monkeypatch.setattr("quarry.sync_discovery.os.walk", failing_walk)
+        plan = SyncPlanner(d, "col", conn, self.EXTS).compute()
+        assert plan.deletions_safe is False
+        assert plan.to_delete == []  # fail-closed on an incomplete walk
         conn.close()
 
 
@@ -1008,6 +1202,78 @@ class TestSyncCollectionProgressive:
         assert result.deleted == 0  # nothing vanished
         assert ChunkStore(db).count(collection_filter="col") == count_before
         assert _docnames(db) == {"a.txt"}
+        conn.close()
+
+    def test_unresolvable_root_preserves_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A root-resolve failure during sync preserves all chunks and rows.
+
+        Regression for the fail-open mass deletion: registered files present and
+        the root momentarily unresolvable must yield deleted == 0, not a wipe of
+        the whole collection.
+        """
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert _docnames(db) == {"a.txt"}
+        chunks_before = ChunkStore(db).count(collection_filter="col")
+        rows_before = len(conn.files.list_files("col"))
+
+        real_resolve = Path.resolve
+
+        def failing_resolve(self: Path, *, strict: bool = False) -> Path:
+            if strict:
+                raise OSError("transient root failure")
+            return real_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", failing_resolve)
+        with _patched_embedder(_FakeEmbedder()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.deleted == 0  # fail-closed — nothing wiped
+        assert _docnames(db) == {"a.txt"}  # chunks preserved
+        assert ChunkStore(db).count(collection_filter="col") == chunks_before
+        assert len(conn.files.list_files("col")) == rows_before  # rows preserved
+        conn.close()
+
+    def test_walk_error_skips_reconciler_on_readopt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A walk enumeration error skips EVERY delete path, incl. DeleteReconciler.
+
+        On re-adopt the registry is blank, so DeleteReconciler runs its
+        LanceDB-vs-disk prune. If the walk failed to enumerate, that prune would
+        wipe the collection — deletions_safe must gate it too, not just to_delete.
+        """
+        settings = _settings(tmp_path)
+        db, conn, d = _make_collection(tmp_path, settings)
+        (d / "a.txt").write_text(_SENTENCE * 3)
+        with _patched_embedder(_FakeEmbedder()):
+            sync_collection(d, "col", db, settings, conn, max_workers=1)
+        assert _docnames(db) == {"a.txt"}
+        chunks_before = ChunkStore(db).count(collection_filter="col")
+
+        # Re-adopt: registry rows gone, chunks kept → DeleteReconciler would prune.
+        conn.deregister_directory("col", keep_data=True)
+        conn.register_directory(d, "col")
+
+        def failing_walk(
+            top: object, *, topdown: bool = True, onerror: object = None, **_kw: object
+        ) -> object:
+            if callable(onerror):
+                onerror(OSError("enumeration failed"))
+            return iter([])
+
+        monkeypatch.setattr("quarry.sync_discovery.os.walk", failing_walk)
+        with _patched_embedder(_FakeEmbedder()):
+            result = sync_collection(d, "col", db, settings, conn, max_workers=1)
+
+        assert result.deleted == 0  # DeleteReconciler skipped too — no wipe
+        assert _docnames(db) == {"a.txt"}
+        assert ChunkStore(db).count(collection_filter="col") == chunks_before
         conn.close()
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,22 +16,11 @@ from quarry.sync_delete_reconciler import DeleteReconciler
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_ingest import CollectionIngestor
+from quarry.sync_planner import SyncPlanner
 from quarry.sync_registry import SyncRegistry
 from quarry.types import LanceDB
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class SyncPlan:
-    to_ingest: list[Path]
-    to_refresh: list[tuple[Path, str]]
-    to_delete: list[str]
-    unchanged: int
-    # True iff the registry held any file row for the collection (bool(known_files));
-    # False when it holds none -- a re-adopt (keep-data disable deleted them) or a
-    # never-indexed first sync -- so DeleteReconciler runs the LanceDB-vs-disk prune.
-    registry_tracked: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,83 +32,6 @@ class SyncContext:
     db: LanceDB
     conn: SyncRegistry
     progress: Callable[[str], None]
-
-
-def _refresh_hash(
-    file_path: Path,
-    record: FileRecord,
-    stat: os.stat_result,
-) -> str | None:
-    """Return the disk hash if *file_path* is a refresh (content unchanged), else None.
-
-    A refresh means ``(mtime, size)`` shifted but the content hash still matches
-    the stored value, so only the registry row needs updating — LanceDB is left
-    alone. Missing stored hash, size mismatch, or a hash read error all decline.
-    """
-    if record.content_hash is None or record.size != stat.st_size:
-        return None
-    try:
-        disk_hash = FileDiscovery.content_hash(file_path)
-    except OSError:
-        return None
-    return disk_hash if disk_hash == record.content_hash else None
-
-
-def compute_sync_plan(
-    directory: Path,
-    collection: str,
-    conn: SyncRegistry,
-    extensions: frozenset[str],
-) -> SyncPlan:
-    """Compare files on disk against the registry to produce a sync plan.
-
-    Categorizes each discovered file into one of four buckets:
-
-    - ``to_ingest``: new files, size mismatches, files whose content hash
-      changed, or files with a partial resume watermark (mid-file, DES-034).
-    - ``to_refresh``: files whose ``(mtime, size)`` shifted but whose content
-      hash still matches — only the registry row is updated.
-    - ``to_delete``: ``document_name``s present in the registry but no longer
-      on disk.
-    - ``unchanged``: files with identical ``(mtime, size)``.
-
-    Fail-safe rules: size mismatch, missing stored hash, or hash read errors
-    all fall through to ``to_ingest``.
-    """
-    discovery = FileDiscovery(directory)
-    disk_files = discovery.discover(extensions)
-    disk_paths = {str(p) for p in disk_files}
-    known_files = {r.path: r for r in conn.files.list_files(collection)}
-
-    to_ingest: list[Path] = []
-    to_refresh: list[tuple[Path, str]] = []
-    unchanged = 0
-
-    for file_path in disk_files:
-        stat = file_path.stat()
-        record = known_files.get(str(file_path))
-        if record is None or record.is_partial:
-            to_ingest.append(file_path)
-            continue
-        if record.mtime == stat.st_mtime and record.size == stat.st_size:
-            unchanged += 1
-            continue
-        refresh = _refresh_hash(file_path, record, stat)
-        if refresh is not None:
-            to_refresh.append((file_path, refresh))
-        else:
-            to_ingest.append(file_path)
-
-    to_delete = [
-        r.document_name for r in known_files.values() if r.path not in disk_paths
-    ]
-    return SyncPlan(
-        to_ingest=to_ingest,
-        to_refresh=to_refresh,
-        to_delete=to_delete,
-        unchanged=unchanged,
-        registry_tracked=bool(known_files),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +57,7 @@ def _refresh_files(
     No LanceDB work, no re-embedding — just a fresh ``(mtime, size,
     content_hash, ingested_at)`` for each row, committed as one unit. Re-hashes
     the file at refresh time to guard against TOCTOU: if the file changed since
-    ``compute_sync_plan``, the refresh is skipped so the next sync detects it.
+    the plan was computed, the refresh is skipped so the next sync detects it.
     """
     refreshed = 0
     failed = 0
@@ -255,12 +166,20 @@ def sync_collection(
     ctx = SyncContext(collection, resolved, db, conn, _progress)
 
     t0 = time.perf_counter()
-    plan = compute_sync_plan(resolved, collection, conn, SUPPORTED_EXTENSIONS)
+    plan = SyncPlanner(resolved, collection, conn, SUPPORTED_EXTENSIONS).compute()
     logger.info(
         "sync: [%s] plan computed in %.2fs", collection, time.perf_counter() - t0
     )
-    to_delete = DeleteReconciler(db, collection).to_delete(
-        plan.to_delete, registry_tracked=plan.registry_tracked
+    # deletions_safe gates EVERY deletion path: when the disk view is unreliable
+    # (root unresolvable/excluded, or the walk could not fully enumerate the tree)
+    # neither the plan's to_delete NOR DeleteReconciler's LanceDB-vs-disk prune may
+    # run — an incomplete scan is not evidence that documents were removed.
+    to_delete = (
+        DeleteReconciler(db, collection).to_delete(
+            plan.to_delete, registry_tracked=plan.registry_tracked
+        )
+        if plan.deletions_safe
+        else []
     )
     _progress(
         f"[{collection}] {len(plan.to_ingest)} to ingest, "

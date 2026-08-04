@@ -523,7 +523,7 @@ class TestT20CheckEnableStatusConfigMissing:
     def test_config_missing_returns_not_passed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.doctor import _check_enable_status
+        from quarry.doctor_sync import SyncDiagnostics
 
         project = tmp_path / "myproject"
         project.mkdir()
@@ -531,7 +531,7 @@ class TestT20CheckEnableStatusConfigMissing:
         registry_path = tmp_path / "registry.db"
         self._register(registry_path, project)
 
-        result = _check_enable_status(registry_path, str(project))
+        result = SyncDiagnostics.enable_status(registry_path, str(project))
 
         assert result.passed is False
         assert "config.md missing" in result.message
@@ -540,7 +540,7 @@ class TestT20CheckEnableStatusConfigMissing:
     def test_config_present_returns_passed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.doctor import _check_enable_status
+        from quarry.doctor_sync import SyncDiagnostics
 
         project = tmp_path / "myproject"
         project.mkdir()
@@ -554,7 +554,7 @@ class TestT20CheckEnableStatusConfigMissing:
             "---\nauto_capture:\n  session_sync: true\n---\n"
         )
 
-        result = _check_enable_status(registry_path, str(project))
+        result = SyncDiagnostics.enable_status(registry_path, str(project))
 
         assert result.passed is True
         assert "config.md missing" not in result.message
