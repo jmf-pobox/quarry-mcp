@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class FdHealth(BaseModel):
+    """The daemon's open file descriptors against its soft ``RLIMIT_NOFILE``.
+
+    Sampled inside the daemon process, so it is the resident daemon's own fd
+    state — the number a health check must report, never the short-lived CLI's.
+    """
+
+    open_fds: int = Field(ge=0)
+    soft_limit: int = Field(gt=0)
 
 
 class HealthResponse(BaseModel):
     """The daemon's liveness and readiness snapshot (unversioned; auth-exempt).
 
     Carries liveness (``status``), process uptime, warm/ready ``state``, the wire
-    ``api_version`` a client negotiates against, and the running ``quarry_version``.
+    ``api_version`` a client negotiates against, the running ``quarry_version``,
+    and the daemon's own file-descriptor headroom.
     """
 
     status: str
@@ -17,6 +29,12 @@ class HealthResponse(BaseModel):
     state: str
     api_version: str
     quarry_version: str
+    # ``None`` in two benign cases. The daemon's own fd scan raised — EMFILE, or
+    # a platform with no fd directory — so it emits ``fd: null`` rather than
+    # 500-ing the endpoint on the exhaustion this field exists to surface. Or a
+    # client parses an older daemon whose response predates this field, and the
+    # default maps that absent key to ``None`` (the upgrade-before-reinstall window).
+    fd: FdHealth | None = None
 
 
 class StatusResponse(BaseModel):

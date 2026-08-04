@@ -6,10 +6,10 @@ on ``quarry find``. This value object samples the current count so both the doct
 health check and the serve-time telemetry can warn before the wall is hit.
 
 The measurement itself needs a file descriptor (the ``iterdir`` scan opens a
-directory handle). That means, at real exhaustion, the sample *is what fails* —
-so ``sample`` deliberately lets an ``EMFILE``/``ENFILE`` ``OSError`` propagate
-rather than masking it. Callers distinguish that exhaustion signal from a
-platform that simply lacks an fd directory to scan by inspecting ``errno``.
+directory handle) — at real exhaustion the sample *is what fails*, so ``sample``
+lets that ``OSError`` propagate rather than masking it as healthy. Both callers
+absorb it without reading ``errno``: the ``/health`` route (``routes/meta.py``)
+reports ``fd: null``; ``fd_telemetry`` logs one line and keeps sampling.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Self, final
 # it is missing the sampler degrades exactly like a missing fd directory —
 # ``sample`` raises an errno-less ``OSError`` (callers report "unavailable") and
 # ``describe`` treats the limit as unbounded — instead of poisoning the import
-# chain (fd_headroom is imported by doctor_resources and fd_telemetry).
+# chain (fd_headroom is imported by fd_telemetry, doctor_daemon, and meta routes).
 resource: ModuleType | None
 try:
     resource = importlib.import_module("resource")
@@ -49,11 +49,11 @@ class FdHeadroom:
     def sample(cls) -> Self:
         """Measure the current process's open descriptors and soft fd limit.
 
-        Propagates ``OSError`` whose ``errno`` is ``EMFILE``/``ENFILE`` when
-        descriptor exhaustion prevents the scan itself — that failure *is* the
-        signal callers must surface, never swallow as healthy. Raises the same
-        errno-less ``OSError`` used for a missing fd directory when the POSIX
-        ``resource`` module is unavailable, so callers report "unavailable".
+        Propagates ``OSError`` when the scan cannot run: descriptor exhaustion
+        (the ``EMFILE``/``ENFILE`` case where the scan itself is what fails) or an
+        errno-less ``OSError`` for a missing fd directory or an absent POSIX
+        ``resource`` module. Neither caller branches on ``errno``: the ``/health``
+        route reports ``fd: null``; the telemetry loop logs and keeps sampling.
         """
         rlimits = resource
         if rlimits is None:
@@ -66,10 +66,10 @@ class FdHeadroom:
     def _count_open_fds() -> int:
         """Return this process's open-descriptor count via ``/proc`` or ``/dev/fd``.
 
-        Raises a plain ``OSError`` (``errno`` unset) only when neither directory
+        Raises a plain ``OSError`` (``errno`` unset) when neither directory
         exists — genuine platform absence. Under real descriptor exhaustion the
-        ``iterdir`` scan raises ``OSError(EMFILE)`` and that propagates unchanged,
-        so the caller can tell exhaustion from absence by ``errno``.
+        ``iterdir`` scan raises ``OSError(EMFILE)``; that propagates unchanged too,
+        and the sole caller collapses both to ``fd: null`` without reading errno.
         """
         for fd_dir in ("/proc/self/fd", "/dev/fd"):
             path = Path(fd_dir)

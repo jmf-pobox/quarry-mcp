@@ -21,6 +21,7 @@ class CapturesCollection:
 
     _CAPTURES_SUFFIX = "-captures"
     _FALLBACK_REPO = "default"
+    _VIRTUAL_NAMES = frozenset({"default-captures", "web-captures"})
 
     _name: str
 
@@ -47,14 +48,13 @@ class CapturesCollection:
         return cls.for_repo(base_collection or cls._FALLBACK_REPO)
 
     @classmethod
-    def fallback(cls) -> Self:
-        """Return the collection an unregistered directory's captures fall into.
+    def virtual_names(cls) -> frozenset[str]:
+        """Return the captures collections with no source directory by design.
 
-        This is the live ``default-captures`` fallback (not a base-less one-off),
-        so the doctor's orphan check must spare it — its base ``default`` is never
-        registered by design.
+        The fallback (``default``) and WebFetch (``web``) buckets are never
+        directory-backed, so the doctor's unlinked-captures check spares them.
         """
-        return cls.resolve(None)
+        return cls._VIRTUAL_NAMES
 
     @classmethod
     def for_cwd(cls, cwd: str, registrations: Mapping[str, str]) -> Self:

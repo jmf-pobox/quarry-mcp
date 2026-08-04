@@ -14,6 +14,63 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-02
+
+### Changed
+
+- **`quarry doctor` Sync check** now reports the *newest* collection's sync age
+  — a pipeline-liveness signal ("has anything been ingested recently?") — instead
+  of the oldest. Quiet, unchanged reference collections no longer trigger a false
+  ">24h stale" warning; the check only flags stale when *nothing* has synced in
+  24h. (The correct index-vs-filesystem drift check is tracked separately.)
+- **`quarry doctor` captures check** no longer flags by-design non-directory
+  capture collections (e.g. `web-captures`) as detached, and uses neutral wording
+  ("unlinked") in place of "orphaned".
+
+### Fixed
+
+- **Directory sync no longer crashes (or mass-deletes) on filesystem races.**
+  The reconcile's per-file `stat()` was unguarded, so a file removed from disk
+  between discovery and stat aborted the entire collection's reconcile — a
+  crash-loop that left the collection permanently behind. Now a vanished file is
+  reconciled to a delete, an unreadable file (permission/IO error) is skipped and
+  retried, and — critically — the delete pass is **refused when the registered
+  root itself cannot be resolved** (a transient NFS/SMB blip or `ESTALE`), so an
+  empty scan from an unavailable root can no longer wipe a whole collection's
+  index. A raced `.gitignore` deletion no longer aborts the directory walk either.
+- Regenerated `docs/openapi.json` so `HealthResponse.fd` is no longer listed as
+  `required`, matching the source: the field is optional (`FdHealth | None`) so a
+  new client validating a pre-upgrade daemon's `/health` — which omits `fd` —
+  does not fail validation. The committed schema had drifted from the source.
+
+### Added
+
+- **`make logs-errors`** (and `make logs-tail`) — a daemon-log diagnostic that
+  scans the quarry daemon's log directory (`~/.punt-labs/quarry/logs`, override
+  with `LOG_DIR`) for error/failure signals — `ERROR`, `Traceback`, `EMFILE`/
+  "Too many open files", `Watch index failed`, `Delete failed`, and more —
+  printing a per-signal count summary and the most recent matching lines
+  (`LOG_LINES`, default 40). Always exits 0; it is a diagnostic, not a gate.
+  Surfaces daemon incidents that `quarry doctor` does not scan.
+
+## [2.0.2] - 2026-07-30
+
+### Fixed
+
+- **infra (daemon)**: the daemon file-descriptor fix now actually engages on a
+  fresh install, and `quarry doctor` finally reports the **daemon's** fd headroom
+  instead of the CLI shell's. 2.0.1's in-process `RLIMIT_NOFILE` raise was correct
+  in isolation but silently no-op'd on a fresh `quarry install`: a freshly
+  bootstrapped launchd agent inherits a hard limit of 256, and a non-root process
+  cannot raise its own hard limit, so the in-process raise clamped and lifted
+  nothing. The service manager now bakes the ceiling **before** spawn — launchd
+  `SoftResourceLimits`/`HardResourceLimits` and systemd `LimitNOFILE` at 8192:65536,
+  derived from `QUARRY_FD_LIMIT` (floored to the safe default so the override can
+  only raise). Separately, `quarry doctor`'s FD-headroom check had been sampling the
+  short-lived CLI's own `ulimit`, never the resident daemon — it now reads the
+  daemon's fd headroom from `/health` (degrading cleanly when the daemon is
+  unreachable, never falling back to a local sample). See the DES-046 amendment.
+
 ## [2.0.1] - 2026-07-29
 
 ### Fixed

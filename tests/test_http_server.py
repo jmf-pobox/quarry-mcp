@@ -7,6 +7,7 @@ Each test class gets its own app instance via fixtures.
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import sqlite3
@@ -29,6 +30,7 @@ from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
+from quarry.fd_headroom import FdHeadroom
 from quarry.results import SearchResult
 
 
@@ -149,6 +151,40 @@ class TestHealth:
     def test_cors_headers(self, client: TestClient) -> None:
         resp = client.get("/health", headers={"Origin": "http://localhost"})
         assert resp.headers["Access-Control-Allow-Origin"] == "http://localhost"
+
+    def test_fd_populated_from_daemon_sample(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """/health reports the DAEMON's own fd headroom.
+
+        The handler samples ``FdHeadroom`` in the daemon process, so the field
+        is the resident daemon's descriptor state — the number doctor must read
+        — never a request-time sample taken in some other (CLI) process.
+        """
+        monkeypatch.setattr(
+            FdHeadroom, "sample", classmethod(lambda cls: FdHeadroom(42, 512))
+        )
+        assert client.get("/health").json()["fd"] == {"open_fds": 42, "soft_limit": 512}
+
+    def test_fd_null_when_sample_raises(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An EMFILE (or platform-absent) sample yields ``fd: null`` and a 200.
+
+        The fd scan itself needs a descriptor, so at real exhaustion the sample
+        raises — the health endpoint must degrade the field to ``None``, never
+        500 on the very condition this field exists to surface (bug-class-2).
+        """
+
+        def _raise(cls: type[FdHeadroom]) -> FdHeadroom:
+            raise OSError(errno.EMFILE, "Too many open files")
+
+        monkeypatch.setattr(FdHeadroom, "sample", classmethod(_raise))
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["fd"] is None
+        assert data["status"] == "ok"
 
 
 class TestCaCertRoute:
@@ -1906,7 +1942,7 @@ class TestIngest:
             ),
             patch(
                 "quarry.captures_collection.CapturesCollection.for_registry_path",
-                return_value=CapturesCollection.fallback(),
+                return_value=CapturesCollection.resolve(None),
             ),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
             patch("quarry.ingestion.pipeline.ingest_auto") as auto,
@@ -3601,3 +3637,42 @@ class TestResponseModelParity:
         refs = {opt.get("$ref", "") for opt in schema.get("anyOf", [])}
         assert any(r.endswith("/ShowPageResponse") for r in refs), refs
         assert any(r.endswith("/DocumentInfo") for r in refs), refs
+
+
+class TestHealthResponseFdOptional:
+    """``HealthResponse.fd`` is optional+nullable for the upgrade window.
+
+    A package upgrade installs the new client before the still-running daemon is
+    reinstalled, so a NEW client briefly validates an OLD daemon's /health
+    response that predates the ``fd`` field. An absent key must deserialize to
+    ``None`` rather than raising — otherwise ``quarry remote list --ping``, which
+    parses through this model, crashes mid-upgrade.
+    """
+
+    @staticmethod
+    def _base_payload() -> dict[str, object]:
+        # Wire payload the daemon emits; ``object`` values match JSON at the boundary.
+        return {
+            "status": "ok",
+            "uptime_seconds": 1.0,
+            "state": "ready",
+            "api_version": "1",
+            "quarry_version": "2.0.0",
+        }
+
+    def test_absent_fd_validates_to_none(self) -> None:
+        """An old daemon that omits ``fd`` entirely deserializes with ``fd is None``."""
+        health = HealthResponse.model_validate(self._base_payload())
+        assert health.fd is None
+
+    def test_explicit_null_fd_validates_to_none(self) -> None:
+        """A daemon that could not sample its descriptors reports ``fd: null``."""
+        payload = self._base_payload() | {"fd": None}
+        assert HealthResponse.model_validate(payload).fd is None
+
+    def test_populated_fd_validates(self) -> None:
+        """A healthy daemon's ``fd`` object round-trips into ``FdHealth``."""
+        payload = self._base_payload() | {"fd": {"open_fds": 42, "soft_limit": 8192}}
+        health = HealthResponse.model_validate(payload)
+        assert health.fd is not None
+        assert (health.fd.open_fds, health.fd.soft_limit) == (42, 8192)

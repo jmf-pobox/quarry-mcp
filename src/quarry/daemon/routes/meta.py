@@ -9,8 +9,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from quarry.api import API_VERSION
+from quarry.api.meta import FdHealth
 from quarry.daemon.routes.base import RouteGroup
 from quarry.db.storage import dir_size_bytes
+from quarry.fd_headroom import FdHeadroom
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import SyncRegistry
 
@@ -23,7 +25,8 @@ class MetaRoutes(RouteGroup):
     """Liveness, aggregate status, and CA-cert bootstrap."""
 
     def health(self, _request: Request) -> JSONResponse:
-        """Return liveness plus warm ``state`` and version negotiation fields."""
+        """Return liveness, warm ``state``, version fields, and daemon fd headroom."""
+        fd = self._fd_headroom()
         return JSONResponse(
             {
                 "status": "ok",
@@ -31,8 +34,27 @@ class MetaRoutes(RouteGroup):
                 "state": self.ctx.state,
                 "api_version": API_VERSION,
                 "quarry_version": _QUARRY_VERSION,
+                "fd": fd.model_dump() if fd is not None else None,
             }
         )
+
+    @staticmethod
+    def _fd_headroom() -> FdHealth | None:
+        """Sample the daemon's own open-fd headroom as an :class:`FdHealth`.
+
+        Runs in the daemon process, so the sample *is* the resident daemon's real
+        descriptor state — the number doctor must report, not the short-lived
+        CLI's shell ulimit. A sample that raises (``EMFILE`` mid-scan or a
+        platform with no fd directory) yields ``None`` so the health endpoint
+        never 500s on the very exhaustion it exists to surface; doctor renders it
+        as a degraded advisory. Returning the model makes :class:`FdHealth` the
+        single owner of the fd wire shape (bug-class-3).
+        """
+        try:
+            headroom = FdHeadroom.sample()
+        except OSError:
+            return None
+        return FdHealth(open_fds=headroom.open_fds, soft_limit=headroom.soft_limit)
 
     @staticmethod
     def ca_cert(request: Request) -> Response:  # noqa: ARG004
