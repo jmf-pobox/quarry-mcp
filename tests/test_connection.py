@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Self, cast
 
 import pytest
+from lancedb.index import FTS, Bitmap
 
 from quarry.db.connection import LanceConnection, RecyclingTable
 
@@ -36,19 +37,18 @@ class FakeTable:
         """Number of scalar index rebuilds requested."""
         return self._scalar
 
-    def create_fts_index(self, column: str, *, replace: bool = False) -> None:
-        """Record a full-text index rebuild."""
-        self._fts += 1
-
-    def create_scalar_index(
+    def create_index(
         self,
         column: str,
         *,
-        index_type: str = "BTREE",
+        config: FTS | Bitmap,
         replace: bool = False,
     ) -> None:
-        """Record a scalar index rebuild."""
-        self._scalar += 1
+        """Record a full-text or scalar index rebuild."""
+        if isinstance(config, FTS):
+            self._fts += 1
+        else:
+            self._scalar += 1
 
 
 class FakeTables:
@@ -190,7 +190,7 @@ def test_open_table_returns_recycling_table(factory: ConnectionFactory) -> None:
 
 def test_fts_rebuild_delegates_to_wrapped_table(factory: ConnectionFactory) -> None:
     conn = LanceConnection(factory, recycle_after=99)
-    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     assert factory.latest.table.fts_rebuilds == 1
 
 
@@ -198,7 +198,7 @@ def test_recycles_after_threshold_rebuilds(factory: ConnectionFactory) -> None:
     """Crossing the rebuild cap reopens the connection at the next boundary."""
     conn = LanceConnection(factory, recycle_after=3)
     for _ in range(3):
-        conn.open_table("chunks").create_fts_index("text", replace=True)
+        conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     assert factory.open_count == 1, "recycle must defer past the live table handle"
     conn.open_table("chunks")
     assert factory.open_count == 2, "next boundary must reopen the connection"
@@ -212,8 +212,10 @@ def test_replace_false_does_not_advance_rebuild_counter(
     """
     conn = LanceConnection(factory, recycle_after=1)
     for _ in range(5):
-        conn.open_table("chunks").create_fts_index("text", replace=False)
-        conn.open_table("chunks").create_scalar_index("collection", replace=False)
+        conn.open_table("chunks").create_index("text", config=FTS(), replace=False)
+        conn.open_table("chunks").create_index(
+            "collection", config=Bitmap(), replace=False
+        )
     conn.open_table("chunks")
     assert factory.open_count == 1, "replace=False must never trigger a recycle"
 
@@ -221,7 +223,7 @@ def test_replace_false_does_not_advance_rebuild_counter(
 def test_replace_true_advances_rebuild_counter(factory: ConnectionFactory) -> None:
     """A single ``replace=True`` rebuild at the cap arms the next-boundary recycle."""
     conn = LanceConnection(factory, recycle_after=1)
-    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     conn.open_table("chunks")
     assert factory.open_count == 2, "replace=True must advance the recycle counter"
 
@@ -229,7 +231,9 @@ def test_replace_true_advances_rebuild_counter(factory: ConnectionFactory) -> No
 def test_does_not_recycle_below_threshold(factory: ConnectionFactory) -> None:
     conn = LanceConnection(factory, recycle_after=5)
     for _ in range(4):
-        conn.open_table("chunks").create_scalar_index("collection", replace=True)
+        conn.open_table("chunks").create_index(
+            "collection", config=Bitmap(), replace=True
+        )
     conn.open_table("chunks")
     assert factory.open_count == 1
 
@@ -238,13 +242,13 @@ def test_recycle_counter_resets_after_recycle(factory: ConnectionFactory) -> Non
     """A second batch of rebuilds triggers a second recycle, not an early one."""
     conn = LanceConnection(factory, recycle_after=2)
     for _ in range(2):
-        conn.open_table("chunks").create_fts_index("text", replace=True)
+        conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     conn.open_table("chunks")  # recycle #1
     assert factory.open_count == 2
-    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     conn.open_table("chunks")  # only 1 rebuild since recycle — no recycle yet
     assert factory.open_count == 2
-    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     conn.open_table("chunks")  # second rebuild crosses cap — recycle #2
     assert factory.open_count == 3
 
@@ -254,7 +258,9 @@ def test_create_table_fires_an_armed_recycle(factory: ConnectionFactory) -> None
     there, just as it does at ``open_table``/``list_tables``.
     """
     conn = LanceConnection(factory, recycle_after=1)
-    conn.open_table("chunks").create_fts_index("text", replace=True)  # arm recycle
+    conn.open_table("chunks").create_index(
+        "text", config=FTS(), replace=True
+    )  # arm recycle
     assert factory.open_count == 1, "recycle defers past the live table handle"
 
     table = conn.create_table("archive", data=[], schema=object())
@@ -267,7 +273,7 @@ def test_successful_recycle_leaves_no_armed_state(factory: ConnectionFactory) ->
     cleared atomically: the very next boundary must not reopen again.
     """
     conn = LanceConnection(factory, recycle_after=1)
-    conn.open_table("chunks").create_fts_index("text", replace=True)
+    conn.open_table("chunks").create_index("text", config=FTS(), replace=True)
     conn.open_table("chunks")  # crosses the cap — reopens once
     assert factory.open_count == 2, "the armed recycle fired exactly once"
 
@@ -289,8 +295,8 @@ def test_failed_recycle_keeps_old_connection_and_rearms() -> None:
     # through the handle bypass ``_maybe_recycle``, so they always hit whichever
     # connection currently backs the wrapper.
     table = conn.open_table("chunks")
-    table.create_fts_index("text", replace=True)
-    table.create_fts_index("text", replace=True)  # 2 rebuilds — recycle armed
+    table.create_index("text", config=FTS(), replace=True)
+    table.create_index("text", config=FTS(), replace=True)  # 2 rebuilds — recycle armed
 
     # (b) The reopen raises and propagates rather than being swallowed.
     with pytest.raises(OSError, match="reopen failed"):
@@ -299,7 +305,7 @@ def test_failed_recycle_keeps_old_connection_and_rearms() -> None:
 
     # (a) The old connection is intact, not half-open: the still-live handle
     # keeps writing to it after the failed reopen.
-    table.create_fts_index("text", replace=True)
+    table.create_index("text", config=FTS(), replace=True)
     assert factory.first.table.fts_rebuilds == 3, "old connection still writes"
 
     # (c) The recycle stayed armed, so the next boundary retries the reopen. This
@@ -307,5 +313,5 @@ def test_failed_recycle_keeps_old_connection_and_rearms() -> None:
     fresh = conn.open_table("chunks")
     assert factory.calls == 3, "recycle stayed armed and retried on next access"
     assert isinstance(fresh, RecyclingTable)
-    fresh.create_fts_index("text", replace=True)
+    fresh.create_index("text", config=FTS(), replace=True)
     assert factory.second.table.fts_rebuilds == 1, "fresh connection now serves"

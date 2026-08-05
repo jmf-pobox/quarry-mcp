@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Self
 
 import pyarrow as pa
+from lancedb.index import FTS
 
 if TYPE_CHECKING:
     from quarry.types import LanceDB, LanceTable
@@ -82,7 +83,7 @@ class SchemaManager:
             logger.info("Migrated schema: added columns %s", sorted(missing))
 
     def ensure_fts_index(self, table: LanceTable) -> None:
-        """Create a Tantivy full-text search index on the text column if missing.
+        """Create lancedb's native full-text search index on the text column if missing.
 
         Uses replace=False and catches the "already exists" error so this is
         safe to call repeatedly without rebuilding the entire index each time.
@@ -90,7 +91,7 @@ class SchemaManager:
         vector-only search.
         """
         try:
-            table.create_fts_index("text", replace=False)
+            table.create_index("text", config=FTS(), replace=False)
             logger.info("Created FTS index on text column")
         except (OSError, RuntimeError, ValueError) as exc:
             # LanceDB raises when the index already exists.  Any message

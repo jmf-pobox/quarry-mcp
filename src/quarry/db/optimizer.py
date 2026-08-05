@@ -8,6 +8,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Self
 
+from lancedb.index import FTS, Bitmap
+
 from quarry.db.schema import TABLE_NAME
 from quarry.types import LanceDB
 
@@ -56,13 +58,11 @@ class TableOptimizer:
         # proxy is counting subdirectories under the lance ``data/`` dir.
         try:
             data_dir = Path(table.uri) / "data"
-            if data_dir.is_dir():
-                return sum(1 for _ in data_dir.iterdir())
+            return sum(1 for _ in data_dir.iterdir()) if data_dir.is_dir() else 0
         except (OSError, TypeError, AttributeError):
             # Best-effort: a missing dir or a surprising uri (non-str, absent)
             # degrades to 0 rather than breaking optimize()'s fragment check.
-            pass
-        return 0
+            return 0
 
     def optimize(self, *, force: bool = False) -> OptimizeOutcome:
         """Compact table data and rebuild the FTS index; report what happened.
@@ -113,7 +113,7 @@ class TableOptimizer:
         # index on lance's own runtime, bounded by LANCE_CPU_THREADS (DES-032);
         # replace=True forces a full O(n) rebuild (the watch loop rate-limits it).
         try:
-            table.create_fts_index("text", replace=True)
+            table.create_index("text", config=FTS(), replace=True)
             logger.info("Rebuilt FTS index after optimization")
         except (OSError, RuntimeError, ValueError):
             logger.warning(
@@ -133,5 +133,5 @@ class TableOptimizer:
             return
 
         table = self._db.open_table(TABLE_NAME)
-        table.create_scalar_index("collection", index_type="BITMAP", replace=True)
+        table.create_index("collection", config=Bitmap(), replace=True)
         logger.info("Created BITMAP index on collection column")

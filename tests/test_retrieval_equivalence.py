@@ -36,14 +36,22 @@ if TYPE_CHECKING:
 # (document_name, chunk_index, page_number, similarity) for query "alpha rare
 # beta", limit 8, no filter over the fixed corpus below. RRF-ordered rows with
 # cosine-valued similarity -- the documented "RRF order, cosine score" shape.
+#
+# Re-baselined for lancedb's native FTS tokenizer (replaced the legacy tantivy
+# backend). The new tokenizer's BM25 ranking of the FTS channel differs from
+# tantivy's, which shifts RRF fusion order -- the exact-text match ("alpha
+# rare beta", b.md idx 2) now fuses to rank 3 instead of rank 1, even though
+# its FTS relevance is unchanged, because the vector channel's near-exact
+# cosine matches (a.md) now out-rank it in the fused order. Cosine similarity
+# values (the vector channel) are unaffected -- only fusion order moved.
 GOLDEN: list[tuple[str, int, int, float]] = [
-    ("b.md", 2, 3, 0.9578),
     ("a.md", 1, 2, 0.9988),
-    ("c.md", 3, 4, 0.995),
     ("a.md", 0, 1, 0.9998),
-    ("d.md", 5, 6, 0.0),
+    ("b.md", 2, 3, 0.9578),
     ("a.md", 7, 8, 0.9968),
     ("c.md", 4, 5, 0.9889),
+    ("d.md", 5, 6, 0.0),
+    ("c.md", 3, 4, 0.995),
     ("b.md", 6, 7, 0.0),
 ]
 
