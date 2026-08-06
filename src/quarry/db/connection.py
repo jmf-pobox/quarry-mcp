@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     import pyarrow as pa
+    from lancedb.index import FTS, Bitmap, BTree
 
     from quarry.types import LanceQuery, ListTablesResult
 
@@ -117,21 +118,19 @@ class RecyclingTable:
         """Compact data fragments and prune old manifest versions."""
         return self._table.optimize(cleanup_older_than=cleanup_older_than)
 
-    def create_scalar_index(
+    def create_index(
         self,
         column: str,
         *,
-        index_type: str = "BTREE",
+        config: BTree | Bitmap | FTS,
         replace: bool = False,
     ) -> None:
-        """Build a scalar index; report only ``replace=True``, which leaks fds."""
-        self._table.create_scalar_index(column, index_type=index_type, replace=replace)
-        if replace:
-            self._conn.note_index_rebuild()
+        """Build a scalar or FTS index; report only ``replace=True``, which leaks fds.
 
-    def create_fts_index(self, column: str, *, replace: bool = False) -> None:
-        """Build the full-text index; report only ``replace=True``, which leaks fds."""
-        self._table.create_fts_index(column, replace=replace)
+        Reports to the owning connection so it can recycle once enough
+        ``replace=True`` rebuilds have accrued.
+        """
+        self._table.create_index(column, config=config, replace=replace)
         if replace:
             self._conn.note_index_rebuild()
 

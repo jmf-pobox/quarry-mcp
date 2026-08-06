@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     import numpy as np
     import pyarrow as pa
+    from lancedb.index import FTS, Bitmap, BTree
     from numpy.typing import NDArray
 
     from quarry.models import PageContent
@@ -31,17 +32,11 @@ class LanceTable(Protocol):
     ) -> LanceQuery: ...
     def count_rows(self, predicate: str | None = ...) -> int: ...
     def delete(self, predicate: str) -> None: ...
-    def create_scalar_index(
+    def create_index(
         self,
         column: str,
         *,
-        index_type: str = ...,
-        replace: bool = ...,
-    ) -> None: ...
-    def create_fts_index(
-        self,
-        column: str,
-        *,
+        config: BTree | Bitmap | FTS,
         replace: bool = ...,
     ) -> None: ...
     def add_columns(

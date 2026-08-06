@@ -1,7 +1,7 @@
 """Resource-invariant tier: a long-lived connection must not leak descriptors.
 
 The daemon holds a LanceDB connection for its whole lifetime and rebuilds the
-FTS/scalar index on every sync. Each ``create_fts_index(replace=True)`` supersedes
+FTS/scalar index on every sync. Each ``create_index(..., replace=True)`` supersedes
 an index generation and deletes the old files, but LanceDB's Rust core keeps the
 readers open — one leaked descriptor per generation — until the process hits
 ``RLIMIT_NOFILE`` and ``quarry find`` starts returning HTTP 500. A short-lived CLI
@@ -34,6 +34,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from lancedb.index import FTS, Bitmap
 
 from quarry.backfill import backfill_sessions, encode_project_path
 from quarry.config import Settings
@@ -423,16 +424,20 @@ def test_watch_session_does_not_leak_descriptors(
     # call on every insert is a no-op skip when the index is present and does
     # not leak, so it is not the coalescing the invariant guards.
     fts_rebuilds: list[str] = []
-    real_create_fts = RecyclingTable.create_fts_index
+    real_create_index = RecyclingTable.create_index
 
-    def _spy_create_fts(
-        table: RecyclingTable, column: str, *, replace: bool = False
+    def _spy_create_index(
+        table: RecyclingTable,
+        column: str,
+        *,
+        config: FTS | Bitmap,
+        replace: bool = False,
     ) -> None:
-        if replace:
+        if replace and isinstance(config, FTS):
             fts_rebuilds.append(column)
-        real_create_fts(table, column, replace=replace)
+        real_create_index(table, column, config=config, replace=replace)
 
-    monkeypatch.setattr(RecyclingTable, "create_fts_index", _spy_create_fts)
+    monkeypatch.setattr(RecyclingTable, "create_index", _spy_create_index)
 
     finalizes = 0
     with patch(
