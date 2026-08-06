@@ -298,7 +298,13 @@ than less real. Reasonable as a supplement once the lock exists.
 ## 5. Question 3 — hermeticity
 
 Both mechanisms, because they answer different questions. Redirection stops the
-writes; the guard proves no path was missed.
+writes; the guard proves the redirection is in force.
+
+The redirection has two layers: the explicit `QUARRY_ROOT` / `QUARRY_LOG_DIR`
+variables (5.1), which need a source change, and a `HOME` redirect (5.2) that
+covers every path the explicit variables do not. The guard (5.3) is a
+three-file smoke check, not a tree fingerprint — 5.2 records why the tree
+fingerprint an earlier draft proposed does not work and cannot be repaired.
 
 ### 5.1 Redirection requires a source change
 
@@ -324,22 +330,73 @@ Note that this is not "migration or fallback code," which the project forbids.
 It is the target behaviour: the log destination is configuration, and it was
 hardcoded.
 
-### 5.2 The guard
+### 5.2 Redirect `HOME` itself — the prevention that covers every path
 
-An autouse function-scoped fixture records a fingerprint of
-`~/.punt-labs/quarry/` before and after each test and fails the test on any
-change. The fingerprint must be cheap, because it runs about 1,200 times:
-`os.stat` on the log file and on the data directory, comparing `st_mtime_ns` and
-`st_size`. That is two `stat` calls per test, on the order of ten microseconds —
-invisible against a suite measured in minutes.
+An earlier draft of this section proposed detecting escapes by fingerprinting
+`~/.punt-labs/quarry/` before and after each test with two `stat` calls, one on
+the log file and one on the data directory. That design was wrong, and the way
+it was wrong is worth recording so it is not reinvented.
 
-The failure message names the test and the path that changed, so the diagnosis
-is immediate rather than archaeological. Deliberately not a recursive tree walk:
-that would cost milliseconds per test and, at 1,200 tests, minutes per run — the
-guard would become the resource problem.
+A directory's `mtime` changes only when an entry is added to or removed from
+*that* directory. It does not change when a file's contents change, and it does
+not change when a file is created several levels below. Measured:
+
+| Operation under `data/` | Root `mtime` changed? |
+|---|---|
+| Modify contents of an existing deep file | No |
+| Add a new file three levels down | No |
+
+So the `stat` on the data directory would have detected essentially nothing. The
+`stat` on the log file was sound — that is a file, and both size and mtime move
+when it is appended to — but it covered only the one breach already known.
+
+The obvious repair, a recursive walk, is not available. The operator's real tree
+is **15 GB across 1,586 files**, and `os.walk` with a `stat` per file did not
+complete within a two-minute timeout. That rules the walk out at *any* scope,
+per-test or once per session — it is not a matter of tuning the frequency.
+
+The correct mechanism is to stop watching the filesystem and remove the ability
+to name the path at all. `pytest_configure` sets `HOME` to a session-scoped
+temporary directory before any quarry import. Every route to the real tree runs
+through it:
+
+| Expression | With `HOME` redirected |
+|---|---|
+| `Path.home()` | redirected |
+| `os.path.expanduser("~")` | redirected |
+| `Path("~").expanduser()` | redirected |
+
+Verified: patching `Path.home` alone is *not* sufficient — `expanduser` reads
+`$HOME` from the environment and ignores the patched classmethod, so a
+`Path.home`-only patch leaves two of the three routes pointing at production.
+Setting the environment variable covers all three, which is why it is the
+environment variable and not the method that gets redirected.
+
+This subsumes the `QUARRY_ROOT` and `QUARRY_LOG_DIR` redirection of section 5.1
+rather than replacing it. The explicit variables remain the supported way to
+point a real deployment elsewhere; the `HOME` redirect is the test-side
+backstop that catches any path this design has not enumerated. The source change
+in 5.1 is still required regardless, because `LoggingConfig._LOG_DIR` is bound
+at import time — `HOME` must be set before that import, not after.
+
+### 5.3 The residual guard
+
+With `HOME` redirected, a write to the real tree requires an absolute path
+hardcoded in source. Three files are the plausible targets and all three are
+*files*, where `stat` is exact: the log file, `config.toml`, and the default
+`registry.db`. An autouse fixture stats those three before and after each test
+and fails on any change, naming the test and the path.
+
+Measured cost: **25.9 ms** for three stats across 1,200 tests — 0.006% of the
+446.7 s baseline.
+
+This is a smoke check, and deliberately so. Prevention is now the `HOME`
+redirect, which is total; the guard exists to prove the redirect is in force and
+to catch a hardcoded absolute path, not to enumerate the tree. Section 7's
+wall-clock accounting uses this figure.
 
 The guard runs unconditionally, including in CI, where `HOME` differs but the
-path still resolves and still must be untouched.
+same three paths must remain untouched.
 
 ## 6. Question 4 — leak prevention beyond the drain fix
 
@@ -392,8 +449,9 @@ site adds 410 MB per run, and three overlapping runs make that 1.2 GB.
   installed, not whether it happens.
 - **ONNX import guard (option D):** no change. One `isinstance` check per
   session on a patched symbol.
-- **Filesystem guard (5.2):** two `stat` calls per test. At roughly 1,200 tests
-  that is under 30 ms across the whole run — below measurement noise.
+- **`HOME` redirect (5.2):** one environment assignment at session start. Zero.
+- **Filesystem guard (5.3):** three `stat` calls per test, measured at 25.9 ms
+  across 1,200 tests — 0.006% of the baseline.
 - **Thread-count invariant (6):** one `threading.enumerate()` at session start
   and end. Microseconds.
 - **Thread env pin (4):** no change to wall clock; it constrains pool sizes that
@@ -435,11 +493,13 @@ test code):
 
 Test infrastructure:
 
-- `tests/conftest.py` — `pytest_configure` sets `QUARRY_ROOT`, `QUARRY_LOG_DIR`,
-  `OMP_NUM_THREADS`, `LANCE_CPU_THREADS`, `LANCE_IO_THREADS` before any import
-  of lancedb; stop stripping `QUARRY_ROOT` in `_isolate_from_env`; autouse
-  fixtures for the fake embedding factory, the ONNX import guard, and the
-  filesystem guard.
+- `tests/conftest.py` — `pytest_configure` sets `HOME`, `QUARRY_ROOT`,
+  `QUARRY_LOG_DIR`, `OMP_NUM_THREADS`, `LANCE_CPU_THREADS`, `LANCE_IO_THREADS`
+  before any quarry or lancedb import; stop stripping `QUARRY_ROOT` in
+  `_isolate_from_env`; autouse fixtures for the fake embedding factory, the ONNX
+  import guard, and the three-file guard. Note that redirecting `HOME` moves
+  `_pytest_tmp_base`'s home-cache fallback too, which is correct but must be
+  checked against `ScratchGuard.refuses_root`.
 - `tests/fakes.py` (new) — the shared `FakeEmbeddingBackend`, absorbing
   `_FakeEmbedder`, `_ConstantEmbedder`, and the embedder half of
   `_FdSamplingEmbedder`.
@@ -448,9 +508,10 @@ Test infrastructure:
 - Every test file currently patching `get_embedding_backend` purely to dodge a
   model load — delete the patch. Files that assert on specific vectors keep a
   local override.
-- `tests/test_hermeticity.py` (new) — asserts the guard fires: a test that
-  deliberately writes under the redirected root is caught, and
-  `LoggingConfig.configure` honours `QUARRY_LOG_DIR`.
+- `tests/test_hermeticity.py` (new) — asserts the guard fires on a deliberate
+  write to each of the three watched files; asserts `Path.home()`,
+  `os.path.expanduser("~")`, and `Path("~").expanduser()` all resolve inside the
+  session temp root; asserts `LoggingConfig.configure` honours `QUARRY_LOG_DIR`.
 - `tests/test_logging_config.py` — cover the new resolution, including the
   fallback when the variable is absent.
 
