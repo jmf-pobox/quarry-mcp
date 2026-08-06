@@ -33,6 +33,15 @@ from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
 from quarry.results import SearchResult
 
+# Bound on how long fixture teardown waits for a background job to finish for
+# real before giving up and force-cancelling it (see the ``client`` fixture).
+_TEARDOWN_DRAIN_TIMEOUT_S = 10.0
+
+
+async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+    """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
+    await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
+
 
 def _poll_task_done(
     tc: TestClient, task_id: str, max_polls: int = 100
@@ -101,10 +110,14 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     """Build a test app and yield a TestClient, draining background tasks on exit.
 
     Entering the ``TestClient`` context runs the app on a portal event loop; on
-    teardown we cancel any still-running background ingest/sync task ON that loop
-    before the next test installs its own mocks.  Otherwise a leaked ``usp``
-    sitemap fetch resolves a hostname inside a later SSRF test's ``getaddrinfo``
-    patch window, tripping its ``assert_not_called`` (an isolation-order flake).
+    teardown we DRAIN (await real completion of) any still-running background
+    ingest/sync task on that loop before the next test installs its own mocks.
+    Cancelling the wrapping ``asyncio.Task`` does not stop a
+    ``run_in_threadpool`` job's underlying OS thread, so a cancel-only teardown
+    lets that thread keep running the (by-then unmocked) real ingest against a
+    real host, resolving a hostname or logging into a later test's mock window
+    or closed capture stream (an isolation-order flake).  Draining first closes
+    that race; only a straggler that outlives the drain window is cancelled.
     """
     settings = _mock_settings(tmp_path)
     ctx = DaemonContext(settings)
@@ -115,11 +128,11 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         yield tc
         portal = tc.portal  # set for the lifetime of the context
         if portal is not None:
-            portal.call(ctx.tasks.cancel_all)
+            portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
             # Ingest jobs now run inside per-collection queue workers, not tracked
-            # tasks, so stop those workers too or a queued job could run into a
-            # later test's mock window (the same isolation guard as cancel_all).
-            portal.call(ctx.ingest_queue.cancel_workers)
+            # tasks, so drain those too or a queued job could run into a later
+            # test's mock window (the same isolation guard as ctx.tasks.drain).
+            portal.call(_aclose_ingest_queue, ctx)
 
 
 class TestHealth:

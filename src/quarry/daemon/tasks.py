@@ -88,6 +88,14 @@ class TaskRegistry:
 
     def begin(self, kind: str) -> TaskState:
         """Create a fresh ``TaskState``, evicting states older than the TTL."""
+        self._evict_expired()
+        task_id = f"{kind}-{uuid.uuid4().hex[:12]}"
+        state = TaskState(task_id=task_id, kind=kind)
+        self._states[task_id] = state
+        return state
+
+    def _evict_expired(self) -> None:
+        """Drop every terminal state (and its task ref) older than the TTL."""
         now = time.monotonic()
         expired = [
             tid
@@ -98,10 +106,6 @@ class TaskRegistry:
         for tid in expired:
             del self._states[tid]
             self._refs.pop(tid, None)
-        task_id = f"{kind}-{uuid.uuid4().hex[:12]}"
-        state = TaskState(task_id=task_id, kind=kind)
-        self._states[task_id] = state
-        return state
 
     def drop(self, state: TaskState) -> None:
         """Discard a task record so a rejected submit leaves no orphan behind."""
@@ -114,17 +118,35 @@ class TaskRegistry:
         self._refs[tid] = task
         task.add_done_callback(lambda _t: self._refs.pop(tid, None))
 
-    def cancel_all(self) -> None:
-        """Cancel every still-tracked task and drop its ref.
+    async def drain(self, timeout: float) -> None:
+        """Await every tracked task's real completion; cancel stragglers past *timeout*.
 
-        Must be called on the registry's own event-loop thread (``Task.cancel``
-        is not thread-safe).  Used at daemon/test-harness teardown so an
-        in-flight background task cannot outlive its context and keep touching
-        resources — e.g. resolving a hostname — after shutdown.
+        Cancelling the wrapping ``asyncio.Task`` does not stop a
+        ``run_in_threadpool`` job's underlying OS thread — Python has no way to
+        interrupt a running thread — so a cancel-only teardown lets that thread
+        keep executing (a real ingest, a real network fetch, a real log call)
+        well after the caller believes the task is gone.  A daemon/test-harness
+        teardown that only cancels can therefore race: the thread finishes later,
+        inside a *different* context (a later test's mocks, a closed log stream).
+        Waiting for genuine completion first closes that race; only a task that
+        outlives the drain window is force-cancelled, mirroring
+        :meth:`~quarry.daemon.ingest_queue.IngestQueue.aclose`'s drain-then-abort
+        shape. Must be called on the registry's own event-loop thread.
         """
-        for task in list(self._refs.values()):
+        tasks = list(self._refs.values())
+        if not tasks:
+            return
+        try:
+            async with asyncio.timeout(timeout):
+                await asyncio.gather(*tasks, return_exceptions=True)
+        except TimeoutError:
+            await self._cancel_stragglers(tasks)
+
+    async def _cancel_stragglers(self, tasks: list[asyncio.Task[None]]) -> None:
+        """Force-cancel *tasks* that outlived the drain window, then await them."""
+        for task in tasks:
             task.cancel()
-        self._refs.clear()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def seed(self, state: TaskState) -> None:
         """Insert a pre-built *state* keyed by its ``task_id``.

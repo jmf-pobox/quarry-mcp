@@ -1066,17 +1066,17 @@
     "future_annotations": 1.0
   },
   "src/quarry/daemon/tasks.py": {
-    "avg_complexity": 2.0,
-    "avg_params": 0.82,
-    "class_to_func_ratio": 0.667,
-    "classes_per_module": 2.0,
+    "method_ratio": 0.923,
     "encapsulation_ratio": 1.0,
-    "future_annotations": 1.0,
-    "init_violations": 0.0,
+    "avg_params": 0.85,
     "max_complexity": 5.0,
-    "method_ratio": 0.909,
-    "module_size": 133.0,
-    "public_attr_violations": 0.0
+    "avg_complexity": 2.0,
+    "module_size": 153.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.667,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/daemon/watch_loop.py": {
     "avg_complexity": 3.6,

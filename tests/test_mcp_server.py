@@ -15,7 +15,7 @@ exception or an in-process engine fallback.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Self, final
 from unittest.mock import MagicMock, patch
@@ -25,7 +25,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.client import QuarryClient, QuarryConnectionError
-from quarry.client.transport import HttpxTransport
+from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.mcp_server import McpTools, mcp
@@ -72,6 +72,47 @@ def _inject_mocks(ctx: DaemonContext) -> None:
 
 
 @final
+class _TestClientTransport:
+    """A :class:`QuarryClient` transport over Starlette's ``TestClient``.
+
+    ``TestClient.request()`` (unlike a real ``httpx.Client``) warns on ANY
+    ``timeout=`` argument — its in-memory ASGI transport has no socket to bound,
+    so there is no non-deprecated way to pass one.  The production
+    :class:`HttpxTransport` always forwards its caller's timeout, which is
+    correct against a real server but trips that warning on every call here; this
+    test-only transport reuses ``HttpxTransport``'s response parsing but never
+    forwards a timeout to the request itself.
+    """
+
+    __slots__ = ("_client",)
+
+    _client: TestClient
+
+    def __new__(cls, client: TestClient) -> Self:
+        self = super().__new__(cls)
+        self._client = client
+        return self
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        # Accepted for Transport-protocol parity; never forwarded (see class doc).
+        timeout: float | None = None,
+    ) -> Response:
+        resp = self._client.request(
+            method,
+            path,
+            params=dict(params) if params else None,
+            json=dict(json_body) if json_body is not None else None,
+        )
+        return HttpxTransport._parse(resp)
+
+
+@final
 class _ToolHarness:
     """Bind an :class:`McpTools` to a client over the real daemon app.
 
@@ -88,7 +129,7 @@ class _ToolHarness:
     def __new__(cls, tc: TestClient) -> Self:
         self = super().__new__(cls)
         self._client = tc
-        quarry_client = QuarryClient(HttpxTransport(tc))
+        quarry_client = QuarryClient(_TestClientTransport(tc))
         self._tools = McpTools(connect=lambda: quarry_client)
         return self
 
@@ -101,17 +142,35 @@ class _ToolHarness:
         return self._client
 
 
+# Bound on how long fixture teardown waits for a background job to finish for
+# real before giving up and force-cancelling it (see the ``harness`` fixture).
+_TEARDOWN_DRAIN_TIMEOUT_S = 10.0
+
+
+async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+    """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
+    await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
+
+
 @pytest.fixture()
 def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
-    """Yield a tool harness over a real daemon app, draining tasks on teardown."""
+    """Yield a tool harness over a real daemon app, draining tasks on teardown.
+
+    Teardown DRAINS (awaits real completion of) any still-running background
+    job rather than only cancelling it: cancelling the wrapping ``asyncio.Task``
+    does not stop a ``run_in_threadpool`` job's underlying OS thread, so a
+    cancel-only teardown lets that thread keep running the (by-then unmocked)
+    real ingest into a later test's mocks or a closed log stream. Only a
+    straggler that outlives the drain window is force-cancelled.
+    """
     ctx = DaemonContext(_mock_settings(tmp_path))
     _inject_mocks(ctx)
     with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
         yield _ToolHarness(tc)
         portal = tc.portal
         if portal is not None:
-            portal.call(ctx.tasks.cancel_all)
-            portal.call(ctx.ingest_queue.cancel_workers)
+            portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+            portal.call(_aclose_ingest_queue, ctx)
 
 
 class TestSurfaceComplete:
