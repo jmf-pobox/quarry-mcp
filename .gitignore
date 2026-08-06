@@ -90,3 +90,6 @@ uv.toml
 # DES-058 machine-local live zone — never track. Session audit/lock files are
 # live-rewritten per session and deadlock git if tracked; ethos enable seeds this.
 .punt-labs/**/local/**
+
+# punt-kit CLAUDE.md import lock — a machine-local artifact, never a repo file.
+.CLAUDE.md.punt-import.lock
