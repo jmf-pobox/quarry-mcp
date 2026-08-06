@@ -111,10 +111,13 @@ sessions across sibling repositories, each running its own full suite, is the
 normal operating mode of this workspace.
 
 This is where load 200 comes from. Quarry's suite is one bounded contributor
-among several unbounded ones. Nothing anywhere — in this repo or the workspace —
-limits how many test suites run at once. Every per-run cap this document could
-propose would be defeated by that, because a per-run cap multiplies by N when N
-runs overlap.
+among several. Nothing anywhere — in this repo or the workspace — limits how
+many test suites run at once, and a per-run cap multiplies by N when N runs
+overlap.
+
+That observation is why the incident happened; it is not a specification for
+quarry. Section 4 takes it up and concludes that bounding N is outside this
+suite's remit. The finding recorded here is the environment, not a defect.
 
 There is also a known, separately-tracked contributor: stuck PreCompact
 `ingest-background` hook processes accumulating against the captures database.
@@ -131,30 +134,33 @@ shape — unbounded concurrency of a bounded unit.
 | The daemon is correctly bounded, tests are not | True, but tests are also bounded per-run |
 | Tests write to the production log | **True — 7,034 lines per full run** |
 | Tests read the production `quarry_root` / `config.toml` | **True** |
-| Nothing bounds N overlapping suite runs | **True — the actual cause** |
+| Nothing bounds N overlapping suite runs | **True — the incident's multiplier** |
 
-Two real defects, then: hermeticity, and the absence of any cross-run
-concurrency bound. Plus one latent defect — the ONNX exclusion is an accident of
-forty ad-hoc patches, not an enforced invariant.
+One defect quarry fixes: hermeticity. One latent defect it also fixes: the ONNX
+exclusion is an accident of forty ad-hoc patches rather than an enforced
+invariant. And one true finding that is *not* quarry's to fix — the unbounded
+N — which section 4 explains belongs to whoever runs the machine, not to this
+test suite.
 
 ## 2. Budget
 
-One suite run must fit inside this envelope, and the envelope must hold when N
-runs overlap.
+One suite run must fit inside this envelope, on any machine, without assuming
+anything about what else that machine is running.
 
 | Quantity | Per run | Enforcement |
 |---|---|---|
-| Processes | 1 | No `pytest-xdist` (section 5, ADR) |
+| Processes | 1 | No `pytest-xdist` (section 4, ADR) |
 | OS threads | ≤ 32 | `ThreadConfig` env pin + session invariant |
 | Peak RSS | ≤ 512 MB | Session invariant; ONNX exclusion keeps it at ~180 MB |
 | Real ONNX model loads | 0 | Factory-level fake + import guard |
-| Writes under `~/.punt-labs/quarry/` | 0 | Redirection + filesystem guard |
-| Concurrent runs, workspace-wide | ≤ `max(1, ncpu // 4)` | Cross-repo advisory lock |
+| Writes under the real `~/.punt-labs/quarry/` | 0 | `HOME` redirect + three-file guard |
 
-On this machine that is 2 concurrent runs, so the workspace-wide ceiling is
-2 × 32 = 64 threads and ~1 GB of test load, against 8 cores. That leaves the
-daemon (measured at 37 threads) and the operator's interactive work with the
-majority of the machine.
+Every row is a property of one run, enforced from inside that run. There is
+deliberately no workspace-wide row: section 4 records why quarry does not
+govern how many suites an operator starts. Against 8 cores, one run at this
+envelope leaves the daemon (measured at 37 threads) and interactive work the
+large majority of the machine; the arithmetic for N of them is in section 7,
+as a description of the environment rather than a commitment.
 
 ## 3. Question 1 — model and engine sharing
 
@@ -230,7 +236,38 @@ integration tier that already needs the model.
 
 ## 4. Question 2 — the concurrency budget and its enforcement
 
-### Per-run enforcement (necessary, not sufficient)
+### Where quarry's obligation ends
+
+The contract asked for a budget that holds when N suite runs overlap. It does
+not hold, and quarry should not try to make it hold. The reason is a product
+question rather than a technical one.
+
+Quarry is a shipped product. We are its authors, not its only users. Any
+mechanism that bounds concurrency across the punt-labs workspace — a lock file
+under `~/.punt-labs/`, coordinated `make test` targets in sibling repositories —
+encodes this development environment into the product's test suite. For every
+other contributor, and for every CI environment, that machinery is meaningless
+at best and an obstacle at worst. A contributor who clones quarry and runs
+`make test` should not inherit assumptions about a workspace layout they do not
+have.
+
+So the suite's obligation is stated in terms of itself, not its neighbours:
+
+> One quarry suite run is bounded and hermetic on any machine, and assumes
+> nothing about what else that machine is running.
+
+The N-overlap analysis stays in this document as measured fact, because it is
+what explains the incident, but it resolves to an operations concern outside
+any repository's test suite. The measurement that settles it: one full suite
+consumes **0.69 average cores** over 446.7 s. A suite that bounded is not
+capable of the observed failure by itself, and a suite cannot be made
+responsible for how many copies of itself an operator chooses to start. Bounding
+that is a scheduling decision belonging to whoever runs the machine.
+
+What follows is therefore per-run enforcement only. It is sufficient for the
+obligation above, and it is all quarry ships.
+
+### Per-run enforcement
 
 The per-run knobs are already correct in production code and merely need to be
 pinned for tests. `ThreadConfig._cap_env` clamps `OMP_NUM_THREADS`,
@@ -248,34 +285,34 @@ A session-scoped invariant then asserts the envelope held: peak OS thread count
 resource-invariant tier, which already establishes the precedent of testing
 process-level properties rather than function outputs.
 
-### Cross-run enforcement (the part that actually matters)
+### Why there is no cross-run mechanism
 
-Per-run caps multiply by N. Since N is unbounded and the observed incident was
-caused by N, the budget can only hold if N is bounded.
+Per-run caps multiply by N, and the incident was caused by N. An earlier draft
+of this document therefore proposed a workspace-level advisory slot lock — a
+PID-aware lock file at `~/.punt-labs/test-concurrency.lock` with capacity
+`max(1, ncpu // 4)`, acquired by `make test`, adopted by sibling repositories so
+they contended on one object.
 
-The mechanism is an advisory lock at a workspace-level path, taken by `make
-test` for the duration of the run:
+That is rejected, on the reasoning in the preceding subsection. It is worth
+being precise about why, because the mechanism would have worked on this
+machine and the temptation to reinstate it will recur:
 
-- Lock file at `~/.punt-labs/test-concurrency.lock`, outside any repo, so
-  sibling repositories contend on the same object.
-- Capacity `K = max(1, os.cpu_count() // 4)` — 2 on this machine.
-- A run that cannot acquire a slot waits rather than failing. Waiting is
-  correct: the run is not wrong, it is early.
-- A held slot carries the holder's PID; a slot whose PID is gone is reclaimed,
-  so a killed agent session does not wedge the workspace.
-- CI sets an environment variable that disables the lock entirely. A GitHub
-  runner is a dedicated 2-core box running exactly one suite; the lock would
-  only add startup cost.
+- **It bakes the workspace into the product.** The lock path, and the premise
+  that sibling repositories cooperate, are facts about how punt-labs is checked
+  out. They are not facts about quarry. Shipping them means shipping our desk.
+- **It only functions if biff and vox adopt it.** A mechanism whose correctness
+  depends on changes in two other repositories is not a property of quarry's
+  test suite; it is a workspace protocol wearing a Makefile target.
+- **It would be dead weight everywhere else.** An outside contributor, or a
+  GitHub runner executing exactly one suite on a dedicated box, pays startup
+  cost and a new failure mode for a contention that does not exist for them.
+- **It treats a scheduling decision as a test-suite concern.** How many suites
+  run at once is chosen by whoever runs the machine, and belongs with them.
 
-This is the one mechanism in this document that holds under overlap, and it is
-the only one that would have prevented the incident. It is deliberately a small,
-boring file lock rather than a daemon: the failure mode of a lock daemon is
-worse than the problem.
-
-Scope note: the lock is quarry-side in this design, so it bounds quarry against
-itself. Bounding quarry against biff and vox requires the same target in those
-repositories' Makefiles. That is a workspace-level change and is called out as a
-follow-on in section 8 rather than being smuggled into a quarry PR.
+The measured facts that motivated the lock stay on the record — per-run caps do
+multiply by N, and biff and vox were observed running their own suites during
+the incident — but they describe the operating environment, not a defect in this
+suite. The correct response to N overlapping suites is to start fewer of them.
 
 ### Rejected alternatives
 
@@ -290,10 +327,12 @@ happening. The correct response to a slow suite here is to fix the slow tests.
 form needed, and it caps utilisation rather than concurrency — N runs each
 capped at 25% still thrash the scheduler and the page cache.
 
-**`nice` the test process.** Rejected as a primary mechanism. It improves
-interactive responsiveness under contention but does nothing about memory
-pressure or total thread count, and it makes the overload less visible rather
-than less real. Reasonable as a supplement once the lock exists.
+**`nice` the test process.** Rejected. It improves interactive responsiveness
+under contention but does nothing about memory pressure or total thread count,
+and it makes an overload less visible rather than less real. It is also the
+wrong layer: how a run is prioritised against everything else on the machine is
+the operator's call, and `nice make test` is available to them without quarry
+deciding it for every user.
 
 ## 5. Question 3 — hermeticity
 
@@ -428,15 +467,26 @@ lance's pools are daemonised.
 
 Per run, measured before and projected after:
 
-| Quantity | Before (measured) | After | N = 3 before | N = 3 after |
-|---|---|---|---|---|
-| Processes | 1 | 1 | 3 | 2 (third waits) |
-| OS threads | 25 peak | ≤ 32, asserted | 75 | ≤ 64 |
-| Peak RSS | 175 MB | ≤ 512 MB, asserted | 525 MB | ≤ 1 GB |
-| Model loads | 0, by accident | 0, enforced | 0 or 1.2 GB if one escapes | 0, enforced |
-| Prod-log lines written | **7,034 per run** | 0, guarded | ~21,000 | 0 |
-| Avg cores consumed | 0.69 | 0.69 | 2.1 | ≤ 1.4 |
-| Concurrent runs | unbounded | ≤ `ncpu // 4` | 3 | 2 |
+| Quantity | Before (measured) | After |
+|---|---|---|
+| Processes | 1 | 1 |
+| OS threads | 25 peak | ≤ 32, asserted |
+| Peak RSS | 175 MB | ≤ 512 MB, asserted |
+| Model loads | 0, by accident | 0, enforced |
+| Prod-log lines written | **7,034 per run** | 0, guarded |
+| Avg cores consumed | 0.69 | 0.69 |
+
+Because every quantity above is per-run and unconditional, N overlapping runs
+cost N times each row and nothing worse — there is no shared resource for them
+to contend on beyond the machine itself. At N = 3 that is 75 threads, ~525 MB,
+2.1 cores, and — the row that matters — **zero** production-log lines and zero
+model loads, against ~21,000 log lines and a possible 1.2 GB of models today.
+
+That N = 3 column is a description of the environment, not a commitment this
+suite enforces: per section 4, quarry does not govern how many copies of itself
+an operator starts. What this design does guarantee is that each copy is small,
+silent, and hermetic, so N of them degrade the machine linearly and gracefully
+rather than destroying the operator's logs N times over.
 
 The "before" model-load row is the latent risk rather than an observed cost: the
 suite currently loads nothing, but one new test reaching an unpatched import
@@ -456,16 +506,11 @@ site adds 410 MB per run, and three overlapping runs make that 1.2 GB.
   and end. Microseconds.
 - **Thread env pin (4):** no change to wall clock; it constrains pool sizes that
   are already capped in practice.
-- **Cross-run lock (4):** no change to a single run. When runs overlap beyond
-  capacity, the excess runs queue, so the *last* run's wall clock grows by up to
-  the duration of the run ahead of it. This is the intended trade: total
-  time-to-all-green improves, because two suites running at full speed finish
-  sooner than three thrashing an 8-core machine, and the operator's interactive
-  session stops stalling.
 
-Net for the common case — one suite, one machine — the change is within noise:
-the measured additions total well under a second against a 446.7 s baseline,
-under 0.2%. The baseline itself is recorded in section 9.
+Every item is either zero or measured in milliseconds, and nothing in this
+design queues, blocks, or waits on another process. The additions total well
+under a second against a 446.7 s baseline — **under 0.2%**, and the same figure
+whether the suite runs alone or alongside others. The baseline is in section 9.
 
 ### OO paydown
 
@@ -517,22 +562,26 @@ Test infrastructure:
 
 Build and process:
 
-- `Makefile` — `test` acquires the workspace concurrency slot; a bypass variable
-  for CI.
-- `tools/test_lock.py` (new) — the PID-aware advisory slot lock.
 - `pyproject.toml` — register the `embedding` marker; add it to the default
   deselection alongside `slow`.
-- `DESIGN.md` — an ADR recording the standing decision against `pytest-xdist`
-  and the hermeticity contract.
+- `DESIGN.md` — an ADR recording three standing decisions: no `pytest-xdist`,
+  the hermeticity contract, and no workspace-level test-concurrency mechanism
+  (section 4's reasoning, so the lock is not reinvented).
 - `CHANGELOG.md`, and the Testing section of `CLAUDE.md`.
+
+There is **no** `Makefile` change and no `tools/test_lock.py`. An earlier draft
+had `make test` acquire a workspace concurrency slot; that is rejected in
+section 4 and must not reappear.
 
 Explicitly **not** in the write-set: any change to `thread_config.py`. Its caps
 are correct; the defect was that tests bypassed them, which the conftest pin
 fixes.
 
-Out of scope, for the backlog rather than this mission: applying the same
-concurrency slot in the biff and vox Makefiles, which is what actually bounds
-the workspace, and bead quarry-lnog for the stuck ingest hooks.
+Out of scope: bead quarry-lnog, the stuck `ingest-background` hook processes.
+Same shape as the incident — unbounded concurrency of a bounded unit — but a
+daemon-side defect, not a test-suite one. Nothing else is deferred; in
+particular there is no follow-on for cross-repo coordination, because section 4
+rejects that work rather than postponing it.
 
 ## 9. Baseline measurements
 
@@ -564,20 +613,38 @@ The suite is I/O-bound, not CPU-bound. One quarry suite cannot drive an 8-core
 machine to load 200 no matter what it does internally; only N of them, alongside
 sibling repositories' suites and the daemon, can. This is the measurement that
 rejects `pytest-xdist` — there is no CPU idleness for extra workers to fill —
-and the one that makes the cross-run lock the load-bearing part of this design.
+and the one that establishes the incident's multiplier as environmental rather
+than a defect in this suite.
 
-## 10. Open question for the leader
+## 10. Ruling on scope
 
 The mission contract's stated root cause does not survive measurement, and two
 of its four questions therefore have much smaller answers than anticipated:
 there is no engine multiplication to fix, and the per-run budget is already met.
-The findings that remain are the hermeticity breach — reproduced, 7,034 log
-lines per run, enough to rotate away real daemon history every seven or eight
-runs — and the absence of any bound on concurrent suite runs across sibling
-repositories. The first of those is worse than the incident that prompted the
-mission, and it is the reason this document still recommends real work.
+The finding that remains is the hermeticity breach — 7,034 log lines per run,
+enough to rotate away real daemon history every seven or eight runs. That is
+worse than the incident which prompted the mission, and it is the reason this
+document still recommends real work.
 
-The consequence worth a ruling: the cross-run lock only bounds the workspace if
-biff and vox adopt it too, and those are separate repositories with their own
-agents. This design implements the quarry half and files the rest. Confirm that
-split, or direct the cross-repo coordination as part of this work.
+An earlier draft asked whether to bound concurrent suite runs across sibling
+repositories. **The operator ruled against it: quarry does not manage test
+concurrency across punt-labs.** The suite must behave reliably regardless of
+what other repositories do. No workspace lock file, no biff/vox coordination,
+and no follow-on bead — the work is rejected, not deferred.
+
+The reasoning is recorded in section 4 and is a product judgement rather than a
+technical one. Quarry is shipped; we are its authors, not its only users. A
+concurrency mechanism keyed to the punt-labs workspace layout would bake our
+development environment into the product's test suite and mean nothing to any
+other contributor or CI environment. The suite's obligations are to be bounded
+and hermetic on any machine, and to assume nothing about what else that machine
+is running. Both are met by per-run enforcement alone.
+
+Two smaller rulings, for the record: the `docs/README.md` index entry that
+accompanies this document stays, and the guard correction at `03735e4` — `HOME`
+redirection in place of the tree fingerprint — is accepted. Section 5.2 retains
+the rejected fingerprint and the measurements that killed it, because "stat the
+data directory too" is the natural next suggestion and it does not work.
+
+This design is complete. Implementation goes to a separate agent against the
+write-set in section 8.
