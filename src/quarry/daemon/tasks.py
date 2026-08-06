@@ -119,7 +119,7 @@ class TaskRegistry:
         task.add_done_callback(lambda _t: self._refs.pop(tid, None))
 
     async def drain(self, timeout: float) -> None:
-        """Await every tracked task's real completion; cancel stragglers past *timeout*.
+        """Await every tracked task's real completion within *timeout*.
 
         Cancelling the wrapping ``asyncio.Task`` does not stop a
         ``run_in_threadpool`` job's underlying OS thread — Python has no way to
@@ -128,10 +128,17 @@ class TaskRegistry:
         well after the caller believes the task is gone.  A daemon/test-harness
         teardown that only cancels can therefore race: the thread finishes later,
         inside a *different* context (a later test's mocks, a closed log stream).
-        Waiting for genuine completion first closes that race; only a task that
-        outlives the drain window is force-cancelled, mirroring
-        :meth:`~quarry.daemon.ingest_queue.IngestQueue.aclose`'s drain-then-abort
-        shape. Must be called on the registry's own event-loop thread.
+        Waiting for genuine completion is the only way to close that race.
+
+        A task that outlives the drain window is a genuine straggler: its
+        ``asyncio.Task`` wrapper is best-effort cancelled (to release the
+        reference and unblock event-loop bookkeeping), but — per the paragraph
+        above — that does **not** stop the underlying thread, so the race is
+        NOT closed for a straggler.  Pretending otherwise (swallowing the
+        timeout and returning normally) would silently reintroduce the exact
+        bug this method exists to fix.  So this fails closed: log the straggler
+        and re-raise ``TimeoutError`` rather than let the caller believe drain
+        succeeded. Must be called on the registry's own event-loop thread.
         """
         tasks = list(self._refs.values())
         if not tasks:
@@ -141,9 +148,21 @@ class TaskRegistry:
                 await asyncio.gather(*tasks, return_exceptions=True)
         except TimeoutError:
             await self._cancel_stragglers(tasks)
+            logger.error(
+                "TaskRegistry.drain: %d task(s) did not complete within %.1fs; "
+                "their wrapper was cancelled but the underlying thread may still "
+                "be running",
+                len(tasks),
+                timeout,
+            )
+            raise
 
     async def _cancel_stragglers(self, tasks: list[asyncio.Task[None]]) -> None:
-        """Force-cancel *tasks* that outlived the drain window, then await them."""
+        """Best-effort cancel *tasks* that outlived the drain window, then await them.
+
+        Only releases each wrapper's ``asyncio.Task`` reference — it does NOT
+        stop the underlying ``run_in_threadpool`` OS thread (see :meth:`drain`).
+        """
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
