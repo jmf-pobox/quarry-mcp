@@ -2329,3 +2329,80 @@ the plist and re-spawns the daemon under it), then `quarry doctor` reads
 `SoftResourceLimits 8192` / `HardResourceLimits 65536`. Sibling to DES-032 (the
 service manager, not the process, owns the pre-spawn envelope where the process is
 powerless to set it).
+
+## DES-047: Test-suite resource governance — hermetic, bounded, single-process
+
+**Context.** An 8-core machine whose normal load average is under 5 reached
+roughly 200 while several repositories' test suites ran concurrently.
+Measurement of quarry's suite contradicted most of the suspected cause, and
+found one real defect. Full record: `docs/test-resource-governance-design.md`.
+
+What was suspected and is false: there are no parallel pytest workers (no
+`pytest-xdist`, `addopts` has no `-n`); the log lines read as model loads are
+`ThreadConfig` INFO records from one unit test file constructing 29 of them; a
+LanceDB tokio runtime is process-global (13 threads once, not 8 per connection).
+One full run consumes 0.69 average cores over 446.7 s — it is I/O-bound.
+
+What is true: a full run appended **7,034 lines** to
+`~/.punt-labs/quarry/logs/quarry.log`, roughly one 5 MB rotation every seven or
+eight runs, discarding real daemon history each time.
+
+**Decision 1 — the hermeticity contract.** A suite run writes nothing under the
+operator's `~/.punt-labs/quarry/`. `HOME` is redirected to a session temporary
+directory before anything imports quarry, with `QUARRY_ROOT` and
+`QUARRY_LOG_DIR` set explicitly alongside it. This required a source change:
+`LoggingConfig` pinned its destination in a class constant evaluated from
+`Path.home()` at import time, so no fixture could move it; `configure()` now
+resolves the directory per call, and `Settings` derives its config file from
+`quarry_root`. That is target behavior, not a migration shim — the log
+destination is configuration and was hardcoded.
+
+Setting the environment variable rather than patching `Path.home` is required,
+not stylistic: `os.path.expanduser` reads `$HOME` and ignores the patched
+classmethod, so a `Path.home`-only patch leaves two of the three resolution
+routes on production.
+
+A per-test guard stats three *files* — the log, `config.toml`, and the default
+`registry.db` — and fails the test that moves one. Files only. A directory's
+`mtime` changes when an entry is added to that directory and not when a file
+below it is written, so a directory stat detects almost nothing; the obvious
+repair, a recursive walk, is unavailable because the operator's tree is 15 GB
+across ~1,600 files and `os.walk` with a stat per file did not finish inside two
+minutes. The guard is a smoke check that the redirect is in force, not a tree
+fingerprint. Do not reinstate the fingerprint.
+
+**Decision 2 — no `pytest-xdist`, ever.** The suite is dominated by filesystem
+and LanceDB I/O. Workers would multiply the 180 MB base footprint and the tokio
+runtime by the worker count for a modest wall-clock gain, and would create
+exactly the per-worker engine multiplication the incident was wrongly believed
+to involve. There is no CPU idleness for extra workers to fill. The correct
+response to a slow suite here is to fix the slow tests.
+
+**Decision 3 — no workspace-level test-concurrency mechanism.** Per-run caps
+multiply by N and the incident was caused by N; an earlier draft proposed an
+advisory slot lock at `~/.punt-labs/test-concurrency.lock` acquired by `make
+test` and adopted by sibling repositories. Rejected, and the reasoning is
+recorded because the temptation will recur. The lock path and the premise that
+siblings cooperate are facts about how punt-labs is checked out, not about
+quarry — shipping them ships our desk to every other contributor and every CI
+runner, who would pay startup cost and a new failure mode for a contention they
+do not have. How many suites run at once is a scheduling decision belonging to
+whoever runs the machine. The work is rejected, not deferred: there is no
+follow-on bead, no `Makefile` lock, and no `tools/test_lock.py`.
+
+The suite's obligation is stated in terms of itself: **one quarry suite run is
+bounded and hermetic on any machine, and assumes nothing about what else that
+machine is running.** Per-run enforcement alone meets it.
+
+**Enforcement.** Processes 1; OS threads ≤ 32 (`OMP_NUM_THREADS`,
+`LANCE_CPU_THREADS`, `LANCE_IO_THREADS` pinned before lance builds its compute
+runtime, which reads them once and ignores later assignment); real ONNX model
+loads 0, by a fake installed at the `quarry.ingestion.backends` factory plus an
+`InferenceSession` guard that fails an unmarked load, replacing ~40 ad-hoc
+patches that each named one import site; writes under the real tree 0. A
+session-scoped invariant asserts no non-daemon thread outlived the run —
+session-scoped because LanceDB starts its pool lazily, so a per-test check would
+fail on correct code.
+
+Sibling to DES-045 (the watch loop whose scratch guard constrains where a test's
+project root may live) and DES-046 (the daemon's descriptor envelope).
