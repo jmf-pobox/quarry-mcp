@@ -91,7 +91,7 @@ class _RaisingEmbedder:
         return self._inner.model_name
 
     @property
-    def embedded(self) -> list[str]:
+    def embedded(self) -> tuple[str, ...]:
         """Return the texts embedded before the failure."""
         return self._inner.embedded
 
@@ -1297,7 +1297,7 @@ class TestWithinFileResume:
         with _patched_embedder(embedder):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
-        assert embedder.embedded == [c.text for c in chunks[w:]]  # tail only
+        assert embedder.embedded == tuple(c.text for c in chunks[w:])  # tail only
         assert _chunk_indexes(db, doc) == list(range(total))
         rec = conn.files.get_file(str((d / "big.txt").resolve()))
         assert rec is not None and rec.partial_hash is None
@@ -1313,7 +1313,7 @@ class TestWithinFileResume:
         with _patched_embedder(embedder):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _chunk_indexes(db, doc) == list(range(total))  # no [w, K) dups
-        assert embedder.embedded == [c.text for c in chunks[w:]]
+        assert embedder.embedded == tuple(c.text for c in chunks[w:])
         conn.close()
 
     def test_g3_hash_mismatch_full_reembed(self, tmp_path: Path):
@@ -1328,7 +1328,7 @@ class TestWithinFileResume:
         embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert embedder.embedded == [c.text for c in chunks]  # full re-embed
+        assert embedder.embedded == tuple(c.text for c in chunks)  # full re-embed
         assert _chunk_indexes(db, doc) == list(range(total))
         conn.close()
 
@@ -1376,7 +1376,7 @@ class TestWithinFileResume:
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         # Non-deterministic extraction → watermark discarded → full re-embed from 0.
-        assert embedder.embedded == [c.text for c in chunks]
+        assert embedder.embedded == tuple(c.text for c in chunks)
         assert _chunk_indexes(db, "scan.png") == list(range(total))
         conn.close()
 
@@ -1483,7 +1483,9 @@ class TestPartialHashSentinel:
         with _patched_embedder(embedder):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
-        assert embedder.embedded == [c.text for c in chunks]  # full re-embed from 0
+        assert embedder.embedded == tuple(
+            c.text for c in chunks
+        )  # full re-embed from 0
         assert _chunk_indexes(db, doc) == list(range(total))
         rec = conn.files.get_file(str(f.resolve()))
         assert rec is not None and rec.partial_hash is None  # completed, mark cleared

@@ -393,10 +393,19 @@ def _reset_database_selection() -> Generator[None]:
     ``SELECTION`` stands for a process-global choice, and its persisted half is
     a real file under the session home. Without this, a test that selects a
     database silently changes what its successors resolve to.
+
+    The session pointer is resolved at *setup*, before the test can relocate the
+    root. A path resolved only at teardown depends on whether ``monkeypatch``
+    has already restored ``QUARRY_ROOT``, which pytest does not order against
+    this fixture — so it could look under the wrong root and leave the real
+    pointer in place. Both paths are removed, since a test may have written
+    under either.
     """
+    session_pointer = SELECTION.path
     yield
     SELECTION.override("")
-    SELECTION.path.unlink(missing_ok=True)
+    for pointer in {session_pointer, SELECTION.path}:
+        pointer.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

@@ -267,7 +267,12 @@ def use_cmd(
     overrides this per call.
     """
     Settings.load().resolve_db_paths(name if name != "default" else None)
-    SELECTION.persist(name)
+    # "default" is the documented reset, and the pointer refuses to record it as
+    # a selection -- forgetting is what it means.
+    if name == "default":
+        SELECTION.clear()
+    else:
+        SELECTION.persist(name)
     _emit({"database": name}, f"Default database set to {name!r}")
 
 

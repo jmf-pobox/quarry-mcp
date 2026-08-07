@@ -33,6 +33,12 @@ class FakeEmbeddingBackend:
     meaningless.  Seeding from a checksum of the text keeps the mapping stable
     across processes and runs -- ``hash()`` would not, being salted per process.
 
+    Vectors are unit-length, matching the real backend, so any code that assumes
+    cosine similarity equals the dot product behaves the same against both.
+
+    ``embedded`` records every text that passed through, queries included, so a
+    test can assert on what was embedded without a second spy.
+
     Satisfies :class:`quarry.types.EmbeddingBackend` structurally.
     """
 
@@ -70,9 +76,13 @@ class FakeEmbeddingBackend:
         return self._model_name
 
     @property
-    def embedded(self) -> list[str]:
-        """Return every text passed to :meth:`embed_texts`, in order."""
-        return self._embedded
+    def embedded(self) -> tuple[str, ...]:
+        """Return every text this backend has embedded, in order.
+
+        A snapshot, not the live list: handing out the internal one would let a
+        caller mutate the record it is meant to be reading.
+        """
+        return tuple(self._embedded)
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Return one vector per text, shape ``(len(texts), dimension)``."""
@@ -83,12 +93,19 @@ class FakeEmbeddingBackend:
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
         """Return a single vector of shape ``(dimension,)``."""
+        self._embedded.append(query)
         return self._vector(query)
 
     def _vector(self, text: str) -> NDArray[np.float32]:
-        """Return the vector this text always maps to."""
+        """Return the unit-length vector this text always maps to.
+
+        L2-normalized because the real backend is: quarry stores and queries on
+        the understanding that cosine similarity equals the dot product, so a
+        fake emitting unnormalized vectors would diverge from production on
+        every norm-sensitive path while still looking plausible.
+        """
         rng = np.random.default_rng(zlib.crc32(text.encode()))
-        vector: NDArray[np.float32] = rng.standard_normal(self._dimension).astype(
-            np.float32
-        )
-        return vector
+        vector = rng.standard_normal(self._dimension).astype(np.float32)
+        norm = float(np.linalg.norm(vector))
+        unit: NDArray[np.float32] = (vector / (norm or 1.0)).astype(np.float32)
+        return unit

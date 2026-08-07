@@ -191,6 +191,10 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
 
 _BACKFILL_TRANSCRIPTS = 250
 
+# Probe threads are joined, never waited on for real work; the bound only keeps
+# a broken probe from hanging the suite.
+_PROBE_TIMEOUT_S = 5.0
+
 
 @final
 class _FdSamplingEmbedder:
@@ -589,3 +593,57 @@ def _no_leaked_threads() -> Generator[None]:
         f"non-daemon threads outlived the suite: {sorted(leaked)}. "
         f"Each is a thread some test started and never joined."
     )
+
+
+class TestThreadNameSet:
+    """The invariant's own machinery, proven to notice a thread rather than assumed.
+
+    The session-scoped assertion above can only fail once, at the very end of a
+    run, so on a healthy suite it never executes its failure path. These drive
+    that path directly.
+    """
+
+    def test_reports_a_thread_started_since_the_baseline(self) -> None:
+        baseline = ThreadNameSet.sample()
+        started = threading.Event()
+        release = threading.Event()
+
+        def hold() -> None:
+            started.set()
+            release.wait(_PROBE_TIMEOUT_S)
+
+        leaker = threading.Thread(
+            target=hold, name="thread-name-set-probe", daemon=False
+        )
+        leaker.start()
+        try:
+            assert started.wait(_PROBE_TIMEOUT_S), "probe thread never ran"
+            assert "thread-name-set-probe" in ThreadNameSet.sample().newcomers_since(
+                baseline
+            )
+        finally:
+            release.set()
+            leaker.join(_PROBE_TIMEOUT_S)
+        assert not leaker.is_alive(), "the probe must not outlive its own test"
+
+    def test_reports_nothing_when_no_thread_started(self) -> None:
+        baseline = ThreadNameSet.sample()
+        assert ThreadNameSet.sample().newcomers_since(baseline) == frozenset()
+
+    def test_ignores_daemon_threads(self) -> None:
+        """Daemon threads are excluded: the interpreter reclaims them at exit."""
+        baseline = ThreadNameSet.sample()
+        release = threading.Event()
+        daemon = threading.Thread(
+            target=lambda: release.wait(_PROBE_TIMEOUT_S),
+            name="daemon-probe",
+            daemon=True,
+        )
+        daemon.start()
+        try:
+            assert "daemon-probe" not in ThreadNameSet.sample().newcomers_since(
+                baseline
+            )
+        finally:
+            release.set()
+            daemon.join(_PROBE_TIMEOUT_S)

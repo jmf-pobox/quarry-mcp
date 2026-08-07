@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
@@ -144,3 +146,28 @@ class TestThreadPins:
         """
         for name in ("OMP_NUM_THREADS", "LANCE_CPU_THREADS", "LANCE_IO_THREADS"):
             assert int(os.environ[name]) <= 2, name
+
+
+class TestRealModelGuard:
+    """The guard that turns a silent 410 MB model load into a named failure.
+
+    Like the thread invariant, this one only fires on a suite that has already
+    gone wrong, so its failure path needs driving directly.
+    """
+
+    def test_constructing_a_session_is_refused(self) -> None:
+        import onnxruntime
+
+        with pytest.raises(AssertionError) as caught:
+            onnxruntime.InferenceSession("/nonexistent/model.onnx")
+        assert "loaded a real ONNX model" in str(caught.value)
+
+    def test_the_failure_names_the_offending_test(self) -> None:
+        """A bare 'a model was loaded' would not say which test to go fix."""
+        import onnxruntime
+
+        with pytest.raises(AssertionError) as caught:
+            onnxruntime.InferenceSession("/nonexistent/model.onnx")
+        message = str(caught.value)
+        assert "test_the_failure_names_the_offending_test" in message
+        assert "pytest.mark.embedding" in message, "the message must say the way out"

@@ -58,3 +58,38 @@ class TestOtherFormats:
     def test_plain_keeps_a_comment_only_paragraph(self) -> None:
         """Outside markdown an HTML comment is just text, not a directive."""
         assert len(SectionSplitter.plain().split("<!-- x -->\n\nalpha\n")) == 2
+
+
+class TestFormatDetection:
+    """``detects`` answers what format a document is, using the split pattern.
+
+    It replaced the extractor's own regex checks, so the dispatch that picks a
+    splitter now rests entirely on this.
+    """
+
+    def test_markdown_detects_a_heading(self) -> None:
+        assert SectionSplitter.markdown().detects("# Title\n\nbody\n")
+
+    def test_markdown_does_not_detect_plain_prose(self) -> None:
+        """The miss that matters: prose wrongly read as markdown loses its split."""
+        assert not SectionSplitter.markdown().detects("Just prose.\n\nMore prose.\n")
+
+    def test_markdown_does_not_detect_a_bare_hash(self) -> None:
+        """A heading needs the space; '#tag' is content, not structure."""
+        assert not SectionSplitter.markdown().detects("#hashtag not a heading\n")
+
+    def test_latex_detects_a_subsection_alone(self) -> None:
+        r"""``\subsection`` counts even with no ``\section`` above it."""
+        assert SectionSplitter.latex().detects("\\subsection{Only}\nbody\n")
+
+    def test_latex_detects_a_section(self) -> None:
+        assert SectionSplitter.latex().detects("\\section{One}\nbody\n")
+
+    def test_latex_does_not_detect_markdown(self) -> None:
+        assert not SectionSplitter.latex().detects("# Title\n\nbody\n")
+
+    def test_plain_detects_a_paragraph_break(self) -> None:
+        assert SectionSplitter.plain().detects("one\n\ntwo\n")
+
+    def test_plain_does_not_detect_a_single_paragraph(self) -> None:
+        assert not SectionSplitter.plain().detects("one line only\n")

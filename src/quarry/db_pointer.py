@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from typing import TYPE_CHECKING, Final, Self, final
 
@@ -12,9 +13,17 @@ if TYPE_CHECKING:
 
 _POINTER_FILE: Final[str] = "config.toml"
 
-# The name that means "no persisted choice": a pointer at the default database
-# carries no information, so it reads back as absent rather than as a selection.
+# The name that means "no persisted choice". Writing it is refused (clear() says
+# the same thing without ambiguity); reading it still means absent, because that
+# is what a file naming the default database conveys.
 _UNSET: Final[str] = "default"
+
+# A database name becomes both a path segment and a bare TOML string. This admits
+# only what survives round-tripping through the file unescaped and unambiguously:
+# no quotes or backslashes to break the syntax, no separators or dot segments to
+# escape the root. Anything else is refused at the write boundary rather than
+# written into a file that would read back as "nothing selected".
+_PERSISTABLE_NAME: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 @final
@@ -65,25 +74,67 @@ class DatabaseSelection:
     def persisted(self) -> str | None:
         """Return the database recorded on disk, or None when none is.
 
-        ``None`` is the documented contract for absence here, not a swallowed
-        failure: no file, a malformed file, and an explicit ``default`` all mean
-        "nothing has been chosen", and every caller already treats them alike.
+        ``None`` is the documented contract for absence, not a swallowed
+        failure: no file, a malformed file, and a file naming the default
+        database all mean "nothing has been chosen", and every caller treats
+        them alike.
+
+        Only a *missing* file reads as absence. An unreadable one — a permission
+        or I/O failure — propagates, because "the operator's choice cannot be
+        read" is not the same fact as "the operator chose nothing", and silently
+        conflating them would send the caller to the wrong database.
         """
-        path = self.path
-        if not path.exists():
+        try:
+            text = self.path.read_text()
+        except FileNotFoundError:
             return None
         try:
-            data = tomllib.loads(path.read_text())
+            data = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
             return None
         name = str(data.get("default", {}).get("database", ""))
         return name if name and name != _UNSET else None
 
     def persist(self, name: str) -> None:
-        """Record *name* as the default database for future processes."""
+        """Record *name* as the default database for future processes.
+
+        Refuses a name that would not survive the round trip. Written
+        unescaped, a name carrying a quote or backslash yields a file that
+        ``persisted`` cannot parse and therefore reads back as "nothing
+        selected" — the operator's choice lost with no error at either end.
+
+        The write is atomic: a full temporary file replaced into position, so a
+        crash mid-write leaves the previous pointer intact rather than a
+        truncated one. The temporary is removed if anything fails, so a failed
+        write leaves nothing behind.
+        """
+        self._reject_unpersistable(name)
         path = self.path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'[default]\ndatabase = "{name}"\n')
+        tmp = path.with_name(f"{path.name}.tmp")
+        try:
+            tmp.write_text(f'[default]\ndatabase = "{name}"\n')
+            tmp.replace(path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def clear(self) -> None:
+        """Forget the persisted default, leaving the process override alone."""
+        self.path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _reject_unpersistable(name: str) -> None:
+        """Raise unless *name* can be written and read back as itself."""
+        if name == _UNSET:
+            msg = (
+                f"{_UNSET!r} names the absence of a selection, not a selection; "
+                f"call clear() to forget the persisted default"
+            )
+            raise ValueError(msg)
+        if not _PERSISTABLE_NAME.match(name):
+            msg = f"Database name cannot be persisted: {name!r}"
+            raise ValueError(msg)
 
     def override(self, name: str) -> None:
         """Record this process's ``--db`` choice; an empty name clears it."""
