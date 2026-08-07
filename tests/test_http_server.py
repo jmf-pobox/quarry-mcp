@@ -128,11 +128,17 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
         yield tc
         portal = tc.portal  # set for the lifetime of the context
         if portal is not None:
-            portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
             # Ingest jobs now run inside per-collection queue workers, not tracked
             # tasks, so drain those too or a queued job could run into a later
             # test's mock window (the same isolation guard as ctx.tasks.drain).
-            portal.call(_aclose_ingest_queue, ctx)
+            # ``finally`` is load-bearing: a registry drain timeout now raises
+            # (fail-closed) rather than swallowing, so the queue close must not
+            # be skipped -- that queue is the OTHER leak vector this teardown
+            # guards, tracked independently of ``TaskRegistry._refs``.
+            try:
+                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+            finally:
+                portal.call(_aclose_ingest_queue, ctx)
 
 
 class TestHealth:
