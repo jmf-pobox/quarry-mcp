@@ -22,6 +22,7 @@ from quarry.api import (
 )
 from quarry.client import QuarryClient
 from quarry.config import Settings
+from quarry.database_selection import SELECTION
 from quarry.db import Database
 from quarry.db.storage import get_db
 from quarry.ingestion.backends import clear_caches
@@ -383,6 +384,19 @@ def _forbid_real_model_load(request: pytest.FixtureRequest) -> Generator[None]:
 
     with patch("onnxruntime.InferenceSession", _refuse):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_database_selection() -> Generator[None]:
+    """Leave no database selection behind for the next test.
+
+    ``SELECTION`` stands for a process-global choice, and its persisted half is
+    a real file under the session home. Without this, a test that selects a
+    database silently changes what its successors resolve to.
+    """
+    yield
+    SELECTION.override("")
+    SELECTION.path.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

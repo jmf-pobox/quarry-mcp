@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from quarry.config import Settings
+from quarry.database_selection import SELECTION
 from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV, ProductionTreeGuard
 
@@ -40,7 +41,7 @@ class TestHomeRedirect:
         assert Settings.load().quarry_root.is_relative_to(ENV.home)
 
     def test_config_path_is_redirected(self) -> None:
-        assert Settings.config_path().is_relative_to(ENV.home)
+        assert SELECTION.path.is_relative_to(ENV.home)
 
     def test_log_dir_is_redirected(self) -> None:
         assert LoggingConfig.log_dir().is_relative_to(ENV.home)

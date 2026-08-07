@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from quarry.api.meta import FdHealth
 from quarry.config import Settings
+from quarry.database_selection import SELECTION
 from quarry.fd_headroom import FdHeadroom
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir
@@ -172,7 +173,7 @@ class DaemonDiagnostics:
         persistent default) so doctor inspects the run dir the loopback client
         actually uses, not a hardcoded default.
         """
-        settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
+        settings = Settings.load().resolve_db_paths(SELECTION.active())
         return RunDir(settings.lancedb_path.parent)
 
     @classmethod

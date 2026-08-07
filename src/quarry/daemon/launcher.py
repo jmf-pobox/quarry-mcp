@@ -18,6 +18,7 @@ import typer
 
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.server import DaemonServer, ServeConfig
+from quarry.database_selection import SELECTION
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR
 
@@ -119,7 +120,7 @@ class DaemonLauncher:
         DaemonServer.serve(self._settings(), config)
 
     def _settings(self) -> Settings:
-        name = self._options.db or Settings.read_default_db()
+        name = self._options.db or SELECTION.persisted()
         return Settings.load().resolve_db_paths(name or None)
 
     def _effective_key(self) -> str:

@@ -28,6 +28,7 @@ from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.database_selection import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
@@ -452,15 +453,14 @@ class TestSync:
 
 class TestUseDatabase:
     def test_switch(self, harness: _ToolHarness) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
             result = harness.tools.use_database("coding")
             assert "coding" in result
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_remote_target_refuses_switch(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -472,21 +472,20 @@ class TestUseDatabase:
         daemon — data confusion. The tool returns an honest no-effect message and
         leaves the active db unchanged.
         """
-        from quarry.config import Settings
 
         monkeypatch.setattr(
             "quarry.mcp_server.TargetResolver.selects_local_db",
             classmethod(lambda _cls: False),
         )
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert result.startswith("Error:")
             assert "remote" in result
-            assert Settings.active_db() == "start", "must not switch under remote"
+            assert SELECTION.active() == "start", "must not switch under remote"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_quarry_url_env_refuses_switch_via_real_precedence(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -497,17 +496,16 @@ class TestUseDatabase:
         is False and use() refuses, proving the guard matches what a real find/
         remember call would resolve.
         """
-        from quarry.config import Settings
 
         monkeypatch.setenv("QUARRY_URL", "wss://remote.example.com:8420")
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert result.startswith("Error:")
-            assert Settings.active_db() == "start"
+            assert SELECTION.active() == "start"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_loopback_login_still_switches(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -515,20 +513,19 @@ class TestUseDatabase:
         """The post-install case: a `quarry login localhost` loopback login is
         LOCAL, so use() switches normally — not the remote-refusal regression.
         """
-        from quarry.config import Settings
 
         monkeypatch.delenv("QUARRY_URL", raising=False)
         login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
         monkeypatch.setattr("quarry.client.resolver.read_proxy_config", lambda: login)
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert not result.startswith("Error:"), result
             assert "coding" in result
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_default_selects_literal_default_not_persistent(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -539,60 +536,54 @@ class TestUseDatabase:
         from quarry.config import Settings
 
         # Persistent default is "coding"; use("default") must NOT pick it up.
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "coding")
-        )
-        original = Settings.active_db()
+        SELECTION.persist("coding")  # a real pointer file under the session home
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("")  # nothing selected this session yet
+            SELECTION.override("")  # nothing selected this session yet
             result = harness.tools.use_database("default")
-            assert Settings.active_db() == "default"
+            assert SELECTION.active() == "default"
             default_path = str(Settings.load().resolve_db_paths("default").lancedb_path)
             coding_path = str(Settings.load().resolve_db_paths("coding").lancedb_path)
             assert default_path in result
             assert coding_path not in result
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_named_switch_sets_active_db(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.config import Settings
 
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "coding")
-        )
-        original = Settings.active_db()
+        SELECTION.persist("coding")  # a real pointer file under the session home
+        original = SELECTION.active()
         try:
             harness.tools.use_database("coding")
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_round_trip_target_follows_selection(self, harness: _ToolHarness) -> None:
         """After use("work"), the active db resolves to work's target path."""
         from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
             result = harness.tools.use_database("work")
             work_path = str(Settings.load().resolve_db_paths("work").lancedb_path)
-            assert Settings.active_db() == "work"
+            assert SELECTION.active() == "work"
             assert work_path in result
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_invalid_name_does_not_corrupt_state(self, harness: _ToolHarness) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("good")
+            SELECTION.override("good")
             result = harness.tools.use_database("../evil")
             assert result.startswith("Error:")
-            assert Settings.active_db() == "good"
+            assert SELECTION.active() == "good"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
 
 class TestDaemonDown:
@@ -670,17 +661,16 @@ class TestInputValidation:
         assert "collection" in result
 
     def test_use_blank_name(self) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             for name in ("", "   "):
                 result = self._tools().use_database(name)
                 assert result.startswith("Error:"), name
-                assert Settings.active_db() == "start", "must not switch on blank"
+                assert SELECTION.active() == "start", "must not switch on blank"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_show_negative_page_is_metadata_not_daemon_error(
         self, harness: _ToolHarness

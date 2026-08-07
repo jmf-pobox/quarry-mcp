@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tomllib
 from pathlib import Path
 from typing import ClassVar, Final
 
@@ -24,7 +23,7 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 DEFAULT_FD_LIMIT = 8192
 
 # The data root when QUARRY_ROOT is unset.  One binding shared by the field
-# default and by config_path, so the two can never disagree about where a
+# default and by data_root(), so the two can never disagree about where a
 # default deployment lives.
 _DEFAULT_QUARRY_ROOT: Final[Path] = Path.home() / ".punt-labs" / "quarry" / "data"
 
@@ -110,14 +109,6 @@ class Settings(BaseSettings):
 
     _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"
 
-    _CONFIG_NAME: ClassVar[str] = "config.toml"
-
-    # The current process's --db override, recorded by the CLI so the client
-    # tier resolves the daemon's startup-db run dir (where serve.token lives)
-    # the same way the CLI resolves its own data — client and daemon agree on
-    # the database by a matching --db.
-    _active_db: ClassVar[str] = ""
-
     def resolve_db_paths(self, db_name: str | None = None) -> Settings:
         """Return a copy with lancedb_path and registry_path resolved.
 
@@ -126,11 +117,7 @@ class Settings(BaseSettings):
         is used. Raises ``ValueError`` if *db_name* contains path separators or
         traversal segments.
         """
-        if db_name is not None and (
-            "/" in db_name or "\\" in db_name or db_name in (".", "..")
-        ):
-            msg = f"Invalid database name: {db_name!r}"
-            raise ValueError(msg)
+        self._reject_traversal(db_name)
 
         if self.lancedb_path != Settings._DEFAULT_LANCEDB:
             return self
@@ -143,56 +130,31 @@ class Settings(BaseSettings):
             },
         )
 
+    @staticmethod
+    def _reject_traversal(db_name: str | None) -> None:
+        """Raise when *db_name* could escape ``quarry_root``.
+
+        A database name becomes a path segment, so a separator or a dot segment
+        would place the database outside the root entirely. Validated at this
+        boundary and trusted below it.
+        """
+        if db_name is not None and (
+            "/" in db_name or "\\" in db_name or db_name in (".", "..")
+        ):
+            msg = f"Invalid database name: {db_name!r}"
+            raise ValueError(msg)
+
     @classmethod
-    def config_path(cls) -> Path:
-        """Return the path of the persistent config file, resolved per call.
+    def data_root(cls) -> Path:
+        """Return the data root, resolved per call from ``QUARRY_ROOT``.
 
-        Derived from the data root (its sibling, one level up) so that relocating
-        the root via ``QUARRY_ROOT`` relocates the config with it; a class
-        constant would pin it to whatever home was in force at import time.
-
-        The environment is read directly rather than through ``cls()``: this runs
-        on CLI startup, and building a whole ``Settings`` to read one path would
-        both cost more and introduce a validation-error surface where a plain
-        lookup has none.
+        Reads the environment directly rather than building a ``Settings``: this
+        runs on CLI startup, and constructing the whole model to read one path
+        would both cost more and introduce a validation-error surface where a
+        plain lookup has none.
         """
         root = os.environ.get("QUARRY_ROOT", "")
-        base = Path(root) if root else _DEFAULT_QUARRY_ROOT
-        return base.parent / cls._CONFIG_NAME
-
-    @classmethod
-    def read_default_db(cls) -> str | None:
-        """Read the persistent default database name from config file."""
-        path = cls.config_path()
-        if not path.exists():
-            return None
-        text = path.read_text()
-        try:
-            data = tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            return None
-        value = data.get("default", {}).get("database", "")
-        if value and value != "default":
-            return str(value)
-        return None
-
-    @classmethod
-    def write_default_db(cls, name: str) -> None:
-        """Write the persistent default database name to config file."""
-        path = cls.config_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        content = f'[default]\ndatabase = "{name}"\n'
-        path.write_text(content)
-
-    @classmethod
-    def set_active_db(cls, name: str) -> None:
-        """Record this process's ``--db`` override for db resolution."""
-        cls._active_db = name
-
-    @classmethod
-    def active_db(cls) -> str | None:
-        """Return the effective database: ``--db`` override, else the default."""
-        return cls._active_db or cls.read_default_db()
+        return Path(root) if root else _DEFAULT_QUARRY_ROOT
 
     @classmethod
     def load(cls) -> Settings:

@@ -7,11 +7,11 @@
     "public_names": 8.0
   },
   "src/quarry/__main__.py": {
-    "avg_lcom": 0.0,
+    "efferent_coupling": 13.0,
+    "public_names": 14.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 12.0,
     "max_lcom": 0.0,
-    "public_names": 14.0
+    "avg_lcom": 0.0
   },
   "src/quarry/_frontmatter.py": {
     "avg_lcom": 0.0,
@@ -273,11 +273,11 @@
     "public_names": 1.0
   },
   "src/quarry/client/config.py": {
-    "avg_lcom": 0.333,
+    "efferent_coupling": 7.0,
+    "public_names": 2.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 6.0,
     "max_lcom": 0.333,
-    "public_names": 2.0
+    "avg_lcom": 0.333
   },
   "src/quarry/client/errors.py": {
     "avg_lcom": 0.556,
@@ -434,11 +434,11 @@
     "public_names": 3.0
   },
   "src/quarry/daemon/launcher.py": {
-    "avg_lcom": 0.0,
+    "efferent_coupling": 5.0,
+    "public_names": 3.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 4.0,
     "max_lcom": 0.0,
-    "public_names": 3.0
+    "avg_lcom": 0.0
   },
   "src/quarry/daemon/purge_service.py": {
     "avg_lcom": 0.0,
@@ -693,7 +693,7 @@
     "public_names": 1.0
   },
   "src/quarry/doctor_daemon.py": {
-    "efferent_coupling": 4.0,
+    "efferent_coupling": 6.0,
     "public_names": 1.0,
     "circular_imports": 0.0,
     "max_lcom": 0.0,
@@ -1050,11 +1050,11 @@
     "public_names": 1.0
   },
   "src/quarry/mcp_server.py": {
-    "avg_lcom": 0.287,
+    "efferent_coupling": 7.0,
+    "public_names": 4.0,
     "circular_imports": 0.0,
-    "efferent_coupling": 6.0,
     "max_lcom": 0.287,
-    "public_names": 4.0
+    "avg_lcom": 0.287
   },
   "src/quarry/models.py": {
     "avg_lcom": 0.0,
