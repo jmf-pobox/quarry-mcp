@@ -28,7 +28,7 @@ from quarry.client import QuarryClient, QuarryConnectionError
 from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 

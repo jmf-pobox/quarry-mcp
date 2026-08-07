@@ -30,7 +30,7 @@ from typing import Self, final
 
 from quarry.client.errors import QuarryError
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.net import LoopbackPolicy
 from quarry.remote import to_netloc, ws_to_http
 from quarry.run_dir import RunDir

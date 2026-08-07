@@ -27,7 +27,7 @@ from pydantic import ValidationError
 
 from quarry.api.meta import FdHealth
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.fd_headroom import FdHeadroom
 from quarry.results import CheckResult
 from quarry.run_dir import RunDir

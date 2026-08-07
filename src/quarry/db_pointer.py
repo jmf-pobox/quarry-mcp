@@ -1,4 +1,4 @@
-"""Which database this process works against, and where that choice is stored."""
+"""The on-disk pointer to the database in use, and this process's override of it."""
 
 from __future__ import annotations
 

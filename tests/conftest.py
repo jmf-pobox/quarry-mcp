@@ -22,9 +22,9 @@ from quarry.api import (
 )
 from quarry.client import QuarryClient
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
 from quarry.db import Database
 from quarry.db.storage import get_db
+from quarry.db_pointer import SELECTION
 from quarry.ingestion.backends import clear_caches
 from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB

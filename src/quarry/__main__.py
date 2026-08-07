@@ -27,7 +27,7 @@ from quarry.client import (
 )
 from quarry.client.errors import CONFLICT_STATUS
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:

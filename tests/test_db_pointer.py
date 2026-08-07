@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from quarry.database_selection import SELECTION, DatabaseSelection
+from quarry.db_pointer import SELECTION, DatabaseSelection
 
 if TYPE_CHECKING:
     from pathlib import Path

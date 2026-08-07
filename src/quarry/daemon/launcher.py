@@ -18,7 +18,7 @@ import typer
 
 from quarry.config import DEFAULT_PORT, Settings
 from quarry.daemon.server import DaemonServer, ServeConfig
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR
 

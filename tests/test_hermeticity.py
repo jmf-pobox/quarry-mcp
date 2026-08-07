@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV, ProductionTreeGuard
 

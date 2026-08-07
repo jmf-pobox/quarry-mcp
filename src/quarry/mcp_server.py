@@ -32,7 +32,7 @@ from quarry.api import (
 )
 from quarry.client import HttpError, QuarryClient, TargetResolver
 from quarry.config import Settings
-from quarry.database_selection import SELECTION
+from quarry.db_pointer import SELECTION
 from quarry.formatting import (
     format_collections,
     format_databases,
