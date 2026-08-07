@@ -248,7 +248,7 @@ reportMissingParameterType = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow'"
+addopts = "-ra -q -m 'not slow and not embedding'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
@@ -256,6 +256,7 @@ markers = [
     "slow: marks tests as slow (run with -m slow)",
     "resource: long-lived-process resource-invariant tests (fd/memory leak guards)",
     "integration: real-socket/live-server tests, also slow so excluded from the fast CI suite and run via -m integration",
+    "embedding: opts back in to the real ONNX model (410 MB); deselected by default alongside slow, run via -m embedding",
 ]
 
 [tool.coverage.run]

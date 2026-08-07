@@ -26,6 +26,7 @@ from quarry.db import Database
 from quarry.db.storage import get_db
 from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB
+from tests.hermetic_env import ENV, ProductionTreeGuard
 from tests.inproc_daemon import InProcessDaemon
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -275,9 +276,11 @@ _QUARRY_ENV_VARS = (
     "LOG_PATH",
     "QUARRY_API_KEY",
     "QUARRY_PROVIDER",
-    "QUARRY_ROOT",
     "REGISTRY_PATH",
 )
+# QUARRY_ROOT is deliberately absent: ``tests.hermetic_env`` points it at the
+# session home, and stripping it would send every Settings() back to the real
+# ``~/.punt-labs/quarry/data`` -- away from isolation, not toward it.
 
 
 @pytest.fixture(autouse=True)
@@ -301,6 +304,20 @@ def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for var in _QUARRY_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _guard_production_tree() -> Generator[None]:
+    """Fail the test that writes to the operator's real quarry tree.
+
+    Runs unconditionally, including in CI where ``HOME`` differs but the same
+    three paths must stay untouched.  Three stats per test measured at 25.9 ms
+    across the whole suite.
+    """
+    guard = ProductionTreeGuard(ENV.real_tree)
+    yield
+    if breaches := guard.changed():
+        pytest.fail("wrote to the production quarry tree:\n" + "\n".join(breaches))
 
 
 @pytest.fixture(autouse=True)
