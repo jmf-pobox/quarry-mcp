@@ -1,12 +1,19 @@
 """Redirect ``HOME`` away from the operator's tree before quarry is imported.
 
-Loaded as a pytest plugin via ``-p tests.hermetic_env`` in ``addopts``, which
-pytest imports during plugin registration — strictly before it imports the root
-``conftest.py``.  That ordering is the whole point and cannot be achieved from
-``pytest_configure``: ``Settings.quarry_root`` and the log destination were both
-decided from ``Path.home()`` when their modules were imported, and the root
-conftest imports quarry at its own module scope.  A redirect installed any later
-than this module is a redirect installed too late.
+Imported by the **rootdir** ``conftest.py``, whose body pytest runs before it
+imports ``tests/conftest.py``.  That ordering is the whole point: ``tests/
+conftest.py`` imports quarry at module scope, and ``Settings.quarry_root`` and
+the log destination are both decided from ``Path.home()`` the moment their
+modules are imported.  A redirect installed after that is a redirect installed
+too late.
+
+Two earlier hooks look plausible and are not.  ``pytest_configure`` runs only
+after every conftest has been imported, so quarry's paths are already bound by
+then.  Registering this module as a plugin with ``-p tests.hermetic_env`` in
+``addopts`` fails outright — pytest consumes plugin arguments during preparse,
+before the rootdir is on ``sys.path``, so the import raises ``No module named
+'tests'``.  The rootdir conftest is the earliest hook that both exists and
+works.
 
 Setting ``$HOME`` rather than patching ``Path.home`` is also deliberate.
 ``os.path.expanduser`` reads the environment variable and ignores the patched

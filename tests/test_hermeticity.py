@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 from quarry.config import Settings
 from quarry.logging_config import LoggingConfig
@@ -20,12 +21,20 @@ class TestHomeRedirect:
     def test_path_home(self) -> None:
         assert Path.home().is_relative_to(ENV.home)
 
-    def test_expanduser_function(self) -> None:
-        """``os.path.expanduser`` reads $HOME and ignores a patched Path.home."""
-        assert Path(os.path.expanduser("~")).is_relative_to(ENV.home)  # noqa: PTH111
-
     def test_path_expanduser_method(self) -> None:
         assert Path("~").expanduser().is_relative_to(ENV.home)
+
+    def test_expanduser_ignores_a_patched_path_home(self) -> None:
+        """Why the redirect must be the env var and not a ``Path.home`` patch.
+
+        ``expanduser`` resolves through ``$HOME`` and never consults
+        ``Path.home``, so patching the classmethod would leave this route — and
+        the ``os.path.expanduser`` one behind it — pointed at production.
+        """
+        elsewhere = Path("/nonexistent-patched-home")
+        with patch.object(Path, "home", classmethod(lambda _cls: elsewhere)):
+            assert Path.home() == elsewhere, "the patch must actually be in force"
+            assert Path("~").expanduser().is_relative_to(ENV.home)
 
     def test_quarry_root_is_redirected(self) -> None:
         assert Settings.load().quarry_root.is_relative_to(ENV.home)
@@ -96,12 +105,21 @@ class TestProductionTreeGuard:
         assert all(not p.is_dir() for p in ENV.real_tree)
 
 
+class TestAmbientGitConfig:
+    """The shell's git-signing injection does not follow the suite in."""
+
+    def test_signing_config_is_dropped(self) -> None:
+        """The redirected home has no keyring, so a sandbox repo must not sign."""
+        assert "GIT_CONFIG_COUNT" not in os.environ
+
+    def test_signing_key_and_program_are_dropped_with_it(self) -> None:
+        """The count is the index; leaving the pairs behind would be half a job."""
+        leftovers = [k for k in os.environ if k.startswith("GIT_CONFIG_")]
+        assert leftovers == []
+
+
 class TestThreadPins:
     """The per-run thread budget is pinned before lance builds its runtime."""
-
-    def test_git_signing_is_not_inherited(self) -> None:
-        """A sandbox repo signs nothing: the redirected home has no keyring."""
-        assert "GIT_CONFIG_COUNT" not in os.environ
 
     def test_pool_sizes_are_bounded(self) -> None:
         """A ceiling, not an exact value.

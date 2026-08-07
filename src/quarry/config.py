@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import tomllib
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Final
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -22,9 +23,14 @@ ONNX_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 # roster, well under any reasonable hard limit — years of roster growth headroom.
 DEFAULT_FD_LIMIT = 8192
 
+# The data root when QUARRY_ROOT is unset.  One binding shared by the field
+# default and by config_path, so the two can never disagree about where a
+# default deployment lives.
+_DEFAULT_QUARRY_ROOT: Final[Path] = Path.home() / ".punt-labs" / "quarry" / "data"
+
 
 class Settings(BaseSettings):
-    quarry_root: Path = Path.home() / ".punt-labs" / "quarry" / "data"
+    quarry_root: Path = _DEFAULT_QUARRY_ROOT
     lancedb_path: Path = quarry_root / "default" / "lancedb"
     registry_path: Path = quarry_root / "default" / "registry.db"
     embedding_model: str = "Snowflake/snowflake-arctic-embed-m-v1.5"
@@ -141,12 +147,18 @@ class Settings(BaseSettings):
     def config_path(cls) -> Path:
         """Return the path of the persistent config file, resolved per call.
 
-        Derived from ``quarry_root`` (its sibling, one level up from the data
-        directory) rather than from ``Path.home()`` so that relocating the root
-        via ``QUARRY_ROOT`` relocates the config with it. Binding this as a class
+        Derived from the data root (its sibling, one level up) so that relocating
+        the root via ``QUARRY_ROOT`` relocates the config with it; a class
         constant would pin it to whatever home was in force at import time.
+
+        The environment is read directly rather than through ``cls()``: this runs
+        on CLI startup, and building a whole ``Settings`` to read one path would
+        both cost more and introduce a validation-error surface where a plain
+        lookup has none.
         """
-        return cls().quarry_root.parent / cls._CONFIG_NAME
+        root = os.environ.get("QUARRY_ROOT", "")
+        base = Path(root) if root else _DEFAULT_QUARRY_ROOT
+        return base.parent / cls._CONFIG_NAME
 
     @classmethod
     def read_default_db(cls) -> str | None:
