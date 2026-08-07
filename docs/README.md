@@ -26,7 +26,8 @@ this directory holds reference material, active design work, and archived proces
   (quarry-21xv). Measurement corrects the load-200 post-mortem: the suite is single-process,
   I/O-bound (0.69 cores), and loads no ONNX models. The real defects are that one run writes
   7,034 lines into the operator's production log, and that nothing bounds concurrent suite
-  runs across sibling repos. Awaiting a leader ruling on the cross-repo scope.
+  runs across sibling repos. Operator-ruled: no workspace-level concurrency mechanism —
+  quarry is a shipped product; its suite is bounded and hermetic on its own (DES-047).
 
 ## Operations
 
