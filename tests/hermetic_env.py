@@ -132,6 +132,14 @@ class ProductionTreeGuard:
     *that* directory and not when a file below it is written, so a directory
     stat would detect almost nothing.  A recursive walk is not an alternative --
     the operator's tree is 15 GB across ~1,600 files.
+
+    It watches the files, not the writer, so it cannot attribute a change.  On a
+    machine whose live daemon watches this repository, editing source during a
+    run makes that daemon reindex and write ``registry.db``, and the guard
+    reports it against whichever test happened to be in flight.  A firing that
+    names a test which plainly touches nothing is likelier that write than a
+    real breach -- confirm by rerunning with the tree quiet before hunting the
+    named test.
     """
 
     __slots__ = ("_before", "_paths")
