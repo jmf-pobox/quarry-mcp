@@ -17,7 +17,11 @@ classifiers = [
 ]
 dependencies = [
     "pymupdf>=1.25.0",
-    "lancedb>=0.17.0",
+    # 0.34.0 is the first release carrying create_index(column, config=...);
+    # every earlier version raises TypeError on the call db/schema.py and
+    # db/optimizer.py make, so a resolver landing below this floor produces an
+    # artifact that imports cleanly and fails at the first index build.
+    "lancedb>=0.34.0",
     "tokenizers>=0.20.0",
     "huggingface-hub>=0.26.0",
     "pydantic>=2.0.0",
