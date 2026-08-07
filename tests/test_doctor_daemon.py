@@ -27,7 +27,6 @@ def _run_dir_at(tmp_path: Path) -> Generator[None]:
     fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
     with patch("quarry.doctor_daemon.Settings") as settings:
         settings.load.return_value.resolve_db_paths.return_value = fake_settings
-        settings.active_db.return_value = None
         yield
 
 

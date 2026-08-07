@@ -1260,6 +1260,7 @@ class TestConfigureClaudeDesktop:
         assert "quarry" in config["mcpServers"]
 
 
+@pytest.mark.usefixtures("real_embedding_factory")
 class TestRunInstall:
     _DL = "quarry.embeddings.OnnxEmbeddingBackend.download_model_files"
 

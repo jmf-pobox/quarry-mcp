@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
-
-MD_HEADER = re.compile(r"^(?=#+\s)", re.MULTILINE)
-LATEX_SECTION = re.compile(r"(?=\\(?:sub)?section\{)")
-BLANK_LINE_SPLIT = re.compile(r"\n\s*\n")
 
 
 def read_text_with_fallback(file_path: Path) -> str:
@@ -38,24 +33,6 @@ def read_text_with_fallback(file_path: Path) -> str:
             file_path.name,
         )
         return file_path.read_text(encoding="latin-1")
-
-
-def split_markdown(text: str) -> list[str]:
-    """Split markdown on heading lines (any level)."""
-    parts = MD_HEADER.split(text)
-    return [p for p in parts if p.strip()]
-
-
-def split_latex(text: str) -> list[str]:
-    """Split LaTeX on \\section{} or \\subsection{} commands."""
-    parts = LATEX_SECTION.split(text)
-    return [p for p in parts if p.strip()]
-
-
-def split_plain(text: str) -> list[str]:
-    """Split plain text on blank lines (paragraph boundaries)."""
-    parts = BLANK_LINE_SPLIT.split(text)
-    return [p for p in parts if p.strip()]
 
 
 def sections_to_pages(

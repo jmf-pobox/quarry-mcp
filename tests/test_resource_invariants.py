@@ -26,6 +26,7 @@ from __future__ import annotations
 import gc
 import json
 import resource
+import threading
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -45,6 +46,7 @@ from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -189,6 +191,10 @@ def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
 
 _BACKFILL_TRANSCRIPTS = 250
 
+# Probe threads are joined, never waited on for real work; the bound only keeps
+# a broken probe from hanging the suite.
+_PROBE_TIMEOUT_S = 5.0
+
 
 @final
 class _FdSamplingEmbedder:
@@ -200,21 +206,21 @@ class _FdSamplingEmbedder:
     model, keeping the test hermetic and CI-runnable.
     """
 
-    __slots__ = ("_dim", "_trajectory")
+    __slots__ = ("_inner", "_trajectory")
 
-    _dim: int
+    _inner: FakeEmbeddingBackend
     _trajectory: FdTrajectory
 
     def __new__(cls, trajectory: FdTrajectory, *, dimension: int) -> Self:
         self = super().__new__(cls)
         self._trajectory = trajectory
-        self._dim = dimension
+        self._inner = FakeEmbeddingBackend(dimension)
         return self
 
     @property
     def dimension(self) -> int:
         """Embedding width the fake vectors are shaped to."""
-        return self._dim
+        return self._inner.dimension
 
     @property
     def model_name(self) -> str:
@@ -224,12 +230,11 @@ class _FdSamplingEmbedder:
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Sample open fds, then return one random vector per text."""
         self._trajectory.record(_open_fd_count())
-        return _random_vectors(len(texts))
+        return self._inner.embed_texts(texts)
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Return a single random query vector (unused by backfill)."""
-        vector: NDArray[np.float32] = _random_vectors(1)[0]
-        return vector
+        """Return a single query vector (unused by backfill)."""
+        return self._inner.embed_query(query)
 
 
 def _write_transcript(path: Path, index: int) -> None:
@@ -327,39 +332,6 @@ _FINALIZE_EVERY = 10
 _DISTINCT_FILES = 5
 
 
-@final
-class _ConstantEmbedder:
-    """A hermetic embedder returning random vectors of the configured width."""
-
-    __slots__ = ("_dim",)
-
-    _dim: int
-
-    def __new__(cls, *, dimension: int) -> Self:
-        self = super().__new__(cls)
-        self._dim = dimension
-        return self
-
-    @property
-    def dimension(self) -> int:
-        """Embedding width the fake vectors are shaped to."""
-        return self._dim
-
-    @property
-    def model_name(self) -> str:
-        """Identify the fake backend in diagnostics."""
-        return "watch-fd-fake"
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        """Return one random vector per text."""
-        return _random_vectors(len(texts))
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Return a single random query vector (unused here)."""
-        vector: NDArray[np.float32] = _random_vectors(1)[0]
-        return vector
-
-
 def _watch_database(tmp_path: Path, index: int) -> tuple[Database, Settings, Path]:
     """Build one database's persistent connection, settings, and watched root."""
     base = tmp_path / f"db{index}"
@@ -417,7 +389,6 @@ def test_watch_session_does_not_leak_descriptors(
     """
     databases = [_watch_database(tmp_path, i) for i in range(_WATCH_DATABASES)]
     trajectory = FdTrajectory()
-    embedder = _ConstantEmbedder(dimension=_EMBEDDING_DIM)
 
     # Count only replace=True rebuilds — the generation-superseding calls that
     # leak descriptors (quarry-0dss). The replace=False "ensure index exists"
@@ -440,19 +411,16 @@ def test_watch_session_does_not_leak_descriptors(
     monkeypatch.setattr(RecyclingTable, "create_index", _spy_create_index)
 
     finalizes = 0
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
-    ):
-        for edit in range(_WATCH_EDITS):
-            db, settings, root = databases[edit % _WATCH_DATABASES]
-            doc = root / f"note{edit % _DISTINCT_FILES}.md"
-            doc.write_text(f"watch probe {edit} lorem ipsum dolor sit amet consectetur")
-            _watch_index_one(db, settings, root, doc)
-            # Coalesced FTS rebuild — once per quiescent batch, never per file.
-            if edit % _FINALIZE_EVERY == 0:
-                SyncFinalizer(db.db, settings).run()
-                finalizes += 1
-            trajectory.record(_open_fd_count())
+    for edit in range(_WATCH_EDITS):
+        db, settings, root = databases[edit % _WATCH_DATABASES]
+        doc = root / f"note{edit % _DISTINCT_FILES}.md"
+        doc.write_text(f"watch probe {edit} lorem ipsum dolor sit amet consectetur")
+        _watch_index_one(db, settings, root, doc)
+        # Coalesced FTS rebuild — once per quiescent batch, never per file.
+        if edit % _FINALIZE_EVERY == 0:
+            SyncFinalizer(db.db, settings).run()
+            finalizes += 1
+        trajectory.record(_open_fd_count())
 
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
         f"open fds grew by {trajectory.growth():.1f} across {_WATCH_EDITS} watch "
@@ -569,3 +537,113 @@ def test_daemon_scale_fd_plateau(tmp_path: Path) -> None:
         f"(peak {trajectory.peak}); the per-connection recycler is not bounding "
         f"the roster-aggregate descriptor count"
     )
+
+
+@final
+class ThreadNameSet:
+    """The names of the live non-daemon threads at one moment.
+
+    Names, not counts, because a count only says a leak happened while a name
+    says which subsystem leaked.  Daemon threads are excluded: the interpreter
+    reclaims them at exit and lance's pools are daemonised, so they are not the
+    class of leak this guards.
+    """
+
+    __slots__ = ("_names",)
+
+    _names: frozenset[str]
+
+    def __new__(cls, names: frozenset[str]) -> Self:
+        self = super().__new__(cls)
+        self._names = names
+        return self
+
+    @classmethod
+    def sample(cls) -> Self:
+        """Return the non-daemon thread names alive right now."""
+        return cls(frozenset(t.name for t in threading.enumerate() if not t.daemon))
+
+    def newcomers_since(self, baseline: ThreadNameSet) -> frozenset[str]:
+        """Return the names present here and absent from *baseline*."""
+        return self._names - baseline._names
+
+
+# Sampled while this module is imported, which pytest does during collection --
+# before any test has run, and so before anything could have started a thread.
+_THREADS_AT_SESSION_START = ThreadNameSet.sample()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_leaked_threads() -> Generator[None]:
+    """Assert at session end that no non-daemon thread outlived the suite.
+
+    Session-scoped rather than per-test on purpose: LanceDB starts its tokio
+    pool lazily, so the first test to touch lance legitimately adds thirteen
+    threads while its neighbours add none.  A per-test check would fail on
+    correct code.  By session end every pool that will start has started, so the
+    threshold is a delta of zero, not a slack window.
+
+    This complements the drain in the daemon teardown, which proves the tracked
+    background jobs finished -- not that no thread survived them.  A watcher, an
+    httpx pool, or a lance compaction thread is invisible to the registry.
+    """
+    yield
+    leaked = ThreadNameSet.sample().newcomers_since(_THREADS_AT_SESSION_START)
+    assert not leaked, (
+        f"non-daemon threads outlived the suite: {sorted(leaked)}. "
+        f"Each is a thread some test started and never joined."
+    )
+
+
+class TestThreadNameSet:
+    """The invariant's own machinery, proven to notice a thread rather than assumed.
+
+    The session-scoped assertion above can only fail once, at the very end of a
+    run, so on a healthy suite it never executes its failure path. These drive
+    that path directly.
+    """
+
+    def test_reports_a_thread_started_since_the_baseline(self) -> None:
+        baseline = ThreadNameSet.sample()
+        started = threading.Event()
+        release = threading.Event()
+
+        def hold() -> None:
+            started.set()
+            release.wait(_PROBE_TIMEOUT_S)
+
+        leaker = threading.Thread(
+            target=hold, name="thread-name-set-probe", daemon=False
+        )
+        leaker.start()
+        try:
+            assert started.wait(_PROBE_TIMEOUT_S), "probe thread never ran"
+            assert "thread-name-set-probe" in ThreadNameSet.sample().newcomers_since(
+                baseline
+            )
+        finally:
+            release.set()
+            leaker.join(_PROBE_TIMEOUT_S)
+        assert not leaker.is_alive(), "the probe must not outlive its own test"
+
+    def test_reports_nothing_when_no_thread_started(self) -> None:
+        baseline = ThreadNameSet.sample()
+        assert ThreadNameSet.sample().newcomers_since(baseline) == frozenset()
+
+    def test_ignores_daemon_threads(self) -> None:
+        """Daemon threads are excluded: the interpreter reclaims them at exit."""
+        baseline = ThreadNameSet.sample()
+        release = threading.Event()
+        daemon = threading.Thread(
+            target=lambda: release.wait(_PROBE_TIMEOUT_S),
+            name="daemon-probe",
+            daemon=True,
+        )
+        daemon.start()
+        try:
+            assert "daemon-probe" not in ThreadNameSet.sample().newcomers_since(
+                baseline
+            )
+        finally:
+            release.set()
+            daemon.join(_PROBE_TIMEOUT_S)

@@ -24,8 +24,12 @@ from quarry.client import QuarryClient
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.storage import get_db
+from quarry.db_pointer import SELECTION
+from quarry.ingestion.backends import clear_caches
 from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB
+from tests.fakes import FakeEmbeddingBackend, FakeResolver
+from tests.hermetic_env import ENV, ProductionTreeGuard
 from tests.inproc_daemon import InProcessDaemon
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -275,9 +279,11 @@ _QUARRY_ENV_VARS = (
     "LOG_PATH",
     "QUARRY_API_KEY",
     "QUARRY_PROVIDER",
-    "QUARRY_ROOT",
     "REGISTRY_PATH",
 )
+# QUARRY_ROOT is deliberately absent: ``tests.hermetic_env`` points it at the
+# session home, and stripping it would send every Settings() back to the real
+# ``~/.punt-labs/quarry/data`` -- away from isolation, not toward it.
 
 
 @pytest.fixture(autouse=True)
@@ -301,6 +307,142 @@ def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for var in _QUARRY_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture()
+def real_embedding_factory() -> None:
+    """Request this to keep the real embedding factory in place.
+
+    For the factory's own unit tests, which assert on what
+    ``get_embedding_backend`` builds and supply their own ONNX-session mocks.
+    Distinct from ``@pytest.mark.embedding``: this opts out of the fake but
+    stays in the default run and still may not load a real model.
+    """
+    return
+
+
+@pytest.fixture(autouse=True)
+def _fake_embedding_backend(request: pytest.FixtureRequest) -> Generator[None]:
+    """Install the shared fake at the embedding factory, unless opted out.
+
+    Three symbols are replaced, not two, and the third is the one that does the
+    work.  Both ``quarry.ingestion.streaming`` and ``quarry.http_resources``
+    bind their factory with ``from quarry.ingestion.backends import ...`` at
+    module scope, so patching the factory module alone leaves those bound names
+    on the real implementation.  ``OnnxEmbeddingBackend`` is imported inside
+    ``new_embedding_backend`` and therefore resolves per call, which makes it
+    the one point every route -- cached, fresh, current, or added tomorrow --
+    passes through.
+
+    A test carrying ``@pytest.mark.embedding`` gets the real factory. The cache
+    is cleared on both edges so a real backend built by such a test cannot be
+    handed to the next one.
+    """
+    keeps_real_factory = (
+        request.node.get_closest_marker("embedding") is not None
+        or "real_embedding_factory" in request.fixturenames
+    )
+    if keeps_real_factory:
+        clear_caches()
+        yield
+        clear_caches()
+        return
+
+    clear_caches()
+    with (
+        patch(
+            "quarry.ingestion.backends.get_embedding_backend",
+            FakeEmbeddingBackend.for_settings,
+        ),
+        patch("quarry.ingestion.backends.new_embedding_backend", FakeEmbeddingBackend),
+        patch("quarry.embeddings.OnnxEmbeddingBackend", FakeEmbeddingBackend),
+    ):
+        yield
+    clear_caches()
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_model_load(request: pytest.FixtureRequest) -> Generator[None]:
+    """Fail loudly on an unmarked test that reaches a real ONNX session.
+
+    The fake prevents the load; this proves the prevention holds. Without it a
+    refactor that moves the factory turns "410 MB was loaded" back into a silent
+    cost that leaves the test passing.
+    """
+    if request.node.get_closest_marker("embedding") is not None:
+        yield
+        return
+
+    def _refuse(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        msg = (
+            f"{request.node.nodeid} loaded a real ONNX model. Mark it with "
+            "@pytest.mark.embedding if that is intended (it costs 410 MB and "
+            "is deselected by default), or route it through the fake backend."
+        )
+        raise AssertionError(msg)
+
+    with patch("onnxruntime.InferenceSession", _refuse):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _fake_dns(request: pytest.FixtureRequest) -> Generator[None]:
+    """Resolve hostnames from a fake, so the suite makes no DNS query.
+
+    quarry's fetch gate resolves every candidate URL before allowing a fetch,
+    which made a real outbound lookup per check: the suite failed whenever DNS
+    blipped, and a suite that fails when the network moves is not hermetic
+    however carefully its filesystem is isolated.
+
+    The SSRF policy itself is untouched and still fully tested — only the socket
+    call goes. A test asserting on the policy's rejections patches this same
+    seam with the address it wants classified, and that patch nests inside this
+    one and wins.
+
+    ``@pytest.mark.network`` opts a test back out to the real resolver.
+    """
+    if request.node.get_closest_marker("network") is not None:
+        yield
+        return
+    with patch("quarry.url_safety.socket_module.getaddrinfo", FakeResolver()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_database_selection() -> Generator[None]:
+    """Leave no database selection behind for the next test.
+
+    ``SELECTION`` stands for a process-global choice, and its persisted half is
+    a real file under the session home. Without this, a test that selects a
+    database silently changes what its successors resolve to.
+
+    The session pointer is resolved at *setup*, before the test can relocate the
+    root. A path resolved only at teardown depends on whether ``monkeypatch``
+    has already restored ``QUARRY_ROOT``, which pytest does not order against
+    this fixture — so it could look under the wrong root and leave the real
+    pointer in place. Both paths are removed, since a test may have written
+    under either.
+    """
+    session_pointer = SELECTION.path
+    yield
+    SELECTION.override("")
+    for pointer in {session_pointer, SELECTION.path}:
+        pointer.unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def _guard_production_tree() -> Generator[None]:
+    """Fail the test that writes to the operator's real quarry tree.
+
+    Runs unconditionally, including in CI where ``HOME`` differs but the same
+    three paths must stay untouched.  Three stats per test measured at 25.9 ms
+    across the whole suite.
+    """
+    guard = ProductionTreeGuard(ENV.real_tree)
+    yield
+    if breaches := guard.changed():
+        pytest.fail("wrote to the production quarry tree:\n" + "\n".join(breaches))
 
 
 @pytest.fixture(autouse=True)

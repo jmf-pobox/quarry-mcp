@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from quarry.daemon.tasks import TaskRegistry
 
 
@@ -63,3 +65,39 @@ class TestTrackRefLifecycle:
         await task  # let the body finish
         await asyncio.sleep(0)  # run the scheduled done-callback
         assert state.task_id not in registry._refs  # released on completion
+
+
+class TestDrain:
+    """``drain`` awaits real completion; a straggler fails closed, not silently."""
+
+    async def test_completed_tasks_drain_without_error(self) -> None:
+        """Tasks that finish inside the window: drain returns normally."""
+        registry = TaskRegistry()
+        state = registry.begin("sync")
+        task = await _completed_task()
+        registry.track(state, task)
+
+        await registry.drain(timeout=1.0)  # no raise
+
+    async def test_straggler_fails_closed_not_silently(self) -> None:
+        """A task that outlives the window: drain cancels the wrapper and RAISES.
+
+        Swallowing the timeout and returning normally would let a caller believe
+        the underlying ``run_in_threadpool`` thread is gone when only the
+        ``asyncio.Task`` wrapper was cancelled — the exact race this method
+        exists to close. ``TimeoutError`` must propagate.
+        """
+        registry = TaskRegistry()
+        state = registry.begin("ingest")
+        never_finishes = asyncio.Event()  # never .set() — the straggler
+
+        async def _body() -> None:
+            await never_finishes.wait()
+
+        task: asyncio.Task[None] = asyncio.ensure_future(_body())
+        registry.track(state, task)
+
+        with pytest.raises(TimeoutError):
+            await registry.drain(timeout=0.01)
+
+        assert task.cancelled()  # wrapper cancelled as best-effort cleanup

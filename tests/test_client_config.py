@@ -27,7 +27,6 @@ def _run_dir_at(tmp_path: Path) -> Generator[None]:
     fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
     with patch("quarry.client.config.Settings") as started:
         started.load.return_value.resolve_db_paths.return_value = fake_settings
-        started.read_default_db.return_value = None
         yield
 
 
@@ -85,22 +84,24 @@ class TestFromLoginLoopback:
         # so from_login fails closed with ClientConfigError, not a raw ValueError.
         with (
             patch("quarry.client.config.Settings") as mock_settings,
+            patch("quarry.client.config.SELECTION") as mock_selection,
             pytest.raises(ClientConfigError, match="could not be read"),
         ):
-            mock_settings.active_db.return_value = "../evil"
+            mock_selection.active.return_value = "../evil"
             mock_settings.load.return_value.resolve_db_paths.side_effect = ValueError(
                 "db name contains a path separator"
             )
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_unreadable_default_db_config_fails_closed(self, tmp_path: Path) -> None:
-        # active_db() can raise OSError on an unreadable default-db config; it too
-        # runs inside the try, so from_login fails closed, not a raw OSError.
+        # Resolving the active selection can raise OSError on an unreadable
+        # pointer file; that runs inside the try, so from_login fails closed
+        # rather than propagating a raw OSError.
         with (
-            patch("quarry.client.config.Settings") as mock_settings,
+            patch("quarry.client.config.SELECTION") as mock_selection,
             pytest.raises(ClientConfigError, match="could not be read"),
         ):
-            mock_settings.active_db.side_effect = OSError("default-db unreadable")
+            mock_selection.active.side_effect = OSError("default-db unreadable")
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_stored_localhost_auto_migrates_to_literal(self, tmp_path: Path) -> None:
@@ -381,17 +382,20 @@ class TestLoopbackTokenProbe:
         # Non-raising contract: a corrupt default-db config (resolve_db_paths
         # raises ValueError) must make the probe return None, not propagate a
         # raw ValueError — the resolution runs inside _serve_token's try.
-        with patch("quarry.client.config.Settings") as mock_settings:
-            mock_settings.active_db.return_value = "../evil"
+        with (
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch("quarry.client.config.SELECTION") as mock_selection,
+        ):
+            mock_selection.active.return_value = "../evil"
             mock_settings.load.return_value.resolve_db_paths.side_effect = ValueError(
                 "db name contains a path separator"
             )
             assert ClientConfig.loopback_token("127.0.0.1") is None
 
     def test_unreadable_default_db_config_returns_none(self) -> None:
-        # active_db() raising OSError must also yield None, not propagate.
-        with patch("quarry.client.config.Settings") as mock_settings:
-            mock_settings.active_db.side_effect = OSError("config unreadable")
+        # A pointer file that cannot be read must also yield None, not propagate.
+        with patch("quarry.client.config.SELECTION") as mock_selection:
+            mock_selection.active.side_effect = OSError("config unreadable")
             assert ClientConfig.loopback_token("127.0.0.1") is None
 
 
@@ -410,9 +414,12 @@ class TestActiveDbRunDir:
             fake.lancedb_path = tmp_path / name / "lancedb"  # parent == tmp_path/name
             return fake
 
-        with patch("quarry.client.config.Settings") as mock_settings:
+        with (
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch("quarry.client.config.SELECTION") as mock_selection,
+        ):
             mock_settings.load.return_value.resolve_db_paths.side_effect = resolve
-            mock_settings.active_db.return_value = "work"  # quarryd --db work
+            mock_selection.active.return_value = "work"  # quarryd --db work
             cfg = ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
         # Reads the --db daemon's token, NOT the default database's.
@@ -429,9 +436,12 @@ class TestActiveDbRunDir:
             fake.lancedb_path = tmp_path / name / "lancedb"
             return fake
 
-        with patch("quarry.client.config.Settings") as mock_settings:
+        with (
+            patch("quarry.client.config.Settings") as mock_settings,
+            patch("quarry.client.config.SELECTION") as mock_selection,
+        ):
             mock_settings.load.return_value.resolve_db_paths.side_effect = resolve
-            mock_settings.active_db.return_value = None  # no --db override
+            mock_selection.active.return_value = None  # no --db override
             cfg = ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
         resolved = cfg.token

@@ -14,6 +14,28 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`infra`** — `quarry`'s test suite no longer writes to the user's real
+  `~/.punt-labs/quarry/` tree. A full run previously appended ~7,000 lines to
+  `logs/quarry.log`, rotating away real daemon history every seven or eight
+  runs. `LoggingConfig.configure()` now resolves its directory per call from
+  `QUARRY_LOG_DIR` (falling back to the home path) instead of pinning it in a
+  class constant at import time, and `Settings` derives its `config.toml` path
+  from `quarry_root` so relocating the root relocates the config with it. Both
+  are usable by any deployment that wants its logs or config elsewhere.
+  (DES-047)
+
+### Changed
+
+- **`infra`** — the test suite is hermetic and bounded per run: `HOME` and the
+  LanceDB/OpenMP thread variables are pinned at session start, the embedding
+  fake is enforced at the factory (with an `embedding` marker to opt back in to
+  the real model), and session invariants assert no leaked non-daemon threads
+  and no writes to the production tree. No `pytest-xdist` and no workspace-wide
+  concurrency mechanism — see DES-047 for why both are rejected rather than
+  deferred.
+
 ## [2.1.0] - 2026-08-02
 
 ### Changed

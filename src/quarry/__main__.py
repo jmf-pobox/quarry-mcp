@@ -27,6 +27,7 @@ from quarry.client import (
 )
 from quarry.client.errors import CONFLICT_STATUS
 from quarry.config import Settings
+from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:
@@ -157,7 +158,7 @@ def main_callback(
     # Record --db process-wide so the client tier resolves the daemon's
     # startup-db run dir (serve.token/serve.port) the same way — client and
     # daemon agree on the database by a matching --db.
-    Settings.set_active_db(database)
+    SELECTION.override(database)
     if _verbose:
         stderr_level = "INFO"
     elif _quiet:
@@ -266,7 +267,12 @@ def use_cmd(
     overrides this per call.
     """
     Settings.load().resolve_db_paths(name if name != "default" else None)
-    Settings.write_default_db(name)
+    # "default" is the documented reset, and the pointer refuses to record it as
+    # a selection -- forgetting is what it means.
+    if name == "default":
+        SELECTION.clear()
+    else:
+        SELECTION.persist(name)
     _emit({"database": name}, f"Default database set to {name!r}")
 
 
@@ -298,7 +304,7 @@ def mcp() -> None:
     """Start the MCP server (stdio transport)."""
     from quarry.mcp_server import main as mcp_main  # noqa: PLC0415
 
-    mcp_main(db_name=_global_db or Settings.read_default_db())
+    mcp_main(db_name=_global_db or SELECTION.persisted())
 
 
 @app.command()

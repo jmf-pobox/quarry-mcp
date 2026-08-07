@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast, final
 from unittest.mock import patch
 
 import numpy as np
@@ -31,12 +31,13 @@ from quarry.sync_messages import FileMeta
 from quarry.sync_planner import SyncPlanner
 from quarry.sync_registry import SyncRegistry
 from quarry.sync_resume import HASH_UNKNOWN, ResumePolicy
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from quarry.models import Chunk
-    from quarry.types import LanceDB
+    from quarry.types import EmbeddingBackend, LanceDB
 
 
 def _run_with_timeout(fn: Callable[[], object], *, timeout: float = 20.0) -> object:
@@ -58,42 +59,51 @@ def _run_with_timeout(fn: Callable[[], object], *, timeout: float = 20.0) -> obj
     return box.get("value")
 
 
-class _FakeEmbedder:
-    """Deterministic embedder: records embedded texts, returns zero vectors."""
+@final
+class _RaisingEmbedder:
+    """Embeds normally until the *fail_on_call*-th embed_texts, then raises.
 
-    def __init__(self) -> None:
-        self.embedded: list[str] = []
+    Composes the shared fake rather than extending it: the failure schedule is
+    this class's own state, and the vectors are not its business.
+    """
+
+    __slots__ = ("_calls", "_fail_on_call", "_inner")
+
+    _inner: FakeEmbeddingBackend
+    _fail_on_call: int
+    _calls: int
+
+    def __new__(cls, fail_on_call: int) -> Self:
+        self = super().__new__(cls)
+        self._inner = FakeEmbeddingBackend()
+        self._fail_on_call = fail_on_call
+        self._calls = 0
+        return self
 
     @property
     def dimension(self) -> int:
-        return 768
+        """Return the width of the vectors produced before the failure."""
+        return self._inner.dimension
 
     @property
     def model_name(self) -> str:
-        return "fake"
+        """Return the name a diagnostic would print for this backend."""
+        return self._inner.model_name
 
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        self.embedded.extend(texts)
-        return np.zeros((len(texts), 768), dtype=np.float32)
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        return np.zeros(768, dtype=np.float32)
-
-
-class _RaisingEmbedder(_FakeEmbedder):
-    """Embeds normally until the *fail_on_call*-th embed_texts, then raises."""
-
-    def __init__(self, fail_on_call: int) -> None:
-        super().__init__()
-        self._fail_on_call = fail_on_call
-        self._calls = 0
+    @property
+    def embedded(self) -> tuple[str, ...]:
+        """Return the texts embedded before the failure."""
+        return self._inner.embedded
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         self._calls += 1
         if self._calls >= self._fail_on_call:
             msg = "embedder boom"
             raise RuntimeError(msg)
-        return super().embed_texts(texts)
+        return self._inner.embed_texts(texts)
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        return self._inner.embed_query(query)
 
 
 class _FakeOcr:
@@ -148,7 +158,7 @@ def _settings(
 
 
 @contextmanager
-def _patched_embedder(embedder: _FakeEmbedder) -> Generator[_FakeEmbedder]:
+def _patched_embedder(embedder: EmbeddingBackend) -> Generator[EmbeddingBackend]:
     with patch(
         "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
     ):
@@ -1084,7 +1094,7 @@ class TestSyncCollectionProgressive:
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
         assert result.failed == 0
@@ -1110,7 +1120,7 @@ class TestSyncCollectionProgressive:
             return real_plan(fp, *a, **k)  # type: ignore[arg-type]
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=flaky),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1132,7 +1142,7 @@ class TestSyncCollectionProgressive:
                 ingested_at="2025-01-01",
             ),
         )
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.deleted == 1
         assert conn.files.get_file(str((d / "gone.txt").resolve())) is None
@@ -1142,7 +1152,7 @@ class TestSyncCollectionProgressive:
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             first = sync_collection(d, "col", db, settings, conn, max_workers=1)
             count_after_first = ChunkStore(db).count(collection_filter="col")
             second = sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1164,7 +1174,7 @@ class TestSyncCollectionProgressive:
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
         (d / "b.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
             assert _docnames(db) == {"a.txt", "b.txt"}
 
@@ -1189,7 +1199,7 @@ class TestSyncCollectionProgressive:
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
             count_before = ChunkStore(db).count(collection_filter="col")
 
@@ -1216,7 +1226,7 @@ class TestSyncCollectionProgressive:
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _docnames(db) == {"a.txt"}
         chunks_before = ChunkStore(db).count(collection_filter="col")
@@ -1230,7 +1240,7 @@ class TestSyncCollectionProgressive:
             return real_resolve(self, strict=strict)
 
         monkeypatch.setattr(Path, "resolve", failing_resolve)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         assert result.deleted == 0  # fail-closed — nothing wiped
@@ -1251,7 +1261,7 @@ class TestSyncCollectionProgressive:
         settings = _settings(tmp_path)
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _docnames(db) == {"a.txt"}
         chunks_before = ChunkStore(db).count(collection_filter="col")
@@ -1268,7 +1278,7 @@ class TestSyncCollectionProgressive:
             return iter([])
 
         monkeypatch.setattr("quarry.sync_discovery.os.walk", failing_walk)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
 
         assert result.deleted == 0  # DeleteReconciler skipped too — no wipe
@@ -1283,11 +1293,11 @@ class TestWithinFileResume:
         settings, db, conn, d, doc, chunks, total, w = _seed_crash_state(
             tmp_path, watermark_from_total=0.5, prefill_from_total=0.5
         )
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
-        assert embedder.embedded == [c.text for c in chunks[w:]]  # tail only
+        assert embedder.embedded == tuple(c.text for c in chunks[w:])  # tail only
         assert _chunk_indexes(db, doc) == list(range(total))
         rec = conn.files.get_file(str((d / "big.txt").resolve()))
         assert rec is not None and rec.partial_hash is None
@@ -1299,11 +1309,11 @@ class TestWithinFileResume:
         settings, db, conn, d, doc, chunks, total, w = _seed_crash_state(
             tmp_path, watermark_from_total=0.33, prefill_from_total=0.9
         )
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _chunk_indexes(db, doc) == list(range(total))  # no [w, K) dups
-        assert embedder.embedded == [c.text for c in chunks[w:]]
+        assert embedder.embedded == tuple(c.text for c in chunks[w:])
         conn.close()
 
     def test_g3_hash_mismatch_full_reembed(self, tmp_path: Path):
@@ -1315,10 +1325,10 @@ class TestWithinFileResume:
             partial_hash="STALE",
             use_real_hash=False,
         )
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
-        assert embedder.embedded == [c.text for c in chunks]  # full re-embed
+        assert embedder.embedded == tuple(c.text for c in chunks)  # full re-embed
         assert _chunk_indexes(db, doc) == list(range(total))
         conn.close()
 
@@ -1359,14 +1369,14 @@ class TestWithinFileResume:
                 partial_hash=content_hash,
             ),
         )
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with (
             patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
             _patched_embedder(embedder),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         # Non-deterministic extraction → watermark discarded → full re-embed from 0.
-        assert embedder.embedded == [c.text for c in chunks]
+        assert embedder.embedded == tuple(c.text for c in chunks)
         assert _chunk_indexes(db, "scan.png") == list(range(total))
         conn.close()
 
@@ -1469,11 +1479,13 @@ class TestPartialHashSentinel:
                 partial_hash=HASH_UNKNOWN,  # watermark whose hash is unknown
             ),
         )
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert result.ingested == 1
-        assert embedder.embedded == [c.text for c in chunks]  # full re-embed from 0
+        assert embedder.embedded == tuple(
+            c.text for c in chunks
+        )  # full re-embed from 0
         assert _chunk_indexes(db, doc) == list(range(total))
         rec = conn.files.get_file(str(f.resolve()))
         assert rec is not None and rec.partial_hash is None  # completed, mark cleared
@@ -1524,7 +1536,7 @@ class TestStaleClearOnFailure:
         db, conn, d = _make_collection(tmp_path, settings)
         f = d / "a.txt"
         f.write_text(_SENTENCE * 3)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert ChunkStore(db).count(collection_filter="col") >= 1  # old chunks durable
 
@@ -1535,7 +1547,7 @@ class TestStaleClearOnFailure:
             raise RuntimeError(msg)
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=boom),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1556,7 +1568,7 @@ class TestStaleClearOnFailure:
             raise RuntimeError(msg)
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=boom),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1582,7 +1594,7 @@ class TestFragmentBudgetAndExceptions:
             return orig(self, records)
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch.object(ChunkStore, "insert_records", counting),
         ):
             result = sync_collection(d, "col", db, settings, conn, max_workers=1)
@@ -1651,7 +1663,7 @@ class TestFragmentBudgetAndExceptions:
         )
         original_commit = conn.commit
         conn.commit = boom  # type: ignore[method-assign]
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             _ingested, failed, errors = ingestor.run([resolved / "a.txt"])
         conn.commit = original_commit  # type: ignore[method-assign]
         assert failed >= 1
@@ -1662,7 +1674,7 @@ class TestFragmentBudgetAndExceptions:
         assert conn.files.get_file(str(resolved / "a.txt")) is None
 
         # A clean sync reconciles via delete-tail: exact chunks, no duplicates.
-        embedder = _FakeEmbedder()
+        embedder = FakeEmbeddingBackend()
         with _patched_embedder(embedder):
             CollectionIngestor(
                 ChunkStore(db),
@@ -1700,7 +1712,7 @@ class TestFragmentBudgetAndExceptions:
         assert rec.is_partial is True  # a torn-free resume watermark was stored
         assert 0 < rec.chunks_committed < total
         # A clean resume completes with no duplicate chunk indexes.
-        embedder2 = _FakeEmbedder()
+        embedder2 = FakeEmbeddingBackend()
         with _patched_embedder(embedder2):
             sync_collection(d, "col", db, settings, conn, max_workers=1)
         assert _chunk_indexes(db, "big.txt") == list(range(total))
@@ -1731,7 +1743,7 @@ class TestConcurrencyLiveness:
             return real_plan(fp, *a, **k)  # type: ignore[arg-type]
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch("quarry.ingestion.file_indexer.plan_file_chunks", side_effect=flaky),
         ):
             result = _run_with_timeout(
@@ -1755,7 +1767,7 @@ class TestConcurrencyLiveness:
             raise _ConsumerBoomError("table.add blew up")
 
         with (
-            _patched_embedder(_FakeEmbedder()),
+            _patched_embedder(FakeEmbeddingBackend()),
             patch.object(ChunkStore, "insert_records", boom),
         ):
             result = _run_with_timeout(
@@ -1768,7 +1780,7 @@ class TestConcurrencyLiveness:
         # Post-abort consistency: the aborted sync left nothing half-written, so a
         # clean re-sync (insert_records restored) yields contiguous, zero-dup chunks
         # and complete registry rows for both files.
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             _run_with_timeout(
                 lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
             )
@@ -1786,7 +1798,7 @@ class TestConcurrencyLiveness:
         db, conn, d = _make_collection(tmp_path, settings)
         (d / "a.txt").write_text(_SENTENCE * 300)
         (d / "b.txt").write_text(_SENTENCE * 300)
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = _run_with_timeout(
                 lambda: sync_collection(d, "col", db, settings, conn, max_workers=2)
             )
@@ -1837,7 +1849,7 @@ class TestConcurrencyLiveness:
             max_workers=1,  # A fully buffers, then B — a deterministic shared flush
             progress=lambda _m: None,
         )
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
         conn.commit = real_commit  # type: ignore[method-assign]
         assert result is not None
@@ -1848,7 +1860,7 @@ class TestConcurrencyLiveness:
         assert conn.files.get_file(str(b_path)) is None
 
         # Clean re-sync reconciles both — contiguous, zero duplicates across both.
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             CollectionIngestor(
                 ChunkStore(db),
                 conn,
@@ -1896,7 +1908,7 @@ class TestConcurrencyLiveness:
             max_workers=2,  # real concurrency: A and B interleave into the flush
             progress=lambda _m: None,
         )
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = _run_with_timeout(lambda: ingestor.run([a_path, b_path]))
         conn.commit = real_commit  # type: ignore[method-assign]
         assert result is not None
@@ -1906,7 +1918,7 @@ class TestConcurrencyLiveness:
         assert conn.files.get_file(str(a_path)) is None
         assert conn.files.get_file(str(b_path)) is None
 
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             CollectionIngestor(
                 ChunkStore(db),
                 conn,
@@ -1934,7 +1946,7 @@ class TestConcurrencyLiveness:
             if "Ingested" in message:
                 raise RuntimeError("progress callback boom")
 
-        with _patched_embedder(_FakeEmbedder()):
+        with _patched_embedder(FakeEmbeddingBackend()):
             result = _run_with_timeout(
                 lambda: sync_collection(
                     d,
@@ -1990,7 +2002,7 @@ class TestConcurrencyLiveness:
         watcher.start()
         try:
             with (
-                _patched_embedder(_FakeEmbedder()),
+                _patched_embedder(FakeEmbeddingBackend()),
                 patch.object(ProgressiveIndexer, "add_window", slow_add),
             ):
                 files = [d.resolve() / f"f{i}.txt" for i in range(4)]

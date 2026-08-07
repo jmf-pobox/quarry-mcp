@@ -62,6 +62,11 @@ def _patch_onnx_backend(session: MagicMock, tokenizer: MagicMock):
         yield
 
 
+# This module tests OnnxEmbeddingBackend itself, so the autouse fake must stay
+# out of the way; the ONNX session is mocked per test instead.
+pytestmark = pytest.mark.usefixtures("real_embedding_factory")
+
+
 class TestEmbedTexts:
     def test_returns_embeddings(self):
         session = _mock_session()

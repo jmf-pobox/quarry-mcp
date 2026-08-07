@@ -26,12 +26,11 @@ from quarry.db.chunk_catalog import ChunkCatalog
 from quarry.db.chunk_store import ChunkStore
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.sync_registry import SyncRegistry
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-
-    from numpy.typing import NDArray
 
     from quarry.daemon.watch_roster import WatchRoster
     from quarry.daemon.watch_submit import WatchSubmitter
@@ -50,28 +49,6 @@ class _AlienScanError(Exception):
     sqlite3.Error, RuntimeError, TimeoutError)`` — the backstop must still
     fail-closed on it, not just on the enumerated stdlib set.
     """
-
-
-@final
-class _FakeEmbedder:
-    """A hermetic embedder: random vectors, no ONNX."""
-
-    __slots__ = ()
-
-    @property
-    def dimension(self) -> int:
-        return _DIM
-
-    @property
-    def model_name(self) -> str:
-        return "reconcile-fake"
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        rng = np.random.default_rng(0)
-        return rng.standard_normal((len(texts), _DIM)).astype(np.float32)
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        return np.zeros(_DIM, dtype=np.float32)
 
 
 def _sweep_only_deps(ctx: DaemonContext) -> ReconcilerDeps:
@@ -140,7 +117,7 @@ def test_sweep_never_touches_registered_or_retained_collections(tmp_path: Path) 
     _register_with_bodies(settings, roots)
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         await _index_and_wait(ctx, roots)
         assert _live_collections(ctx) == {"reg", "keep", "orphan"}
 
@@ -160,11 +137,7 @@ def test_sweep_never_touches_registered_or_retained_collections(tmp_path: Path) 
         # orphan swept; registered + kept spared
         assert _live_collections(ctx) == {"reg", "keep"}
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def _seed_chunks(ctx: DaemonContext, settings: Settings, collection: str) -> None:
@@ -197,7 +170,7 @@ def test_sweep_never_purges_unmarked_collections(tmp_path: Path) -> None:
     live = {"default-captures", "memory-rmh", "default"}
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         for collection in live:
             _seed_chunks(ctx, settings, collection)
         assert _live_collections(ctx) == live
@@ -207,11 +180,7 @@ def test_sweep_never_purges_unmarked_collections(tmp_path: Path) -> None:
 
         assert _live_collections(ctx) == live  # nothing marked → nothing swept
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def test_sweep_purges_subsumed_child_marked_by_eviction(tmp_path: Path) -> None:
@@ -226,7 +195,7 @@ def test_sweep_purges_subsumed_child_marked_by_eviction(tmp_path: Path) -> None:
     parent_dir = (tmp_path / "proj").resolve()
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         child_dir.mkdir(parents=True)
         (child_dir / "x.md").write_text("child body")
         conn = SyncRegistry(settings.registry_path)
@@ -249,11 +218,7 @@ def test_sweep_purges_subsumed_child_marked_by_eviction(tmp_path: Path) -> None:
 
         assert "child" not in _live_collections(ctx)  # marked → swept
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def _between_reads_mutation(
@@ -302,7 +267,7 @@ def test_reregister_between_sweep_reads_spares_collection(tmp_path: Path) -> Non
     _register_with_bodies(settings, roots)
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         await _index_and_wait(ctx, roots)
 
         conn = SyncRegistry(settings.registry_path)
@@ -322,11 +287,7 @@ def test_reregister_between_sweep_reads_spares_collection(tmp_path: Path) -> Non
         # "keep" re-registered mid-read → spared; "orphan" still swept.
         assert _live_collections(ctx) == {"keep"}
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def test_keepdata_deregister_between_sweep_reads_spares_collection(
@@ -347,7 +308,7 @@ def test_keepdata_deregister_between_sweep_reads_spares_collection(
     _register_with_bodies(settings, roots)
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         await _index_and_wait(ctx, roots)
 
         conn = SyncRegistry(settings.registry_path)
@@ -366,11 +327,7 @@ def test_keepdata_deregister_between_sweep_reads_spares_collection(
         # "keep" kept (retained mid-read) → spared; "orphan" swept.
         assert _live_collections(ctx) == {"keep"}
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
@@ -389,7 +346,7 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
     _register_with_bodies(settings, roots)
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         await _index_and_wait(ctx, roots)
 
         conn = SyncRegistry(settings.registry_path)
@@ -411,8 +368,4 @@ def test_sweep_fail_closed_on_scan_error(tmp_path: Path) -> None:
         await ctx.aclose_ingest_queue()
         assert _live_collections(ctx) == set()  # orphan purged next cycle
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend",
-        return_value=_FakeEmbedder(),
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())

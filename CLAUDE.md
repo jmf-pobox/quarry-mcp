@@ -138,13 +138,24 @@ Functions in `src/quarry/ingestion/pipeline.py` and `src/quarry/ingestion/url_in
 |-------|-------------|------------|----------------|
 | Unit | `make test` | yes | DB, embedding, search, CLI, doctor, hooks, enable/disable, service, install scripts |
 | Resource-invariant | `make test` (marker `resource`) | yes | Long-lived-process leak guards: a single connection over many optimize cycles must not leak file descriptors (`tests/test_resource_invariants.py`). The daemon holds a connection for its whole lifetime; `create_fts_index(replace=True)` supersedes an index generation and LanceDB's Rust core never evicts the deleted-file readers, so a leak here is invisible to short-lived CLI tests and only surfaces as EMFILE → HTTP 500 in the daemon. |
-| Integration | `make test-integration` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end |
+| Integration | `make test-slow` | no (needs real ONNX model) | Real filesystem + ONNX model end-to-end. Carries both `slow` and `embedding`; the `embedding` marker is what lets the real model load, so removing it silently reroutes the tier through the fake. |
 | Shell scripts | `make test` (via pytest) | yes | Install script ordering, shellcheck |
 | HTTP API contract | `make test` | yes | Endpoint shape, params, response fields (growing) |
 | Wheel install | `make test-wheel` | local pre-PR gate | Build wheel → isolated venv → serve on 8422 → smoke checks |
 | MCP smoke test | `docs/smoke-test.md` | post-release manual | 38 checks (14 MCP + 17 CLI + 7 enable/disable) + install verification |
 
 `make check-full` = `make check` + `make test-wheel`. Full test suite needs `timeout=300000` on the Bash tool (5 minutes). During development, use targeted tests: `uv run pytest tests/test_specific.py -v`.
+
+### The suite is hermetic and bounded (DES-047)
+
+A run writes nothing under the operator's real `~/.punt-labs/quarry/` and loads no ONNX model. Four mechanisms enforce that; none of them are optional, and each exists because the obvious cheaper version was measured and does not work.
+
+- **`HOME` is redirected** to a session temp directory by `tests/hermetic_env.py`, which the **rootdir** `conftest.py` imports. That location is load-bearing: `tests/conftest.py` imports quarry at module scope, and quarry decides its home-derived paths when its modules are imported, so `pytest_configure` is too late and a `-p` plugin is too early (the rootdir is not yet on `sys.path`). Setting the variable rather than patching `Path.home` is also required — `os.path.expanduser` reads `$HOME` and ignores the patched classmethod.
+- **The embedding fake is installed at the factory**, not at import sites. An autouse fixture replaces `get_embedding_backend`, `new_embedding_backend`, *and* `quarry.embeddings.OnnxEmbeddingBackend`; the third is the one that does the work, because `streaming` and `http_resources` bind their factory with a module-scope from-import. An `onnxruntime.InferenceSession` guard fails any unmarked test that reaches a real model. **Do not add a `patch("...get_embedding_backend")` to dodge a model load** — it is already handled, and ~40 such patches were deleted. Patch locally only to assert on specific vectors.
+- **Two distinct opt-outs.** `@pytest.mark.embedding` grants the real 410 MB model and is deselected by default alongside `slow`. The `real_embedding_factory` fixture keeps the real factory for tests that assert on what it *builds* (`test_backends`, `test_embeddings`, doctor's install path); those stay in the default run and still may not load a model.
+- **Two session invariants**: no non-daemon thread outlives the run, and the three production files (log, `config.toml`, `registry.db`) are unchanged. The thread check is session-scoped because LanceDB starts its tokio pool lazily — a per-test check fails on correct code. The file check watches **files only**: a directory `mtime` does not move when a file below it is written, and a recursive walk of the operator's 15 GB tree does not finish. Do not "improve" it into a tree fingerprint.
+
+Two standing rejections, so they are not reinvented: **no `pytest-xdist`** (the suite is I/O-bound at 0.69 average cores; workers multiply the footprint for no gain) and **no workspace-wide test-concurrency lock** (it would bake the punt-labs checkout layout into a shipped product). Both are rejected, not deferred. See DES-047.
 
 ### What good testing means in this project
 

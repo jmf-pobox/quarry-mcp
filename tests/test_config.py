@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -117,56 +116,3 @@ class TestSyncBudget:
         settings = Settings(sync_flush_mb=1, embed_window_chunks=1)
         assert settings.sync_flush_mb == 1
         assert settings.embed_window_chunks == 1
-
-
-class TestPersistentDb:
-    def test_write_and_read(self, tmp_path):
-        config_file = tmp_path / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("work")
-            assert Settings.read_default_db() == "work"
-
-    def test_read_missing_file(self, tmp_path):
-        config_file = tmp_path / "nonexistent" / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            assert Settings.read_default_db() is None
-
-    def test_read_default_returns_none(self, tmp_path):
-        config_file = tmp_path / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("default")
-            assert Settings.read_default_db() is None
-
-    def test_write_creates_parent_dirs(self, tmp_path):
-        config_file = tmp_path / "nested" / "dir" / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("coding")
-            assert config_file.exists()
-
-
-class TestActiveDb:
-    """The process-scoped --db override the client tier reads for run dirs."""
-
-    def test_no_override_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        Settings.set_active_db("")
-        monkeypatch.setattr(Settings, "read_default_db", classmethod(lambda _cls: None))
-        assert Settings.active_db() is None
-
-    def test_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "persisted")
-        )
-        Settings.set_active_db("work")
-        try:
-            assert Settings.active_db() == "work"
-        finally:
-            Settings.set_active_db("")
-
-    def test_empty_override_falls_back_to_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "persisted")
-        )
-        Settings.set_active_db("")
-        assert Settings.active_db() == "persisted"

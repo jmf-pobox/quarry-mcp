@@ -11,10 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, cast, final
-from unittest.mock import patch
-
-import numpy as np
+from typing import TYPE_CHECKING, cast
 
 from quarry.config import Settings
 from quarry.daemon.context import DaemonContext
@@ -26,38 +23,12 @@ from quarry.daemon.tasks import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync_registry import SyncRegistry
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     import pytest
-    from numpy.typing import NDArray
 
 _DIM = 768
-
-
-@final
-class _FakeEmbedder:
-    """A hermetic embedder: random vectors, no ONNX."""
-
-    __slots__ = ()
-
-    def __new__(cls) -> Self:
-        return super().__new__(cls)
-
-    @property
-    def dimension(self) -> int:
-        return _DIM
-
-    @property
-    def model_name(self) -> str:
-        return "index-jobs-fake"
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        rng = np.random.default_rng(0)
-        return rng.standard_normal((len(texts), _DIM)).astype(np.float32)
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        vector: NDArray[np.float32] = np.zeros(_DIM, dtype=np.float32)
-        return vector
 
 
 def _fixture(tmp_path: Path) -> tuple[Database, Settings, Path]:
@@ -93,16 +64,13 @@ def test_single_file_indexer_indexes_a_file(tmp_path: Path) -> None:
     """index_one ingests a file's chunks and reports them, no error."""
     db, settings, root = _fixture(tmp_path)
     (root / "a.md").write_text("# Title\n\nsome indexable body text here")
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        conn = SyncRegistry(settings.registry_path)
-        try:
-            outcome = SingleFileIndexer(
-                db.store, conn, settings, collection="col", resolved=root
-            ).index_one(root / "a.md")
-        finally:
-            conn.close()
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        outcome = SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(root / "a.md")
+    finally:
+        conn.close()
     assert outcome.error is None
     assert outcome.ingested >= 1
     assert "a.md" in _docs(db)
@@ -138,16 +106,13 @@ def test_index_one_mid_stream_error_is_graceful(
     monkeypatch.setattr(
         "quarry.ingestion.streaming.DocumentStreamer.stream_batches", _boom
     )
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        conn = SyncRegistry(settings.registry_path)
-        try:
-            outcome = SingleFileIndexer(
-                db.store, conn, settings, collection="col", resolved=root
-            ).index_one(root / "d.md")
-        finally:
-            conn.close()
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        outcome = SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(root / "d.md")
+    finally:
+        conn.close()
     assert outcome.error is not None
     assert "stream boom" in outcome.error
 
@@ -158,10 +123,7 @@ def test_file_index_job_run_completes(tmp_path: Path) -> None:
     (root / "b.md").write_text("chunk one body\n\nchunk two body")
     state = TaskState(task_id="idx", kind="index")
     job = FileIndexJob(db, settings, "col", root, root / "b.md")
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        asyncio.run(job.run(_dummy_ctx(), state))
+    asyncio.run(job.run(_dummy_ctx(), state))
     assert state.status == "completed"
     assert state.results["document"] == "b.md"
     assert cast("int", state.results["ingested"]) >= 1
@@ -171,16 +133,13 @@ def test_document_delete_job_removes_chunks_and_rows(tmp_path: Path) -> None:
     """DocumentDeleteJob drops a document's chunks and its registry rows."""
     db, settings, root = _fixture(tmp_path)
     (root / "c.md").write_text("deletable body text")
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        conn = SyncRegistry(settings.registry_path)
-        try:
-            SingleFileIndexer(
-                db.store, conn, settings, collection="col", resolved=root
-            ).index_one(root / "c.md")
-        finally:
-            conn.close()
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        ).index_one(root / "c.md")
+    finally:
+        conn.close()
     assert "c.md" in _docs(db)
 
     state = TaskState(task_id="del", kind="delete")
@@ -202,10 +161,7 @@ def test_collection_sync_job_bulk_indexes_all_files(tmp_path: Path) -> None:
     (root / "two.md").write_text("second document body")
     state = TaskState(task_id="scan", kind="sync")
     job = CollectionSyncJob(db, settings, "col", root)
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        asyncio.run(job.run(_dummy_ctx(), state))
+    asyncio.run(job.run(_dummy_ctx(), state))
     assert state.status == "completed"
     assert state.results["ingested"] == 2
     assert _docs(db) == {"one.md", "two.md"}
@@ -221,20 +177,17 @@ def test_collection_sync_job_deletes_documents_gone_from_disk(tmp_path: Path) ->
     db, settings, root = _fixture(tmp_path)
     (root / "keep.md").write_text("still here")
     (root / "gone.md").write_text("about to vanish")
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        asyncio.run(
-            CollectionSyncJob(db, settings, "col", root).run(
-                _dummy_ctx(), TaskState(task_id="scan1", kind="sync")
-            )
+    asyncio.run(
+        CollectionSyncJob(db, settings, "col", root).run(
+            _dummy_ctx(), TaskState(task_id="scan1", kind="sync")
         )
-        assert _docs(db) == {"keep.md", "gone.md"}
+    )
+    assert _docs(db) == {"keep.md", "gone.md"}
 
-        (root / "gone.md").unlink()  # simulate the file/dir removal
-        state = TaskState(task_id="scan2", kind="sync")
-        rescan = CollectionSyncJob(db, settings, "col", root)
-        asyncio.run(rescan.run(_dummy_ctx(), state))
+    (root / "gone.md").unlink()  # simulate the file/dir removal
+    state = TaskState(task_id="scan2", kind="sync")
+    rescan = CollectionSyncJob(db, settings, "col", root)
+    asyncio.run(rescan.run(_dummy_ctx(), state))
 
     assert state.status == "completed"
     assert state.results["deleted"] == 1
@@ -266,7 +219,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
     (root / "x.md").write_text("indexable body text that will orphan then purge")
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         key = RouteKey(ctx.database_name, "col")
         # 1. an index job for the collection is admitted (in-flight).
         index_state = ctx.tasks.begin("index")
@@ -288,10 +241,7 @@ def test_deregister_purge_after_queued_index_leaves_no_orphans(tmp_path: Path) -
         # 3. no orphan chunks survive for the deregistered collection.
         assert _docs(ctx.database) == set()
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> None:
@@ -318,7 +268,7 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
     (child / "x.md").write_text("indexable body text that will orphan then purge")
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         key = RouteKey(ctx.database_name, "child-col")
         # 1. an index job for the child collection is admitted (in-flight).
         index_state = ctx.tasks.begin("index")
@@ -342,10 +292,7 @@ def test_registering_a_parent_purges_subsumed_child_chunks(tmp_path: Path) -> No
         # 3. no orphan chunks survive in the subsumed child collection.
         assert _docs(ctx.database) == set()
 
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=_FakeEmbedder()
-    ):
-        asyncio.run(_run())
+    asyncio.run(_run())
 
 
 def test_subsume_purge_failure_is_logged_and_reported(
@@ -377,7 +324,7 @@ def test_subsume_purge_failure_is_logged_and_reported(
     monkeypatch.setattr("quarry.daemon.purge_service._PURGE_SUBMIT_DEADLINE_S", 0.0)
 
     async def _run() -> None:
-        ctx = DaemonContext(settings, embedder=_FakeEmbedder())
+        ctx = DaemonContext(settings, embedder=FakeEmbeddingBackend(_DIM))
         # A permanently-full queue: the purge can never be admitted.  Patch the
         # class (IngestQueue is __slots__ed, so the instance attr is read-only).
         monkeypatch.setattr(IngestQueue, "try_submit", lambda *_a, **_k: False)

@@ -38,6 +38,13 @@ htmlcov/
 # ruff
 .ruff_cache/
 
+# punt-kit writes this lock beside its CLAUDE.md import; it is machine state,
+# not project content, and an over-broad `git add -A` will otherwise sweep it in.
+.CLAUDE.md.lock
+
+# Scratch notes dropped at the repo root. Real scratch belongs in .tmp/.
+/Sample of *.txt
+
 # Environment
 .env
 
@@ -90,3 +97,6 @@ uv.toml
 # DES-058 machine-local live zone — never track. Session audit/lock files are
 # live-rewritten per session and deadlock git if tracked; ethos enable seeds this.
 .punt-labs/**/local/**
+
+# punt-kit CLAUDE.md import lock — a machine-local artifact, never a repo file.
+.CLAUDE.md.punt-import.lock

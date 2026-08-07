@@ -15,7 +15,7 @@ exception or an in-process engine fallback.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Self, final
 from unittest.mock import MagicMock, patch
@@ -25,9 +25,10 @@ import pytest
 from starlette.testclient import TestClient
 
 from quarry.client import QuarryClient, QuarryConnectionError
-from quarry.client.transport import HttpxTransport
+from quarry.client.transport import HttpxTransport, Response
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
@@ -72,6 +73,47 @@ def _inject_mocks(ctx: DaemonContext) -> None:
 
 
 @final
+class _TestClientTransport:
+    """A :class:`QuarryClient` transport over Starlette's ``TestClient``.
+
+    ``TestClient.request()`` (unlike a real ``httpx.Client``) warns on ANY
+    ``timeout=`` argument — its in-memory ASGI transport has no socket to bound,
+    so there is no non-deprecated way to pass one.  The production
+    :class:`HttpxTransport` always forwards its caller's timeout, which is
+    correct against a real server but trips that warning on every call here; this
+    test-only transport reuses ``HttpxTransport``'s response parsing but never
+    forwards a timeout to the request itself.
+    """
+
+    __slots__ = ("_client",)
+
+    _client: TestClient
+
+    def __new__(cls, client: TestClient) -> Self:
+        self = super().__new__(cls)
+        self._client = client
+        return self
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        # Accepted for Transport-protocol parity; never forwarded (see class doc).
+        timeout: float | None = None,
+    ) -> Response:
+        resp = self._client.request(
+            method,
+            path,
+            params=dict(params) if params else None,
+            json=dict(json_body) if json_body is not None else None,
+        )
+        return HttpxTransport._parse(resp)
+
+
+@final
 class _ToolHarness:
     """Bind an :class:`McpTools` to a client over the real daemon app.
 
@@ -88,7 +130,7 @@ class _ToolHarness:
     def __new__(cls, tc: TestClient) -> Self:
         self = super().__new__(cls)
         self._client = tc
-        quarry_client = QuarryClient(HttpxTransport(tc))
+        quarry_client = QuarryClient(_TestClientTransport(tc))
         self._tools = McpTools(connect=lambda: quarry_client)
         return self
 
@@ -101,17 +143,41 @@ class _ToolHarness:
         return self._client
 
 
+# Bound on how long fixture teardown waits for a background job to finish for
+# real before giving up and force-cancelling it (see the ``harness`` fixture).
+_TEARDOWN_DRAIN_TIMEOUT_S = 10.0
+
+
+async def _aclose_ingest_queue(ctx: DaemonContext) -> None:
+    """Drain the ingest queue with the teardown timeout (keyword-only ``aclose``)."""
+    await ctx.ingest_queue.aclose(drain_timeout=_TEARDOWN_DRAIN_TIMEOUT_S)
+
+
 @pytest.fixture()
 def harness(tmp_path: Path) -> Iterator[_ToolHarness]:
-    """Yield a tool harness over a real daemon app, draining tasks on teardown."""
+    """Yield a tool harness over a real daemon app, draining tasks on teardown.
+
+    Teardown DRAINS (awaits real completion of) any still-running background
+    job rather than only cancelling it: cancelling the wrapping ``asyncio.Task``
+    does not stop a ``run_in_threadpool`` job's underlying OS thread, so a
+    cancel-only teardown lets that thread keep running the (by-then unmocked)
+    real ingest into a later test's mocks or a closed log stream. Only a
+    straggler that outlives the drain window is force-cancelled.
+    """
     ctx = DaemonContext(_mock_settings(tmp_path))
     _inject_mocks(ctx)
     with TestClient(build_app(ctx), raise_server_exceptions=False) as tc:
         yield _ToolHarness(tc)
         portal = tc.portal
         if portal is not None:
-            portal.call(ctx.tasks.cancel_all)
-            portal.call(ctx.ingest_queue.cancel_workers)
+            # ``finally`` is load-bearing: a registry drain timeout now raises
+            # (fail-closed) rather than swallowing, so the queue close must not
+            # be skipped -- that queue is the OTHER leak vector this teardown
+            # guards, tracked independently of ``TaskRegistry._refs``.
+            try:
+                portal.call(ctx.tasks.drain, _TEARDOWN_DRAIN_TIMEOUT_S)
+            finally:
+                portal.call(_aclose_ingest_queue, ctx)
 
 
 class TestSurfaceComplete:
@@ -387,15 +453,14 @@ class TestSync:
 
 class TestUseDatabase:
     def test_switch(self, harness: _ToolHarness) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
             result = harness.tools.use_database("coding")
             assert "coding" in result
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_remote_target_refuses_switch(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -407,21 +472,20 @@ class TestUseDatabase:
         daemon — data confusion. The tool returns an honest no-effect message and
         leaves the active db unchanged.
         """
-        from quarry.config import Settings
 
         monkeypatch.setattr(
             "quarry.mcp_server.TargetResolver.selects_local_db",
             classmethod(lambda _cls: False),
         )
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert result.startswith("Error:")
             assert "remote" in result
-            assert Settings.active_db() == "start", "must not switch under remote"
+            assert SELECTION.active() == "start", "must not switch under remote"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_quarry_url_env_refuses_switch_via_real_precedence(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -432,17 +496,16 @@ class TestUseDatabase:
         is False and use() refuses, proving the guard matches what a real find/
         remember call would resolve.
         """
-        from quarry.config import Settings
 
         monkeypatch.setenv("QUARRY_URL", "wss://remote.example.com:8420")
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert result.startswith("Error:")
-            assert Settings.active_db() == "start"
+            assert SELECTION.active() == "start"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_loopback_login_still_switches(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
@@ -450,84 +513,77 @@ class TestUseDatabase:
         """The post-install case: a `quarry login localhost` loopback login is
         LOCAL, so use() switches normally — not the remote-refusal regression.
         """
-        from quarry.config import Settings
 
         monkeypatch.delenv("QUARRY_URL", raising=False)
         login = {"quarry": {"url": "wss://127.0.0.1:8420"}}
         monkeypatch.setattr("quarry.client.resolver.read_proxy_config", lambda: login)
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             result = harness.tools.use_database("coding")
             assert not result.startswith("Error:"), result
             assert "coding" in result
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_default_selects_literal_default_not_persistent(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """use("default") targets the literal default db even when the persistent
-        default is set to something else — active_db() and the summary path agree.
+        default is set to something else — the active selection and the summary agree.
         """
         from quarry.config import Settings
 
         # Persistent default is "coding"; use("default") must NOT pick it up.
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "coding")
-        )
-        original = Settings.active_db()
+        SELECTION.persist("coding")  # a real pointer file under the session home
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("")  # nothing selected this session yet
+            SELECTION.override("")  # nothing selected this session yet
             result = harness.tools.use_database("default")
-            assert Settings.active_db() == "default"
+            assert SELECTION.active() == "default"
             default_path = str(Settings.load().resolve_db_paths("default").lancedb_path)
             coding_path = str(Settings.load().resolve_db_paths("coding").lancedb_path)
             assert default_path in result
             assert coding_path not in result
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_named_switch_sets_active_db(
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from quarry.config import Settings
 
-        monkeypatch.setattr(
-            Settings, "read_default_db", classmethod(lambda _cls: "coding")
-        )
-        original = Settings.active_db()
+        SELECTION.persist("coding")  # a real pointer file under the session home
+        original = SELECTION.active()
         try:
             harness.tools.use_database("coding")
-            assert Settings.active_db() == "coding"
+            assert SELECTION.active() == "coding"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_round_trip_target_follows_selection(self, harness: _ToolHarness) -> None:
         """After use("work"), the active db resolves to work's target path."""
         from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
             result = harness.tools.use_database("work")
             work_path = str(Settings.load().resolve_db_paths("work").lancedb_path)
-            assert Settings.active_db() == "work"
+            assert SELECTION.active() == "work"
             assert work_path in result
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_invalid_name_does_not_corrupt_state(self, harness: _ToolHarness) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("good")
+            SELECTION.override("good")
             result = harness.tools.use_database("../evil")
             assert result.startswith("Error:")
-            assert Settings.active_db() == "good"
+            assert SELECTION.active() == "good"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
 
 class TestDaemonDown:
@@ -605,17 +661,16 @@ class TestInputValidation:
         assert "collection" in result
 
     def test_use_blank_name(self) -> None:
-        from quarry.config import Settings
 
-        original = Settings.active_db()
+        original = SELECTION.active()
         try:
-            Settings.set_active_db("start")
+            SELECTION.override("start")
             for name in ("", "   "):
                 result = self._tools().use_database(name)
                 assert result.startswith("Error:"), name
-                assert Settings.active_db() == "start", "must not switch on blank"
+                assert SELECTION.active() == "start", "must not switch on blank"
         finally:
-            Settings.set_active_db(original or "")
+            SELECTION.override(original or "")
 
     def test_show_negative_page_is_metadata_not_daemon_error(
         self, harness: _ToolHarness

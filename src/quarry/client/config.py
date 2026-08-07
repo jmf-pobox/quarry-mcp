@@ -30,6 +30,7 @@ from typing import Self, final
 
 from quarry.client.errors import QuarryError
 from quarry.config import Settings
+from quarry.db_pointer import SELECTION
 from quarry.net import LoopbackPolicy
 from quarry.remote import to_netloc, ws_to_http
 from quarry.run_dir import RunDir
@@ -269,7 +270,7 @@ class ClientConfig:
         ``ValueError`` on a path-separator name; each caller wraps those into its
         own fail-closed error.
         """
-        settings = Settings.load().resolve_db_paths(Settings.active_db() or None)
+        settings = Settings.load().resolve_db_paths(SELECTION.active())
         return RunDir(settings.lancedb_path.parent)
 
     @classmethod

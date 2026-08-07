@@ -32,6 +32,7 @@ from quarry.api import (
 )
 from quarry.client import HttpError, QuarryClient, TargetResolver
 from quarry.config import Settings
+from quarry.db_pointer import SELECTION
 from quarry.formatting import (
     format_collections,
     format_databases,
@@ -438,14 +439,14 @@ class McpTools:
                 "its own database; 'use' only selects among local databases. Run "
                 "'quarry logout' or unset QUARRY_URL to return to the local daemon."
             )
-        previous = Settings.active_db() or "default"
+        previous = SELECTION.active() or "default"
         # Select the literal named db, "default" included — never fall through to
-        # the persistent read_default_db(), or use("default") would silently pick
+        # the persisted default, or use("default") would silently pick
         # whatever the CLI last persisted and the summary path would lie about the
         # target subsequent tools connect to. Validate before mutating:
         # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.
         resolved = Settings.load().resolve_db_paths(name)
-        Settings.set_active_db(name)
+        SELECTION.override(name)
         return format_switch_summary(previous, name, str(resolved.lancedb_path))
 
     def _list_documents(self, collection: str) -> str:
@@ -458,7 +459,7 @@ class McpTools:
 
     def _list_databases(self, _collection: str) -> str:
         dbs = self._connect().list_databases()
-        current = Settings.active_db() or "default"
+        current = SELECTION.active() or "default"
         return format_databases(
             [db.model_dump() for db in dbs.databases], current=current
         )
@@ -484,7 +485,7 @@ _tools.register(mcp)
 def main(db_name: str | None = None) -> None:
     """Run the stdio MCP server, targeting *db_name* (the daemon's database)."""
     LoggingConfig.configure(stderr_level="INFO")
-    Settings.set_active_db(db_name or "")
+    SELECTION.override(db_name or "")
     logger.info("Starting quarry MCP server (client tier)")
     mcp.run(transport="stdio")
 

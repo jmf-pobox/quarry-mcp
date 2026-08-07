@@ -7,8 +7,6 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-
 from quarry.daemon.ingest_jobs import IngestJob
 from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
@@ -81,12 +79,8 @@ class TestIngestUrl:
         db = _fake_db()
 
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
-            mock_embed_factory.return_value = _fake_backend()
             result = ingest_url(
                 "https://docs.example.com/api",
                 db,
@@ -108,12 +102,8 @@ class TestIngestUrl:
         db = _fake_db()
 
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
-            mock_embed_factory.return_value = _fake_backend()
             result = ingest_url(
                 "https://example.com/page",
                 db,
@@ -146,13 +136,9 @@ class TestIngestUrl:
 
         url = "https://x.test/reset?email=user@example.com&token=abc123secret"
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
             patch.object(HtmlExtractor, "extract_from_html", spy),
         ):
-            mock_embed_factory.return_value = _fake_backend()
             result = ingest_url(
                 url,
                 db,
@@ -182,12 +168,8 @@ class TestIngestUrl:
 
         url = "https://x.test/reset?email=user@example.com&token=abc123secret"
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
         ):
-            mock_embed_factory.return_value = _fake_backend()
             result = ingest_url(url, db, settings)
 
         assert result["document_name"] == url
@@ -251,13 +233,3 @@ def _fake_db() -> Database:
     mock_lance = MagicMock()
     mock_lance.open_table.return_value = MagicMock()
     return Database(mock_lance)
-
-
-def _fake_backend() -> MagicMock:
-    """Embedding backend stub that returns zero vectors of the right shape."""
-    backend = MagicMock()
-    backend.model_name = "test-model"
-    backend.embed_texts.side_effect = lambda texts: np.zeros(
-        (len(texts), 768), dtype=np.float32
-    )
-    return backend

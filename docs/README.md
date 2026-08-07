@@ -22,6 +22,12 @@ this directory holds reference material, active design work, and archived proces
   late-chunking) and the case for eval-first. The eval harness it calls a prerequisite has
   shipped (Phase 0–1, above); the **embedding levers themselves are not yet implemented** —
   they are measured against `make eval` before adoption.
+- **`test-resource-governance-design.md`** — test-suite resource governance and hermeticity
+  (quarry-21xv). Measurement corrects the load-200 post-mortem: the suite is single-process,
+  I/O-bound (0.69 cores), and loads no ONNX models. The real defects are that one run writes
+  7,034 lines into the operator's production log, and that nothing bounds concurrent suite
+  runs across sibling repos. Operator-ruled: no workspace-level concurrency mechanism —
+  quarry is a shipped product; its suite is bounded and hermetic on its own (DES-047).
 
 ## Operations
 
