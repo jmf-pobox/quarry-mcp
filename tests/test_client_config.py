@@ -94,8 +94,9 @@ class TestFromLoginLoopback:
             ClientConfig.from_login({"url": "wss://127.0.0.1:8420/mcp"})
 
     def test_unreadable_default_db_config_fails_closed(self, tmp_path: Path) -> None:
-        # active_db() can raise OSError on an unreadable default-db config; it too
-        # runs inside the try, so from_login fails closed, not a raw OSError.
+        # Resolving the active selection can raise OSError on an unreadable
+        # pointer file; that runs inside the try, so from_login fails closed
+        # rather than propagating a raw OSError.
         with (
             patch("quarry.client.config.SELECTION") as mock_selection,
             pytest.raises(ClientConfigError, match="could not be read"),
@@ -392,7 +393,7 @@ class TestLoopbackTokenProbe:
             assert ClientConfig.loopback_token("127.0.0.1") is None
 
     def test_unreadable_default_db_config_returns_none(self) -> None:
-        # active_db() raising OSError must also yield None, not propagate.
+        # A pointer file that cannot be read must also yield None, not propagate.
         with patch("quarry.client.config.SELECTION") as mock_selection:
             mock_selection.active.side_effect = OSError("config unreadable")
             assert ClientConfig.loopback_token("127.0.0.1") is None

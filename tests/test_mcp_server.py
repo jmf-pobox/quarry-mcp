@@ -531,7 +531,7 @@ class TestUseDatabase:
         self, harness: _ToolHarness, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """use("default") targets the literal default db even when the persistent
-        default is set to something else — active_db() and the summary path agree.
+        default is set to something else — the active selection and the summary agree.
         """
         from quarry.config import Settings
 
