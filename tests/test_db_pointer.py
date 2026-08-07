@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from quarry.config import Settings
 from quarry.db_pointer import SELECTION, DatabaseSelection
 
 if TYPE_CHECKING:
@@ -34,6 +35,24 @@ class TestPointerLocation:
         selection = DatabaseSelection()
         expected = _root_at(monkeypatch, tmp_path / "moved")
         assert selection.path == expected
+
+    def test_dotenv_root_moves_the_pointer_too(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The pointer and the data must never disagree about where the root is.
+
+        ``Settings`` reads ``.env`` as well as the process environment, so a
+        root configured only there moves the data. Resolving the pointer from a
+        separate environment read would leave it behind — beside the operator's
+        real, guarded ``config.toml`` — while the data relocated.
+        """
+        monkeypatch.delenv("QUARRY_ROOT", raising=False)
+        monkeypatch.chdir(tmp_path)
+        root = tmp_path / "relocated" / "data"
+        (tmp_path / ".env").write_text(f"QUARRY_ROOT={root}\n")
+
+        assert Settings.load().quarry_root == root, "the .env route must set the field"
+        assert DatabaseSelection().path == root.parent / "config.toml"
 
 
 class TestPersistedDefault:
@@ -117,8 +136,8 @@ class TestPrecedence:
         assert selection.active() == "persisted"
 
 
-class TestProcessSingleton:
-    """One instance stands for the running process's choice."""
+class TestOverrideIsolation:
+    """An override belongs to its instance, never to the class."""
 
     def test_instances_do_not_share_an_override(self) -> None:
         """Each instance owns its override, so a test cannot leak into SELECTION."""

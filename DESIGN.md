@@ -1031,9 +1031,10 @@ PR-3a implements the daemon/supervision/loopback-auth half of v2.2. What shipped
   exact match) would erase it and is held pending an operator decision.
   The 13 `RemoteClient` construction sites route through `ClientConfig`, so any
   loopback CLI session now presents the token. `ClientConfig` resolves the
-  token from the run dir of the process's **active database** (a
-  `Settings.active_db` the CLI records from `--db`, else the persistent
-  default), since `serve.token` lives under the daemon's startup-db run dir.
+  token from the run dir of the process's **active database** (the
+  `DatabaseSelection` override the CLI records from `--db`, else the
+  persisted default), since `serve.token` lives under the daemon's startup-db
+  run dir.
   **Limitation:** a loopback client cannot learn a non-default daemon's
   database from the URL, so loopback `--db` auth requires the operator to run
   a matching `--db` on both `quarry` and `quarryd`; the default,

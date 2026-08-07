@@ -441,7 +441,7 @@ class McpTools:
             )
         previous = SELECTION.active() or "default"
         # Select the literal named db, "default" included — never fall through to
-        # the persistent read_default_db(), or use("default") would silently pick
+        # the persisted default, or use("default") would silently pick
         # whatever the CLI last persisted and the summary path would lie about the
         # target subsequent tools connect to. Validate before mutating:
         # resolve_db_paths raises ValueError on a bad name, leaving the db unchanged.

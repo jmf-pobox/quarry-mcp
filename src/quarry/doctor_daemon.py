@@ -3,8 +3,8 @@
 Fail-closed loopback auth (:class:`quarry.client.ClientConfig`) tells operators to
 "Run 'quarry doctor'" when ``serve.token`` is missing, unreadable, or empty. These
 checks make that remediation real: they resolve the SAME run dir the client reads
-(the active database's, per :meth:`quarry.config.Settings.active_db`) and diagnose
-a token/daemon outage instead of pointing at a dead end.
+(the active database's, per :meth:`quarry.db_pointer.DatabaseSelection.active`)
+and diagnose a token/daemon outage instead of pointing at a dead end.
 
 Descriptor headroom is likewise a property of the resident daemon — the only
 long-lived process that accumulates LanceDB reader handles and can hit EMFILE —

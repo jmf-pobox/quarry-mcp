@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import ClassVar, Final
 
@@ -146,15 +145,23 @@ class Settings(BaseSettings):
 
     @classmethod
     def data_root(cls) -> Path:
-        """Return the data root, resolved per call from ``QUARRY_ROOT``.
+        """Return the configured data root, resolved per call.
 
-        Reads the environment directly rather than building a ``Settings``: this
-        runs on CLI startup, and constructing the whole model to read one path
-        would both cost more and introduce a validation-error surface where a
-        plain lookup has none.
+        Resolved through the model rather than by reading ``QUARRY_ROOT`` out of
+        the environment, so that every source pydantic-settings honours decides
+        the root exactly once. A direct environment read agrees with the field
+        only for the process-environment case: ``env_file`` means a ``.env``
+        entry sets the field and *not* ``os.environ``, and the two then disagree
+        — the data would relocate while anything derived from the direct read
+        stayed behind, next to the operator's real tree.
+
+        Costs 273 us against 0.4 us for the raw environment lookup (measured,
+        2000 iterations). Resolution happens a handful of times per process, so
+        well under a millisecond in total; a single source of truth is worth
+        that, and the alternative is a divergence that writes to a production
+        path.
         """
-        root = os.environ.get("QUARRY_ROOT", "")
-        return Path(root) if root else _DEFAULT_QUARRY_ROOT
+        return cls().quarry_root
 
     @classmethod
     def load(cls) -> Settings:

@@ -25,6 +25,18 @@ class TestHomeRedirect:
     def test_path_expanduser_method(self) -> None:
         assert Path("~").expanduser().is_relative_to(ENV.home)
 
+    def test_pathlib_expanduser_delegates_to_os_path_expanduser(self) -> None:
+        """The two expanduser routes are one implementation, so one check covers both.
+
+        ``os.path.expanduser`` is the route the redirect exists for, and
+        ``Path.expanduser`` calls it rather than reimplementing it. Proving the
+        delegation here means the assertions above cover both spellings.
+        """
+        sentinel = str(ENV.home / "sentinel")
+        with patch.object(os.path, "expanduser", return_value=sentinel) as delegate:
+            assert Path("~").expanduser() == Path(sentinel)
+        delegate.assert_called_once_with("~")
+
     def test_expanduser_ignores_a_patched_path_home(self) -> None:
         """Why the redirect must be the env var and not a ``Path.home`` patch.
 

@@ -27,7 +27,6 @@ def _run_dir_at(tmp_path: Path) -> Generator[None]:
     fake_settings.lancedb_path = tmp_path / "lancedb"  # parent == tmp_path
     with patch("quarry.client.config.Settings") as started:
         started.load.return_value.resolve_db_paths.return_value = fake_settings
-        started.read_default_db.return_value = None
         yield
 
 

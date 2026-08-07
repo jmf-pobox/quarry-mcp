@@ -27,6 +27,11 @@ class DatabaseSelection:
     answers. Callers ask for the effective choice and do not resolve the
     precedence themselves.
 
+    Recording the override matters beyond convenience: the client tier resolves
+    the daemon's startup-db run directory from it, and ``serve.token`` lives in
+    that directory. Client and daemon therefore agree on which database is in
+    play only because both derive it from a matching ``--db``.
+
     Extracted from ``Settings``, which is a settings container and has no
     business owning a mutable process-scoped selection or a TOML file format.
     """
@@ -44,10 +49,16 @@ class DatabaseSelection:
     def path(self) -> Path:
         """Return the pointer file's location, resolved per access.
 
-        A sibling of the data root, so relocating the root via ``QUARRY_ROOT``
-        relocates the pointer with it. Resolved on every access rather than
-        bound once: a path fixed at import time cannot follow an environment the
-        caller sets afterwards.
+        A sibling of the data root, and derived from the same
+        ``Settings.data_root()`` the data itself uses, so *however* the root is
+        configured — process environment or ``.env`` — the pointer moves with
+        it. Deriving this from a separate environment read instead would agree
+        only for the process-environment case, and under a ``.env``-configured
+        root would leave the pointer beside the operator's real config while the
+        data went elsewhere.
+
+        Resolved on every access rather than bound once: a path fixed at import
+        time cannot follow an environment the caller sets afterwards.
         """
         return Settings.data_root().parent / _POINTER_FILE
 
