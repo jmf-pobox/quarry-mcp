@@ -24,13 +24,13 @@ from typing import TYPE_CHECKING, Self, final
 
 import anyio.from_thread
 import httpx
-import numpy as np
 
 from quarry.client import QuarryClient
 from quarry.client.transport import HttpxTransport, Response
 from quarry.config import Settings
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
@@ -38,38 +38,6 @@ if TYPE_CHECKING:
 
     from anyio.from_thread import BlockingPortal
     from fastapi import FastAPI
-    from numpy.typing import NDArray
-
-
-@final
-class FakeEmbedder:
-    """A deterministic zero-vector embedder so the daemon skips the ONNX model.
-
-    Satisfies ``quarry.types.EmbeddingBackend`` structurally; every vector is
-    zeros of the configured dimension, which is all a hermetic route test needs
-    (search over an empty table returns nothing regardless of the query vector).
-    """
-
-    _dimension: int
-
-    def __new__(cls, dimension: int = 768) -> Self:
-        self = super().__new__(cls)
-        self._dimension = dimension
-        return self
-
-    @property
-    def dimension(self) -> int:
-        return self._dimension
-
-    @property
-    def model_name(self) -> str:
-        return "fake-embedder"
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        return np.zeros((len(texts), self._dimension), dtype=np.float32)
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        return np.zeros(self._dimension, dtype=np.float32)
 
 
 @final
@@ -137,7 +105,7 @@ class InProcessDaemon:
         ctx = DaemonContext(
             settings,
             api_key=api_key,
-            embedder=FakeEmbedder(settings.embedding_dimension),
+            embedder=FakeEmbeddingBackend(settings.embedding_dimension),
         )
         self._ctx = ctx
         self._app = build_app(ctx)

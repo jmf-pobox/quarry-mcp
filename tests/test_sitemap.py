@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 from quarry.db import Database
@@ -454,21 +453,11 @@ class TestIngestSitemapIntegration:
         db = Database(mock_lance)
 
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
         ):
-            mock_backend = MagicMock()
-            mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
-                (len(texts), 768), dtype=np.float32
-            )
-            mock_embed_factory.return_value = mock_backend
-
             result = ingest_sitemap(
                 "https://docs.example.com/sitemap.xml",
                 db,
@@ -511,21 +500,11 @@ class TestIngestSitemapIntegration:
         db = Database(mock_lance)
 
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-            ) as mock_embed_factory,
             patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
             patch(
                 "quarry.db.chunk_catalog.ChunkCatalog.list_documents", return_value=[]
             ),
         ):
-            mock_backend = MagicMock()
-            mock_backend.model_name = "test-model"
-            mock_backend.embed_texts.side_effect = lambda texts: np.zeros(
-                (len(texts), 768), dtype=np.float32
-            )
-            mock_embed_factory.return_value = mock_backend
-
             result = ingest_sitemap(
                 "https://example.com/sitemap.xml",
                 db,

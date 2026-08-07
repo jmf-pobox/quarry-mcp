@@ -45,6 +45,7 @@ from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.models import Chunk
 from quarry.sync_finalize import SyncFinalizer
 from quarry.sync_registry import SyncRegistry
+from tests.fakes import FakeEmbeddingBackend
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -200,21 +201,21 @@ class _FdSamplingEmbedder:
     model, keeping the test hermetic and CI-runnable.
     """
 
-    __slots__ = ("_dim", "_trajectory")
+    __slots__ = ("_inner", "_trajectory")
 
-    _dim: int
+    _inner: FakeEmbeddingBackend
     _trajectory: FdTrajectory
 
     def __new__(cls, trajectory: FdTrajectory, *, dimension: int) -> Self:
         self = super().__new__(cls)
         self._trajectory = trajectory
-        self._dim = dimension
+        self._inner = FakeEmbeddingBackend(dimension)
         return self
 
     @property
     def dimension(self) -> int:
         """Embedding width the fake vectors are shaped to."""
-        return self._dim
+        return self._inner.dimension
 
     @property
     def model_name(self) -> str:
@@ -224,12 +225,11 @@ class _FdSamplingEmbedder:
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Sample open fds, then return one random vector per text."""
         self._trajectory.record(_open_fd_count())
-        return _random_vectors(len(texts))
+        return self._inner.embed_texts(texts)
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Return a single random query vector (unused by backfill)."""
-        vector: NDArray[np.float32] = _random_vectors(1)[0]
-        return vector
+        """Return a single query vector (unused by backfill)."""
+        return self._inner.embed_query(query)
 
 
 def _write_transcript(path: Path, index: int) -> None:
@@ -327,39 +327,6 @@ _FINALIZE_EVERY = 10
 _DISTINCT_FILES = 5
 
 
-@final
-class _ConstantEmbedder:
-    """A hermetic embedder returning random vectors of the configured width."""
-
-    __slots__ = ("_dim",)
-
-    _dim: int
-
-    def __new__(cls, *, dimension: int) -> Self:
-        self = super().__new__(cls)
-        self._dim = dimension
-        return self
-
-    @property
-    def dimension(self) -> int:
-        """Embedding width the fake vectors are shaped to."""
-        return self._dim
-
-    @property
-    def model_name(self) -> str:
-        """Identify the fake backend in diagnostics."""
-        return "watch-fd-fake"
-
-    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
-        """Return one random vector per text."""
-        return _random_vectors(len(texts))
-
-    def embed_query(self, query: str) -> NDArray[np.float32]:
-        """Return a single random query vector (unused here)."""
-        vector: NDArray[np.float32] = _random_vectors(1)[0]
-        return vector
-
-
 def _watch_database(tmp_path: Path, index: int) -> tuple[Database, Settings, Path]:
     """Build one database's persistent connection, settings, and watched root."""
     base = tmp_path / f"db{index}"
@@ -417,7 +384,6 @@ def test_watch_session_does_not_leak_descriptors(
     """
     databases = [_watch_database(tmp_path, i) for i in range(_WATCH_DATABASES)]
     trajectory = FdTrajectory()
-    embedder = _ConstantEmbedder(dimension=_EMBEDDING_DIM)
 
     # Count only replace=True rebuilds — the generation-superseding calls that
     # leak descriptors (quarry-0dss). The replace=False "ensure index exists"
@@ -440,19 +406,16 @@ def test_watch_session_does_not_leak_descriptors(
     monkeypatch.setattr(RecyclingTable, "create_index", _spy_create_index)
 
     finalizes = 0
-    with patch(
-        "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
-    ):
-        for edit in range(_WATCH_EDITS):
-            db, settings, root = databases[edit % _WATCH_DATABASES]
-            doc = root / f"note{edit % _DISTINCT_FILES}.md"
-            doc.write_text(f"watch probe {edit} lorem ipsum dolor sit amet consectetur")
-            _watch_index_one(db, settings, root, doc)
-            # Coalesced FTS rebuild — once per quiescent batch, never per file.
-            if edit % _FINALIZE_EVERY == 0:
-                SyncFinalizer(db.db, settings).run()
-                finalizes += 1
-            trajectory.record(_open_fd_count())
+    for edit in range(_WATCH_EDITS):
+        db, settings, root = databases[edit % _WATCH_DATABASES]
+        doc = root / f"note{edit % _DISTINCT_FILES}.md"
+        doc.write_text(f"watch probe {edit} lorem ipsum dolor sit amet consectetur")
+        _watch_index_one(db, settings, root, doc)
+        # Coalesced FTS rebuild — once per quiescent batch, never per file.
+        if edit % _FINALIZE_EVERY == 0:
+            SyncFinalizer(db.db, settings).run()
+            finalizes += 1
+        trajectory.record(_open_fd_count())
 
     assert trajectory.plateaus(slack=_PLATEAU_SLACK), (
         f"open fds grew by {trajectory.growth():.1f} across {_WATCH_EDITS} watch "

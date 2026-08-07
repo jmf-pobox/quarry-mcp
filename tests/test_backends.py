@@ -21,6 +21,11 @@ def _settings(**overrides: object) -> Settings:
     return Settings.model_validate(overrides)
 
 
+# This module tests the factory itself, so the autouse fake must stay out of
+# the way; the ONNX session is mocked per test instead.
+pytestmark = pytest.mark.usefixtures("real_embedding_factory")
+
+
 class TestGetOcrBackend:
     def setup_method(self) -> None:
         clear_caches()

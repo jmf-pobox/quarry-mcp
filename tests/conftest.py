@@ -24,8 +24,10 @@ from quarry.client import QuarryClient
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.db.storage import get_db
+from quarry.ingestion.backends import clear_caches
 from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB
+from tests.fakes import FakeEmbeddingBackend
 from tests.hermetic_env import ENV, ProductionTreeGuard
 from tests.inproc_daemon import InProcessDaemon
 
@@ -304,6 +306,83 @@ def _isolate_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for var in _QUARRY_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture()
+def real_embedding_factory() -> None:
+    """Request this to keep the real embedding factory in place.
+
+    For the factory's own unit tests, which assert on what
+    ``get_embedding_backend`` builds and supply their own ONNX-session mocks.
+    Distinct from ``@pytest.mark.embedding``: this opts out of the fake but
+    stays in the default run and still may not load a real model.
+    """
+    return
+
+
+@pytest.fixture(autouse=True)
+def _fake_embedding_backend(request: pytest.FixtureRequest) -> Generator[None]:
+    """Install the shared fake at the embedding factory, unless opted out.
+
+    Three symbols are replaced, not two, and the third is the one that does the
+    work.  Both ``quarry.ingestion.streaming`` and ``quarry.http_resources``
+    bind their factory with ``from quarry.ingestion.backends import ...`` at
+    module scope, so patching the factory module alone leaves those bound names
+    on the real implementation.  ``OnnxEmbeddingBackend`` is imported inside
+    ``new_embedding_backend`` and therefore resolves per call, which makes it
+    the one point every route -- cached, fresh, current, or added tomorrow --
+    passes through.
+
+    A test carrying ``@pytest.mark.embedding`` gets the real factory. The cache
+    is cleared on both edges so a real backend built by such a test cannot be
+    handed to the next one.
+    """
+    keeps_real_factory = (
+        request.node.get_closest_marker("embedding") is not None
+        or "real_embedding_factory" in request.fixturenames
+    )
+    if keeps_real_factory:
+        clear_caches()
+        yield
+        clear_caches()
+        return
+
+    clear_caches()
+    with (
+        patch(
+            "quarry.ingestion.backends.get_embedding_backend",
+            FakeEmbeddingBackend.for_settings,
+        ),
+        patch("quarry.ingestion.backends.new_embedding_backend", FakeEmbeddingBackend),
+        patch("quarry.embeddings.OnnxEmbeddingBackend", FakeEmbeddingBackend),
+    ):
+        yield
+    clear_caches()
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_model_load(request: pytest.FixtureRequest) -> Generator[None]:
+    """Fail loudly on an unmarked test that reaches a real ONNX session.
+
+    The fake prevents the load; this proves the prevention holds. Without it a
+    refactor that moves the factory turns "410 MB was loaded" back into a silent
+    cost that leaves the test passing.
+    """
+    if request.node.get_closest_marker("embedding") is not None:
+        yield
+        return
+
+    def _refuse(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        msg = (
+            f"{request.node.nodeid} loaded a real ONNX model. Mark it with "
+            "@pytest.mark.embedding if that is intended (it costs 410 MB and "
+            "is deselected by default), or route it through the fake backend."
+        )
+        raise AssertionError(msg)
+
+    with patch("onnxruntime.InferenceSession", _refuse):
+        yield
 
 
 @pytest.fixture(autouse=True)

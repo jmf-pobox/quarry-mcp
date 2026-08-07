@@ -1008,22 +1008,6 @@ class TestIngestContentScrubbing:
         assert "<h1>" not in stored
 
 
-class _FakeEmbedder:
-    @property
-    def dimension(self) -> int:
-        return 768
-
-    @property
-    def model_name(self) -> str:
-        return "fake"
-
-    def embed_texts(self, texts: list[str]) -> np.ndarray:
-        return np.zeros((len(texts), 768), dtype=np.float32)
-
-    def embed_query(self, query: str) -> np.ndarray:
-        return np.zeros(768, dtype=np.float32)
-
-
 class TestSingleDocProgressiveInsert:
     """The refactored single-doc path is bounded + progressive (DES-034)."""
 
@@ -1055,10 +1039,6 @@ class TestSingleDocProgressiveInsert:
             return orig(self, records)
 
         with (
-            patch(
-                "quarry.ingestion.streaming.get_embedding_backend",
-                return_value=_FakeEmbedder(),
-            ),
             patch.object(ChunkStore, "insert_records", counting),
         ):
             result = ingest_content(text, "big", db, settings)
