@@ -26,6 +26,7 @@ from __future__ import annotations
 import gc
 import json
 import resource
+import threading
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -531,4 +532,60 @@ def test_daemon_scale_fd_plateau(tmp_path: Path) -> None:
         f"cycles over {_DAEMON_SCALE_DATABASES} persistent connections "
         f"(peak {trajectory.peak}); the per-connection recycler is not bounding "
         f"the roster-aggregate descriptor count"
+    )
+
+
+@final
+class ThreadNameSet:
+    """The names of the live non-daemon threads at one moment.
+
+    Names, not counts, because a count only says a leak happened while a name
+    says which subsystem leaked.  Daemon threads are excluded: the interpreter
+    reclaims them at exit and lance's pools are daemonised, so they are not the
+    class of leak this guards.
+    """
+
+    __slots__ = ("_names",)
+
+    _names: frozenset[str]
+
+    def __new__(cls, names: frozenset[str]) -> Self:
+        self = super().__new__(cls)
+        self._names = names
+        return self
+
+    @classmethod
+    def sample(cls) -> Self:
+        """Return the non-daemon thread names alive right now."""
+        return cls(frozenset(t.name for t in threading.enumerate() if not t.daemon))
+
+    def newcomers_since(self, baseline: ThreadNameSet) -> frozenset[str]:
+        """Return the names present here and absent from *baseline*."""
+        return self._names - baseline._names
+
+
+# Sampled while this module is imported, which pytest does during collection --
+# before any test has run, and so before anything could have started a thread.
+_THREADS_AT_SESSION_START = ThreadNameSet.sample()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_leaked_threads() -> Generator[None]:
+    """Assert at session end that no non-daemon thread outlived the suite.
+
+    Session-scoped rather than per-test on purpose: LanceDB starts its tokio
+    pool lazily, so the first test to touch lance legitimately adds thirteen
+    threads while its neighbours add none.  A per-test check would fail on
+    correct code.  By session end every pool that will start has started, so the
+    threshold is a delta of zero, not a slack window.
+
+    This complements the drain in the daemon teardown, which proves the tracked
+    background jobs finished -- not that no thread survived them.  A watcher, an
+    httpx pool, or a lance compaction thread is invisible to the registry.
+    """
+    yield
+    leaked = ThreadNameSet.sample().newcomers_since(_THREADS_AT_SESSION_START)
+    assert not leaked, (
+        f"non-daemon threads outlived the suite: {sorted(leaked)}. "
+        f"Each is a thread some test started and never joined."
     )
