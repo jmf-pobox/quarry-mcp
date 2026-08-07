@@ -13,7 +13,10 @@ from quarry.types import LanceDB
 
 from .conftest import FIXTURES_DIR
 
-pytestmark = pytest.mark.slow
+# The embedding marker is load-bearing: without it the autouse fake covers this
+# tier and every assertion here runs against pseudo-random vectors, which is
+# silent nonsense rather than a failure.
+pytestmark = [pytest.mark.slow, pytest.mark.embedding]
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -219,13 +222,13 @@ class TestImageOcr:
         self,
         lance_db: LanceDB,
         database: Database,
-        aws_settings: Settings,
+        integration_settings: Settings,
         png_fixture: Path,
     ) -> None:
-        result = ingest_document(png_fixture, database, aws_settings)
+        result = ingest_document(png_fixture, database, integration_settings)
         assert int(str(result["chunks"])) >= 1
 
-        results = _search(lance_db, "Hello OCR", aws_settings)
+        results = _search(lance_db, "Hello OCR", integration_settings)
         assert len(results) > 0
 
 

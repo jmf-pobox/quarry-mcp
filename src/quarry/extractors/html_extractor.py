@@ -9,11 +9,10 @@ from typing import Self
 from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify
 
+from quarry.ingestion.section_splitter import SectionSplitter
 from quarry.ingestion.text_splitter import (
     read_text_with_fallback,
     sections_to_pages,
-    split_markdown,
-    split_plain,
 )
 from quarry.models import PageContent, PageType
 
@@ -95,10 +94,9 @@ class HtmlExtractor:
         if title and not self._has_markdown_headings(markdown):
             markdown = f"# {title}\n\n{markdown}"
 
-        if self._has_markdown_headings(markdown):
-            sections = split_markdown(markdown)
-        else:
-            sections = split_plain(markdown)
+        headed = self._has_markdown_headings(markdown)
+        splitter = SectionSplitter.markdown() if headed else SectionSplitter.plain()
+        sections = splitter.split(markdown)
 
         if not sections:
             return []

@@ -6,14 +6,10 @@ import logging
 from pathlib import Path
 from typing import Self
 
+from quarry.ingestion.section_splitter import SectionSplitter
 from quarry.ingestion.text_splitter import (
-    LATEX_SECTION,
-    MD_HEADER,
     read_text_with_fallback,
     sections_to_pages,
-    split_latex,
-    split_markdown,
-    split_plain,
 )
 from quarry.models import PageContent, PageType
 
@@ -87,9 +83,9 @@ class TextExtractor:
     @staticmethod
     def _detect_format(text: str) -> str:
         """Detect text format from content."""
-        if MD_HEADER.search(text):
+        if SectionSplitter.markdown().detects(text):
             return "markdown"
-        if LATEX_SECTION.search(text):
+        if SectionSplitter.latex().detects(text):
             return "latex"
         return "plain"
 
@@ -101,12 +97,11 @@ class TextExtractor:
         document_path: str,
     ) -> list[PageContent]:
         """Split text into sections based on format."""
-        if fmt == "markdown":
-            sections = split_markdown(text)
-        elif fmt == "latex":
-            sections = split_latex(text)
-        else:
-            sections = split_plain(text)
+        splitters = {
+            "markdown": SectionSplitter.markdown,
+            "latex": SectionSplitter.latex,
+        }
+        sections = splitters.get(fmt, SectionSplitter.plain)().split(text)
 
         logger.debug(
             "Split %s into %d sections (%s)", document_name, len(sections), fmt

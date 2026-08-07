@@ -19,12 +19,10 @@ from quarry.ingestion.pipeline import (
     ingest_url,
 )
 from quarry.ingestion.provider import PROVIDER_MODEL_MAP, ProviderSelection
+from quarry.ingestion.section_splitter import SectionSplitter
 from quarry.ingestion.text_splitter import (
     read_text_with_fallback,
     sections_to_pages,
-    split_latex,
-    split_markdown,
-    split_plain,
 )
 
 __all__ = [
@@ -32,6 +30,7 @@ __all__ = [
     "SUPPORTED_EXTENSIONS",
     "LocalOcrBackend",
     "ProviderSelection",
+    "SectionSplitter",
     "chunk_pages",
     "clear_caches",
     "extract_text_pages",
@@ -44,7 +43,4 @@ __all__ = [
     "ingest_url",
     "read_text_with_fallback",
     "sections_to_pages",
-    "split_latex",
-    "split_markdown",
-    "split_plain",
 ]
