@@ -13,14 +13,28 @@ from typing import final
 class LoggingConfig:
     """Configure logging with rotating file and stderr handlers."""
 
-    _LOG_DIR: Path = Path.home() / ".punt-labs" / "quarry" / "logs"
-    _LOG_FILE: Path = _LOG_DIR / "quarry.log"
+    _LOG_FILE_NAME: str = "quarry.log"
 
     _FORMAT: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     _DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"
 
     _MAX_BYTES: int = 5_242_880  # 5 MB
     _BACKUP_COUNT: int = 5
+
+    @classmethod
+    def log_dir(cls) -> Path:
+        """Return the directory the file handler writes to.
+
+        Resolved per call rather than bound as a class constant: an import-time
+        ``Path.home()`` decides the destination before any caller can speak, so
+        no environment a caller sets afterwards can move it. ``QUARRY_LOG_DIR``
+        is read here for the same reason ``QUARRY_LOG_LEVEL`` is read in
+        :meth:`configure` — the log's location is configuration.
+        """
+        override = os.environ.get("QUARRY_LOG_DIR", "")
+        if override:
+            return Path(override)
+        return Path.home() / ".punt-labs" / "quarry" / "logs"
 
     @classmethod
     def configure(cls, *, stderr_level: str = "WARNING") -> None:
@@ -30,7 +44,8 @@ class LoggingConfig:
         Stderr handler level is controlled by the caller, unless overridden
         by the ``QUARRY_LOG_LEVEL`` environment variable.
         """
-        cls._LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        log_dir = cls.log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         env_level = os.environ.get("QUARRY_LOG_LEVEL", "").upper()
         valid_levels = logging.getLevelNamesMapping()
@@ -52,7 +67,7 @@ class LoggingConfig:
                 "handlers": {
                     "file": {
                         "class": "logging.handlers.RotatingFileHandler",
-                        "filename": str(cls._LOG_FILE),
+                        "filename": str(log_dir / cls._LOG_FILE_NAME),
                         "maxBytes": cls._MAX_BYTES,
                         "backupCount": cls._BACKUP_COUNT,
                         "encoding": "utf-8",

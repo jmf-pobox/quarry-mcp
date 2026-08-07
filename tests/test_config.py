@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -120,28 +119,36 @@ class TestSyncBudget:
 
 
 class TestPersistentDb:
-    def test_write_and_read(self, tmp_path):
-        config_file = tmp_path / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("work")
-            assert Settings.read_default_db() == "work"
+    """The config file is a sibling of ``quarry_root``, resolved per call."""
 
-    def test_read_missing_file(self, tmp_path):
-        config_file = tmp_path / "nonexistent" / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            assert Settings.read_default_db() is None
+    @staticmethod
+    def _root_at(monkeypatch: pytest.MonkeyPatch, base: Path) -> Path:
+        """Point QUARRY_ROOT at ``base/data`` and return the config path it implies."""
+        monkeypatch.setenv("QUARRY_ROOT", str(base / "data"))
+        return base / "config.toml"
 
-    def test_read_default_returns_none(self, tmp_path):
-        config_file = tmp_path / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("default")
-            assert Settings.read_default_db() is None
+    def test_config_path_derives_from_quarry_root(self, monkeypatch, tmp_path):
+        expected = self._root_at(monkeypatch, tmp_path)
+        assert Settings.config_path() == expected
 
-    def test_write_creates_parent_dirs(self, tmp_path):
-        config_file = tmp_path / "nested" / "dir" / "config.toml"
-        with patch.object(Settings, "_CONFIG_PATH", config_file):
-            Settings.write_default_db("coding")
-            assert config_file.exists()
+    def test_write_and_read(self, monkeypatch, tmp_path):
+        self._root_at(monkeypatch, tmp_path)
+        Settings.write_default_db("work")
+        assert Settings.read_default_db() == "work"
+
+    def test_read_missing_file(self, monkeypatch, tmp_path):
+        self._root_at(monkeypatch, tmp_path / "nonexistent")
+        assert Settings.read_default_db() is None
+
+    def test_read_default_returns_none(self, monkeypatch, tmp_path):
+        self._root_at(monkeypatch, tmp_path)
+        Settings.write_default_db("default")
+        assert Settings.read_default_db() is None
+
+    def test_write_creates_parent_dirs(self, monkeypatch, tmp_path):
+        config_file = self._root_at(monkeypatch, tmp_path / "nested" / "dir")
+        Settings.write_default_db("coding")
+        assert config_file.exists()
 
 
 class TestActiveDb:

@@ -104,7 +104,7 @@ class Settings(BaseSettings):
 
     _DEFAULT_LANCEDB: ClassVar[Path] = quarry_root / "default" / "lancedb"
 
-    _CONFIG_PATH: ClassVar[Path] = Path.home() / ".punt-labs" / "quarry" / "config.toml"
+    _CONFIG_NAME: ClassVar[str] = "config.toml"
 
     # The current process's --db override, recorded by the CLI so the client
     # tier resolves the daemon's startup-db run dir (where serve.token lives)
@@ -138,11 +138,23 @@ class Settings(BaseSettings):
         )
 
     @classmethod
+    def config_path(cls) -> Path:
+        """Return the path of the persistent config file, resolved per call.
+
+        Derived from ``quarry_root`` (its sibling, one level up from the data
+        directory) rather than from ``Path.home()`` so that relocating the root
+        via ``QUARRY_ROOT`` relocates the config with it. Binding this as a class
+        constant would pin it to whatever home was in force at import time.
+        """
+        return cls().quarry_root.parent / cls._CONFIG_NAME
+
+    @classmethod
     def read_default_db(cls) -> str | None:
         """Read the persistent default database name from config file."""
-        if not cls._CONFIG_PATH.exists():
+        path = cls.config_path()
+        if not path.exists():
             return None
-        text = cls._CONFIG_PATH.read_text()
+        text = path.read_text()
         try:
             data = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
@@ -155,9 +167,10 @@ class Settings(BaseSettings):
     @classmethod
     def write_default_db(cls, name: str) -> None:
         """Write the persistent default database name to config file."""
-        cls._CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = cls.config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         content = f'[default]\ndatabase = "{name}"\n'
-        cls._CONFIG_PATH.write_text(content)
+        path.write_text(content)
 
     @classmethod
     def set_active_db(cls, name: str) -> None:
