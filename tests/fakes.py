@@ -10,6 +10,7 @@ installs.
 
 from __future__ import annotations
 
+import ipaddress
 import zlib
 from typing import TYPE_CHECKING, Final, Self, final
 
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
     from quarry.config import Settings
 
 DEFAULT_DIMENSION: Final[int] = 768
+
+# A DNS label is at most 63 characters; IDNA encoding raises past that.
+_MAX_DNS_LABEL: Final[int] = 63
 
 
 @final
@@ -109,3 +113,69 @@ class FakeEmbeddingBackend:
         norm = float(np.linalg.norm(vector))
         unit: NDArray[np.float32] = (vector / (norm or 1.0)).astype(np.float32)
         return unit
+
+
+@final
+class FakeResolver:
+    """Deterministic stand-in for ``socket.getaddrinfo`` on quarry's fetch gate.
+
+    Installed for every test by an autouse fixture, because a suite that reaches
+    real DNS is not hermetic: it fails when the network blips and it makes an
+    outbound request per fetch-gate check. The default answer is a public
+    address, so a host passes the SSRF policy exactly as a real public host
+    would; a test asserting on the policy's *rejections* patches this seam
+    itself with the address it wants classified.
+
+    ``getaddrinfo``'s real signature takes host, port, and four optional
+    arguments, and quarry calls it as ``getaddrinfo(host, None)``. Accepting
+    anything keeps the fake usable wherever it is installed.
+    """
+
+    __slots__ = ("_address", "_resolved")
+
+    _address: str
+    _resolved: list[str]
+
+    def __new__(cls, address: str = "93.184.216.34") -> Self:
+        self = super().__new__(cls)
+        self._address = address
+        self._resolved = []
+        return self
+
+    @property
+    def resolved(self) -> tuple[str, ...]:
+        """Return every host this resolver was asked about, in order."""
+        return tuple(self._resolved)
+
+    def __call__(
+        self, host: str, *_args: object, **_kwargs: object
+    ) -> list[tuple[object, object, object, str, tuple[str, int]]]:
+        """Return one address for *host*, in ``getaddrinfo``'s 5-tuple shape.
+
+        An address literal resolves to itself, as it does for real. Answering
+        the canned public address for ``10.0.0.1`` would tell the SSRF policy
+        that a private address is public and quietly disarm it.
+        """
+        self._resolved.append(host)
+        self._reject_overlong_label(host)
+        return [(None, None, None, "", (self._literal_or_default(host), 0))]
+
+    @staticmethod
+    def _reject_overlong_label(host: str) -> None:
+        """Raise ``UnicodeError`` on an over-long label, as the real resolver does.
+
+        A DNS label is at most 63 characters, and IDNA encoding raises
+        ``UnicodeError`` -- a ``ValueError``, notably not an ``OSError`` -- past
+        that. quarry's resolution boundary catches both to fail closed, so a
+        fake that always succeeded would leave that boundary untested.
+        """
+        if any(len(label) > _MAX_DNS_LABEL for label in host.split(".")):
+            msg = f"label empty or too long: {host!r}"
+            raise UnicodeError(msg)
+
+    def _literal_or_default(self, host: str) -> str:
+        """Return *host* when it is already an address, else the canned one."""
+        try:
+            return str(ipaddress.ip_address(host.strip("[]")))
+        except ValueError:
+            return self._address

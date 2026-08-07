@@ -28,7 +28,7 @@ from quarry.db_pointer import SELECTION
 from quarry.ingestion.backends import clear_caches
 from quarry.scratch_paths import ScratchGuard
 from quarry.types import LanceDB
-from tests.fakes import FakeEmbeddingBackend
+from tests.fakes import FakeEmbeddingBackend, FakeResolver
 from tests.hermetic_env import ENV, ProductionTreeGuard
 from tests.inproc_daemon import InProcessDaemon
 
@@ -383,6 +383,29 @@ def _forbid_real_model_load(request: pytest.FixtureRequest) -> Generator[None]:
         raise AssertionError(msg)
 
     with patch("onnxruntime.InferenceSession", _refuse):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _fake_dns(request: pytest.FixtureRequest) -> Generator[None]:
+    """Resolve hostnames from a fake, so the suite makes no DNS query.
+
+    quarry's fetch gate resolves every candidate URL before allowing a fetch,
+    which made a real outbound lookup per check: the suite failed whenever DNS
+    blipped, and a suite that fails when the network moves is not hermetic
+    however carefully its filesystem is isolated.
+
+    The SSRF policy itself is untouched and still fully tested — only the socket
+    call goes. A test asserting on the policy's rejections patches this same
+    seam with the address it wants classified, and that patch nests inside this
+    one and wins.
+
+    ``@pytest.mark.network`` opts a test back out to the real resolver.
+    """
+    if request.node.get_closest_marker("network") is not None:
+        yield
+        return
+    with patch("quarry.url_safety.socket_module.getaddrinfo", FakeResolver()):
         yield
 
 

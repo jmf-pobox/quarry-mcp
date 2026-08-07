@@ -15,6 +15,7 @@ import pytest
 from quarry.config import Settings
 from quarry.db_pointer import SELECTION
 from quarry.logging_config import LoggingConfig
+from quarry.url_safety import UrlRejectedError, UrlSafetyCheck
 from tests.hermetic_env import ENV, ProductionTreeGuard
 
 
@@ -171,3 +172,30 @@ class TestRealModelGuard:
         message = str(caught.value)
         assert "test_the_failure_names_the_offending_test" in message
         assert "pytest.mark.embedding" in message, "the message must say the way out"
+
+
+class TestNoRealDns:
+    """The fetch gate resolves from a fake, so the suite makes no DNS query.
+
+    quarry resolves every candidate URL before allowing a fetch. Left real, that
+    is an outbound lookup per check and a suite that fails whenever the network
+    moves -- which it did, intermittently, before this fixture existed.
+
+    Proven by behaviour rather than by inspecting the patch: only a fake can
+    answer for a hostname that cannot exist, and the other two show the fake is
+    faithful where faithfulness is what keeps the SSRF policy honest.
+    """
+
+    def test_a_hostname_that_cannot_exist_still_resolves(self) -> None:
+        """Proof rather than inspection: real DNS could never answer this."""
+        resolved = UrlSafetyCheck.validated_addresses("no-such-host.invalid")
+        assert [str(a) for a in resolved] == ["93.184.216.34"]
+
+    def test_an_address_literal_resolves_to_itself(self) -> None:
+        """The fake must not tell the SSRF policy a private address is public."""
+        with pytest.raises(UrlRejectedError):
+            UrlSafetyCheck.validated_addresses("10.0.0.1")
+
+    def test_the_overlong_label_boundary_still_raises(self) -> None:
+        """The fake reproduces the real resolver's UnicodeError, not just success."""
+        assert UrlSafetyCheck.reject_reason(f"https://{'a' * 64}.example.com/")

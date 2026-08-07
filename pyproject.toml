@@ -257,6 +257,7 @@ markers = [
     "resource: long-lived-process resource-invariant tests (fd/memory leak guards)",
     "integration: real-socket/live-server tests, also slow so excluded from the fast CI suite and run via -m integration",
     "embedding: opts back in to the real ONNX model (410 MB); deselected by default alongside slow, run via -m embedding",
+    "network: opts back in to real DNS resolution; the default suite resolves from a fake so it does not depend on the network",
 ]
 
 [tool.coverage.run]
