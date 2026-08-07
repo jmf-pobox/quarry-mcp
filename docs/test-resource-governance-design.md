@@ -234,6 +234,47 @@ Options B and D together. Real-model tests carry `@pytest.mark.embedding`, are
 excluded from the default run alongside `slow`, and run serially in the
 integration tier that already needs the model.
 
+### As implemented — the choke point is one level lower than described above
+
+Option B is stated as replacing `get_embedding_backend` and
+`new_embedding_backend` in `quarry.ingestion.backends`. That is necessary and it
+is not sufficient, for the same reason the forty ad-hoc patches were not.
+`quarry.ingestion.streaming` and `quarry.http_resources` each bind their factory
+with a module-scope `from quarry.ingestion.backends import ...`, so by the time
+a fixture patches the factory module those names are already bound to the real
+implementation. Patching only the factory module reproduces the exact
+wrong-import-site failure this section exists to close.
+
+The implemented fixture replaces all three of `get_embedding_backend`,
+`new_embedding_backend`, and `quarry.embeddings.OnnxEmbeddingBackend`. The third
+is the one that does the work: `new_embedding_backend` imports it *inside its
+body*, so it resolves per call rather than per import, and every route — cached,
+fresh, current, or added tomorrow — passes through it. The first two are kept
+because they are the named factory contract and a future caller may reach them
+by module attribute rather than by from-import.
+
+The marker also split in two, because one marker conflated two concerns.
+`@pytest.mark.embedding` means "may load the real 410 MB model" and is
+deselected by default alongside `slow`, as recommended above. But
+`test_backends`, `test_embeddings`, and doctor's install path assert on what the
+factory *builds* while supplying their own ONNX-session mocks: they need the
+real factory and must stay in the default CI run. Those use a separate
+`real_embedding_factory` fixture, which opts out of the fake only — the
+`InferenceSession` guard from option D stays armed, so they still cannot load a
+real model.
+
+Two environmental couplings surfaced during implementation that this document
+did not predict, both fixed in `tests/hermetic_env.py`. Redirecting `HOME` moves
+`GNUPGHOME`, and the workspace exports `commit.gpgsign=true` through
+`GIT_CONFIG_*`, so every throwaway git repository a test builds failed to
+commit; the ambient injection is dropped for the session, which those tests
+needed regardless — they had been silently depending on the operator's unlocked
+gpg agent. And the session home cannot live under the repository:
+`ScratchGuard` refuses a repo's `.tmp` and any worktree checked out below one
+(section 5.2's neighbour, DES-045), which would leave `_pytest_tmp_base` with no
+guard-permitted fallback and the suite with nowhere indexable to build project
+roots. It lives under the real `~/.cache`, outside the three watched files.
+
 ## 4. Question 2 — the concurrency budget and its enforcement
 
 ### Where quarry's obligation ends
