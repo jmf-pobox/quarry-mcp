@@ -22,9 +22,11 @@ class DatabaseRoutes(RouteGroup):
 
         No size is reported.  The only way to produce the database's on-disk
         size is to walk the tree, which cost 10 to 19 seconds per request here
-        and which any client could trigger; LanceDB's O(1) ``table.stats()``
-        measures the dataset rather than the directory and omits the indices,
-        so it answers a different question and is not a substitute.
+        and which any client could trigger.  LanceDB's O(1) ``table.stats()``
+        is not a substitute: it measures the LIVE DATASET, not the directory,
+        so it misses whatever else the directory holds -- superseded data-file
+        versions, index files -- which measured 43% and 81% of the total on two
+        stores.  A varying shortfall is not one a caller can correct for.
         """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:

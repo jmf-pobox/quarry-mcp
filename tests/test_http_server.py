@@ -2379,12 +2379,19 @@ class TestNoRequestPathWalksTheTree:
         assert not hasattr(storage, "discover_databases")
 
     def test_no_route_module_sizes_a_directory(self) -> None:
-        """A future route must not reintroduce a walk under another import."""
+        """A future route must not reintroduce a walk under another spelling.
+
+        The token list covers the ways a directory gets measured, not just the
+        helper that was deleted: a reimplementation is far likelier to arrive as
+        an inline ``rglob`` or ``os.walk`` summing ``st_size`` than as a
+        re-import of the old name.
+        """
+        walks = ("dir_size_bytes", "du -s", "rglob", "os.walk", "st_size")
         routes_dir = Path(routes.__file__ or "").parent
         for module in sorted(routes_dir.glob("*.py")):
             source = module.read_text()
-            assert "dir_size_bytes" not in source, module.name
-            assert "du -s" not in source, module.name
+            for token in walks:
+                assert token not in source, f"{module.name}: {token}"
 
 
 class TestDatabases:

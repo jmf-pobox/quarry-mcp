@@ -27,11 +27,17 @@ across `transform`, `index`, and `connector`).
   `quarry status` in about 0.8.
 
   There is no cheap replacement, and one was checked rather than assumed:
-  LanceDB's `table.stats()` returns in 0.3 ms but measures the dataset, not the
-  directory — it omitted 43% of the on-disk footprint here (the indices), so
-  publishing it as the size would have been a wrong number rather than a fast
-  one. The removal is total: `dir_size_bytes`, `format_size` and the unused
-  `discover_databases` are deleted along with the fields.
+  LanceDB's `table.stats()` returns in 0.3 ms, but it measures the **live
+  dataset**, not the directory — it excludes whatever the directory also holds,
+  which on two different stores meant under-reporting the on-disk footprint by
+  43% and by 81%. What makes up that gap varies (superseded data-file versions,
+  index files), which is the point: it is not a constant a caller could correct
+  for. Publishing it as the size would have been a wrong number rather than a
+  fast one.
+
+  The removal is total — no tombstones: `dir_size_bytes`, `format_size`,
+  `_fmt_size`, the `DatabaseSummary` type, and the unused `discover_databases`
+  are all deleted along with the fields.
 
 - **`tool`** — **`quarry doctor` no longer reports storage size or probes the
   OCR engine**, and is roughly ten times faster for it: 1.7 seconds where it

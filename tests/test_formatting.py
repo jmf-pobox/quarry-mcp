@@ -169,8 +169,8 @@ class TestDatabases:
 
     def test_marks_current(self) -> None:
         dbs = [
-            {"name": "default", "document_count": 5, "size_bytes": 1024},
-            {"name": "work", "document_count": 10, "size_bytes": 2048},
+            {"name": "default", "document_count": 5},
+            {"name": "work", "document_count": 10},
         ]
         result = format_databases(dbs, current="work")
         assert "* work" in result
