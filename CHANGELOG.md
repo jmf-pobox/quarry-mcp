@@ -16,6 +16,23 @@ across `transform`, `index`, and `connector`).
 
 ### Removed
 
+- **`tool`** — **the daemon no longer reports database size**, on either
+  `/v1/databases` or `/status`, and `quarry list databases` and `quarry status`
+  no longer show it. Producing that number meant walking the whole data tree on
+  every request: 10 to 19 seconds on a 1.13 GB store, payable by any client and
+  stacking across clients on one daemon. It had already crossed from slow into
+  broken — a daemon under load could not answer `/v1/databases` inside the
+  client's 15-second timeout, so the command failed rather than lagged.
+  Afterwards `quarry list databases` runs in 1.3 to 1.8 seconds and
+  `quarry status` in about 0.8.
+
+  There is no cheap replacement, and one was checked rather than assumed:
+  LanceDB's `table.stats()` returns in 0.3 ms but measures the dataset, not the
+  directory — it omitted 43% of the on-disk footprint here (the indices), so
+  publishing it as the size would have been a wrong number rather than a fast
+  one. The removal is total: `dir_size_bytes`, `format_size` and the unused
+  `discover_databases` are deleted along with the fields.
+
 - **`tool`** — **`quarry doctor` no longer reports storage size or probes the
   OCR engine**, and is roughly ten times faster for it: 1.7 seconds where it
   previously took 15 to 52 depending on how busy the machine was. The Storage

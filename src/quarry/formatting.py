@@ -57,20 +57,6 @@ def truncate(text: str, max_len: int = 160) -> str:
     return collapsed[: max_len - 3].rstrip() + "..."
 
 
-def _fmt_size(size_bytes: int) -> str:
-    """Format bytes as human-readable size."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    kib = size_bytes / 1024
-    if kib < 1024:
-        return f"{kib:.1f} KB"
-    mib = kib / 1024
-    if mib < 1024:
-        return f"{mib:.1f} MB"
-    gib = mib / 1024
-    return f"{gib:.1f} GB"
-
-
 def _fmt_cell(text: str, width: int, align: Literal["left", "right"]) -> str:
     """Pad *text* to *width* using visible width (ANSI-aware)."""
     padding = max(0, width - visible_width(text))
@@ -273,7 +259,6 @@ def format_databases(
     specs = [
         ColumnSpec("DATABASE", 8, fixed=False),
         ColumnSpec("DOCUMENTS", 9, align="right"),
-        ColumnSpec("SIZE", 8, align="right"),
     ]
     rows = [
         [
@@ -281,7 +266,6 @@ def format_databases(
             if db.get("name") == current
             else db.get("name", "?"),
             str(db.get("document_count", 0)),
-            _fmt_size(db.get("size_bytes", 0)),
         ]
         for db in databases
     ]
@@ -318,7 +302,6 @@ def format_status(info: Mapping[str, Any]) -> str:
         f"   Chunks:         {info.get('chunk_count', 0):,}",
         f"   Directories:    {info.get('registered_directories', 0)}",
         f"   Database:       {info.get('database_path', '?')}",
-        f"   Size:           {_fmt_size(info.get('database_size_bytes', 0))}",
         f"   Model:          {info.get('embedding_model', '?')}",
         f"   Provider:       {info.get('provider', '?')}",
     ]

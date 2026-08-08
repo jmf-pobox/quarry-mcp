@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from quarry.formatting import (
     ColumnSpec,
-    _fmt_size,
     format_collections,
     format_databases,
     format_delete_summary,
@@ -41,18 +40,6 @@ class TestHelpers:
 
     def test_truncate_collapses_whitespace(self) -> None:
         assert truncate("hello   \n  world") == "hello world"
-
-    def test_fmt_size_bytes(self) -> None:
-        assert _fmt_size(512) == "512 B"
-
-    def test_fmt_size_kb(self) -> None:
-        assert _fmt_size(2048) == "2.0 KB"
-
-    def test_fmt_size_mb(self) -> None:
-        assert _fmt_size(5 * 1024 * 1024) == "5.0 MB"
-
-    def test_fmt_size_gb(self) -> None:
-        assert _fmt_size(2 * 1024 * 1024 * 1024) == "2.0 GB"
 
 
 class TestFormatTable:
@@ -219,7 +206,6 @@ class TestStatus:
             "chunk_count": 1234,
             "registered_directories": 2,
             "database_path": "/home/user/.punt-labs/quarry/lancedb",
-            "database_size_bytes": 12582912,
             "embedding_model": "arctic-embed",
         }
         result = format_status(info)
@@ -227,7 +213,7 @@ class TestStatus:
         assert "45" in result
         assert "1,234" in result
         assert "/home/user/.punt-labs/quarry/lancedb" in result
-        assert "12.0 MB" in result
+        assert "Size:" not in result  # the tree-walking field is gone
         assert "arctic-embed" in result
 
     def test_includes_provider(self) -> None:
@@ -237,7 +223,6 @@ class TestStatus:
             "chunk_count": 10,
             "registered_directories": 0,
             "database_path": "/tmp/test",
-            "database_size_bytes": 0,
             "embedding_model": "test-model",
             "provider": "CPUExecutionProvider (int8)",
         }
@@ -252,7 +237,6 @@ class TestStatus:
             "chunk_count": 0,
             "registered_directories": 0,
             "database_path": "/tmp/test",
-            "database_size_bytes": 0,
             "embedding_model": "test-model",
         }
         result = format_status(info)

@@ -9,16 +9,15 @@ class DatabaseInfo(BaseModel):
     """One named database's summary.
 
     The daemon is fixed to a single database, so the list returns exactly one
-    entry.  ``extra="allow"`` keeps parity with the local
-    ``discover_databases`` shape the CLI renders identically.
+    entry.  No size field: producing it meant walking the whole tree per
+    request (10-19 s here), and LanceDB's O(1) statistic measures the dataset
+    rather than the directory, so it cannot stand in.
     """
 
     model_config = ConfigDict(extra="allow")
 
     name: str
     document_count: int
-    size_bytes: int
-    size_description: str
 
 
 class DatabaseList(BaseModel):

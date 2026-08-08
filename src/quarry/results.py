@@ -172,15 +172,6 @@ class SitemapResult(TypedDict):
     errors: list[str]
 
 
-class DatabaseSummary(TypedDict):
-    """Summary of a named database from the databases command."""
-
-    name: str
-    document_count: int
-    size_bytes: int
-    size_description: str
-
-
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     """Outcome of a single ``quarry doctor`` health check.

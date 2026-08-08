@@ -26,6 +26,7 @@ from starlette.testclient import TestClient
 from quarry.api import HealthResponse, SearchResponse, StatusResponse
 from quarry.backfill import BackfillStats
 from quarry.captures_collection import CapturesCollection
+from quarry.daemon import routes
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
@@ -2361,6 +2362,31 @@ class TestSync:
         assert data["results"]["math"]["ingested"] == 3
 
 
+class TestNoRequestPathWalksTheTree:
+    """No daemon route may size a directory; that walk cost 10-19s per request.
+
+    Structural rather than timed, for the same reason the doctor guard is: a
+    wall-clock budget measures the machine.  What needs defending is that the
+    operation cannot come back — any client could trigger it, and N clients
+    stacked it on one daemon.
+    """
+
+    def test_the_walk_helper_no_longer_exists(self) -> None:
+        """It lost its last caller with the size fields, so it was deleted."""
+        import quarry.db.storage as storage
+
+        assert not hasattr(storage, "dir_size_bytes")
+        assert not hasattr(storage, "discover_databases")
+
+    def test_no_route_module_sizes_a_directory(self) -> None:
+        """A future route must not reintroduce a walk under another import."""
+        routes_dir = Path(routes.__file__ or "").parent
+        for module in sorted(routes_dir.glob("*.py")):
+            source = module.read_text()
+            assert "dir_size_bytes" not in source, module.name
+            assert "du -s" not in source, module.name
+
+
 class TestDatabases:
     """Tests for GET /databases endpoint."""
 
@@ -2376,12 +2402,8 @@ class TestDatabases:
         assert data["total_databases"] == 1
         assert len(data["databases"]) == 1
         entry = data["databases"][0]
-        assert set(entry.keys()) == {
-            "name",
-            "document_count",
-            "size_bytes",
-            "size_description",
-        }
+        # No size: producing it walked the whole tree on every request.
+        assert set(entry.keys()) == {"name", "document_count"}
         assert entry["document_count"] == 1
 
     def test_name_from_parent_dir(self, tmp_path: Path) -> None:

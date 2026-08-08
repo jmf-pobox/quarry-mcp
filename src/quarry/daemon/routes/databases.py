@@ -8,7 +8,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from quarry.daemon.routes.base import RouteGroup
-from quarry.db.storage import dir_size_bytes, format_size
 
 
 @final
@@ -19,20 +18,22 @@ class DatabaseRoutes(RouteGroup):
         """Return a single-entry list describing the server's database.
 
         The server process is fixed to one database — selection is a
-        client-side concern.  The response shape matches ``discover_databases``
-        so the CLI can format remote and local output identically.
+        client-side concern.
+
+        No size is reported.  The only way to produce the database's on-disk
+        size is to walk the tree, which cost 10 to 19 seconds per request here
+        and which any client could trigger; LanceDB's O(1) ``table.stats()``
+        measures the dataset rather than the directory and omits the indices,
+        so it answers a different question and is not a substitute.
         """
         auth_resp = self.reject_unauthorized(request)
         if auth_resp is not None:
             return auth_resp
 
         lance_dir = self.ctx.settings.lancedb_path
-        size_bytes = dir_size_bytes(lance_dir) if lance_dir.exists() else 0
         summary = {
             "name": lance_dir.parent.name or "default",
             "document_count": self._document_count(),
-            "size_bytes": size_bytes,
-            "size_description": format_size(size_bytes),
         }
         return JSONResponse({"total_databases": 1, "databases": [summary]})
 
