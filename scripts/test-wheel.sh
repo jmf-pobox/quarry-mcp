@@ -2,7 +2,10 @@
 # Test the built wheel in an isolated venv on port 8422.
 #
 # Verifies: import, onnxruntime providers, CLI entry point, doctor,
-# serve + search round-trip.  All temp state lives in .tmp/ (gitignored).
+# daemon boot + search round-trip.  All temp state lives in .tmp/ (gitignored),
+# including the daemon's data root -- without QUARRY_ROOT the test daemon builds
+# its database inside the operator's real tree, which this script claimed not to
+# touch.
 #
 # Usage: bash scripts/test-wheel.sh   (or: make test-wheel)
 
@@ -19,13 +22,18 @@ PORT=8422
 VENV=.tmp/test-venv
 DAEMON_PID=""
 DAEMON_LOG=.tmp/test-wheel-daemon.log
+# The daemon inherits this, so its database lands in scratch rather than in
+# ~/.punt-labs/quarry/data.  HOME is deliberately left alone: the ONNX model
+# cache lives there and re-downloading 410 MB per run is not isolation.
+DATA_ROOT=$PWD/.tmp/test-wheel-data
+export QUARRY_ROOT="$DATA_ROOT"
 
 cleanup() {
     if [ -n "$DAEMON_PID" ]; then
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    rm -rf "$VENV"
+    rm -rf "$VENV" "$DATA_ROOT"
     echo "[test-wheel] Cleanup: done"
 }
 trap cleanup EXIT
@@ -87,7 +95,7 @@ fi
 
 # Step 3e: Serve on :8422 + API round-trip.
 echo "[test-wheel] Starting daemon on :$PORT..."
-"$VENV/bin/quarry" --db test-wheel serve --port "$PORT" >"$DAEMON_LOG" 2>&1 &
+"$VENV/bin/quarryd" --db test-wheel --port "$PORT" >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 
 # Wait for health endpoint (up to 30 seconds).
@@ -105,10 +113,19 @@ if [ "$HEALTH_OK" -ne 1 ]; then
 fi
 echo "[test-wheel] Serve on :$PORT: PASS"
 
+# The daemon requires serve.token on EVERY request, loopback included, and mints
+# a fresh one per start (DES-031 v2.2 R4).  /health is the only unauthenticated
+# route, so the search round-trip has to present the live bearer -- read from the
+# run dir the daemon just wrote it to, never from a stored config.
+TOKEN_FILE="$DATA_ROOT/test-wheel/serve.token"
+[ -f "$TOKEN_FILE" ] || fail "Serve token" "daemon minted no token at $TOKEN_FILE"
+TOKEN=$(cat "$TOKEN_FILE")
+
 # Search test -- query the search endpoint on the empty DB.
-SEARCH_BODY=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$PORT/search?q=test&limit=1")
+SEARCH_BODY=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $TOKEN" \
+    "http://127.0.0.1:$PORT/v1/search?q=test&limit=1")
 SEARCH_STATUS=$(echo "$SEARCH_BODY" | tail -1)
-SEARCH_RESPONSE=$(echo "$SEARCH_BODY" | head -n -1)
+SEARCH_RESPONSE=$(echo "$SEARCH_BODY" | sed '$d')  # portable 'all but last'
 if [ "$SEARCH_STATUS" != "200" ]; then
     fail "Search test" "HTTP $SEARCH_STATUS from /search (response: $SEARCH_RESPONSE)"
 fi
