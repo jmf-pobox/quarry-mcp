@@ -11,6 +11,7 @@ from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
 from quarry.file_lock import FileLock
+from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE
 
 
@@ -22,6 +23,79 @@ def test_enable_writes_guide_marker_and_import(tmp_path: Path) -> None:
     assert EnabledMarker(tmp_path).is_present()
     assert REPO_IMPORT_LINE in (tmp_path / "CLAUDE.md").read_text()
     assert (tmp_path / ".punt-labs" / "quarry" / "CLAUDE.md").exists()
+
+
+def test_enable_ensures_captures_gitignore_entry(tmp_path: Path) -> None:
+    result = Enablement(tmp_path).enable()
+    assert result.gitignore_ensured is True
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+
+
+def test_enable_gitignore_is_idempotent(tmp_path: Path) -> None:
+    first = Enablement(tmp_path).enable()
+    second = Enablement(tmp_path).enable()
+    assert first.gitignore_ensured is True
+    assert second.gitignore_ensured is False
+    content = (tmp_path / ".gitignore").read_text()
+    assert content.count(CAPTURES_GITIGNORE_ENTRY) == 1
+
+
+def test_enable_backfills_gitignore_on_already_enabled_repo(tmp_path: Path) -> None:
+    """A repo enabled before this step existed gets the line backfilled, not skipped."""
+    Enablement(tmp_path).enable()
+    (tmp_path / ".gitignore").unlink()  # simulate: enabled, but no gitignore entry yet
+
+    result = Enablement(tmp_path).enable()
+
+    assert result.gitignore_ensured is True
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+
+
+def test_enable_gitignore_survives_disable(tmp_path: Path) -> None:
+    """disable() is additive-only for .gitignore — it never prunes the entry."""
+    Enablement(tmp_path).enable()
+    Enablement(tmp_path).disable()
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+    assert QuarryGitignore(tmp_path).ensure() is False
+
+
+def test_enable_excludes_the_claude_md_lock_file(tmp_path: Path) -> None:
+    """enable() must not leave .CLAUDE.md.lock unignored (Bugbot MEDIUM finding).
+
+    FileLock creates .CLAUDE.md.lock and never removes it (see FileLock's
+    docstring); without a matching .gitignore entry, every enable() leaves a
+    machine-local artifact a bare ``git add -A`` could commit.
+    """
+    from quarry.file_lock import FILE_LOCK_GITIGNORE_GLOB
+
+    Enablement(tmp_path).enable()
+
+    assert (tmp_path / ".CLAUDE.md.lock").exists()
+    ignore_lines = (tmp_path / ".gitignore").read_text().splitlines()
+    assert FILE_LOCK_GITIGNORE_GLOB in ignore_lines
+
+
+def test_enable_ensures_gitignore_before_guide_deposit_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The .gitignore exclusion must land even when a later enable step fails.
+
+    A repo that never gets past guide deposit is still protected: the
+    vulnerability window (unprotected capture writing) never opens, even
+    though enable() itself did not complete.
+    """
+    from quarry.guidance import Guidance
+
+    def boom(self: Guidance) -> None:
+        raise OSError("deposit failed")
+
+    monkeypatch.setattr(Guidance, "deposit", boom)
+
+    with pytest.raises(OSError, match="deposit failed"):
+        Enablement(tmp_path).enable()
+
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+    assert not EnabledMarker(tmp_path).is_present()
 
 
 def test_enable_biconditional_marker_iff_import(tmp_path: Path) -> None:

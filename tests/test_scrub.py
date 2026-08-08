@@ -311,6 +311,82 @@ def test_profanity_disabled_keeps_word() -> None:
     assert counts.get("profanity", 0) == 0
 
 
+@pytest.mark.parametrize(
+    "inflected",
+    [
+        "fucking",
+        "fucked",
+        "idiots",
+        "shitting",
+        "shitted",
+        "crapped",
+        "crapping",
+        "bitches",
+        "bitching",
+        "damning",
+        "stupider",
+        "dumber",
+        "assholes",
+        "douching",
+    ],
+)
+def test_profanity_inflected_forms_are_redacted(inflected: str) -> None:
+    """A real transcript leak: only the base form was matched, not inflections."""
+    out, counts = _scrub(f"that was {inflected} annoying")
+    assert inflected not in out
+    assert "[REDACTED:profanity]" in out
+    assert counts.get("profanity", 0) >= 1
+
+
+@pytest.mark.parametrize(
+    "safe",
+    [
+        "class",
+        "passing",
+        "assist",
+        "embassy",
+        "harassed",
+        "brass",
+        "classy",
+        "passed",
+        "assassin",
+    ],
+)
+def test_profanity_inflection_does_not_over_match_safe_words(safe: str) -> None:
+    """Expanding to inflected forms must not widen the false-positive set."""
+    out, counts = _scrub(f"the {safe} is fine")
+    assert safe in out
+    assert counts.get("profanity", 0) == 0
+
+
+def test_profanity_excludes_dicker_real_word_collision() -> None:
+    """ "dicker" (to negotiate) is a real word, unrelated to the "dick" slur."""
+    out, counts = _scrub("they had to dicker over the price")
+    assert "dicker" in out
+    assert counts.get("profanity", 0) == 0
+
+
+def test_profanity_excludes_heller_surname_collision() -> None:
+    """Heller is a common surname (e.g. author Joseph Heller), unrelated to hell."""
+    out, counts = _scrub("Joseph Heller wrote Catch-22")
+    assert "Heller" in out
+    assert counts.get("profanity", 0) == 0
+
+
+def test_profanity_excludes_craps_dice_game_collision() -> None:
+    """ "craps" is a real dice game, unrelated to the "crap" slur."""
+    out, counts = _scrub("we played a round of craps at the casino")
+    assert "craps" in out
+    assert counts.get("profanity", 0) == 0
+
+
+def test_profanity_excludes_jerker_occupational_term_collision() -> None:
+    """ "jerker" (e.g. "soda jerker") is a real, unrelated occupational term."""
+    out, counts = _scrub("the soda jerker made a milkshake")
+    assert "jerker" in out
+    assert counts.get("profanity", 0) == 0
+
+
 # ---------------------------------------------------------------------------
 # Flag toggles and idempotence
 # ---------------------------------------------------------------------------
