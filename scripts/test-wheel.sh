@@ -136,7 +136,7 @@ SEARCH_BODY=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
 SEARCH_STATUS=$(echo "$SEARCH_BODY" | tail -1)
 SEARCH_RESPONSE=$(echo "$SEARCH_BODY" | sed '$d')  # portable 'all but last'
 if [ "$SEARCH_STATUS" != "200" ]; then
-    fail "Search test" "HTTP $SEARCH_STATUS from /search (response: $SEARCH_RESPONSE)"
+    fail "Search test" "HTTP $SEARCH_STATUS from /v1/search (response: $SEARCH_RESPONSE)"
 fi
 echo "[test-wheel] Search test: PASS"
 
