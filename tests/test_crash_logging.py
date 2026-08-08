@@ -127,7 +127,13 @@ class TestEventLoop:
     def test_the_task_name_survives_into_the_log(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The name is the forensic detail; the message alone does not carry it."""
+        """The name is the forensic detail; the message alone does not carry it.
+
+        Scoped to OUR record on purpose.  Chaining to asyncio's default handler
+        means its copy also names the task, so asserting against the whole of
+        ``caplog.text`` passes even with our insertion stripped out — the test
+        would be measuring asyncio rather than this module.
+        """
 
         async def main() -> None:
             loop = asyncio.get_running_loop()
@@ -151,7 +157,11 @@ class TestEventLoop:
 
         with caplog.at_level(logging.ERROR):
             asyncio.run(main())
-        assert "watch-sweep" in caplog.text, "the task name must reach the log"
+        ours = [r for r in caplog.records if r.name == "quarry.crash_logging"]
+        assert ours, "this module must log the failure itself, not only delegate"
+        assert "watch-sweep" in ours[0].getMessage(), (
+            "the task name must reach OUR record, not just asyncio's copy"
+        )
 
     def test_a_context_without_an_exception_still_reports(
         self, caplog: pytest.LogCaptureFixture

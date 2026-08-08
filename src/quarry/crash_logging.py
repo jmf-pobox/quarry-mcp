@@ -12,9 +12,18 @@ a worker thread's ``threading.excepthook``, and the event loop's exception
 handler for a task nobody awaited.  Missing any one of them leaves a class of
 failure invisible in the file.
 
-Every hook delegates to the previously installed one afterwards, so stderr
-keeps its copy: the supervisor's file stays a backstop for a crash that happens
-before logging is configured, or that breaks logging itself.
+Every hook delegates to the previously installed one afterwards, so nothing is
+taken away by adding ours.  What that preserves differs by hook, and the
+difference is worth knowing.  The two interpreter hooks delegate to handlers
+that write stderr DIRECTLY, which keeps the supervisor's file as a backstop for
+a crash before logging is configured or one that breaks logging itself.  The
+loop handler's chain is not that: ``default_exception_handler`` reports through
+the ``asyncio`` LOGGER, so its copy travels the same root handlers as ours and
+lands in the file too.
+
+The trade there is deliberate: a loop failure is recorded twice, once by us with
+the task name and once by asyncio, and two entries for one fault is a smaller
+cost than dropping the detail asyncio renders that we do not.
 """
 
 from __future__ import annotations
@@ -75,9 +84,12 @@ class UncaughtExceptionLog:
         In a daemon whose tasks are named, that name is the forensic detail
         this logging exists to preserve, so it goes into the logged line.
 
-        The handler then chains to ``default_exception_handler``, matching the
-        other two hooks: ours is an addition, not a replacement, and the
-        supervisor's stderr keeps its copy.
+        The handler then chains to ``default_exception_handler`` so ours is an
+        addition rather than a replacement.  Note what that costs and buys:
+        asyncio reports through its own LOGGER, not straight to stderr, so its
+        copy goes through the same root handlers and the file gets both entries.
+        Two records for one fault, in exchange for never silently keeping less
+        than the default would have.
         """
 
         def handler(
