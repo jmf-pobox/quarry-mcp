@@ -3,8 +3,9 @@
 #
 # Verifies: import, onnxruntime providers, CLI entry point, doctor,
 # daemon boot + search round-trip.  All temp state lives in .tmp/ (gitignored),
-# including the daemon's data root -- without QUARRY_ROOT the test daemon builds
-# its database inside the operator's real tree, which this script claimed not to
+# including the daemon's data root AND its log directory -- these are configured
+# independently, so without both the test daemon builds its database, or appends
+# its log, inside the operator's real tree, which this script claimed not to
 # touch.
 #
 # Usage: bash scripts/test-wheel.sh   (or: make test-wheel)
@@ -26,14 +27,19 @@ DAEMON_LOG=.tmp/test-wheel-daemon.log
 # ~/.punt-labs/quarry/data.  HOME is deliberately left alone: the ONNX model
 # cache lives there and re-downloading 410 MB per run is not isolation.
 DATA_ROOT=$PWD/.tmp/test-wheel-data
+LOG_ROOT=$PWD/.tmp/test-wheel-logs
 export QUARRY_ROOT="$DATA_ROOT"
+# The log destination is configured separately from the data root, so isolating
+# one does not isolate the other: without this the test daemon appends to the
+# operator's real ~/.punt-labs/quarry/logs/quarry.log.
+export QUARRY_LOG_DIR="$LOG_ROOT"
 
 cleanup() {
     if [ -n "$DAEMON_PID" ]; then
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    rm -rf "$VENV" "$DATA_ROOT"
+    rm -rf "$VENV" "$DATA_ROOT" "$LOG_ROOT"
     echo "[test-wheel] Cleanup: done"
 }
 trap cleanup EXIT
@@ -121,9 +127,12 @@ TOKEN_FILE="$DATA_ROOT/test-wheel/serve.token"
 [ -f "$TOKEN_FILE" ] || fail "Serve token" "daemon minted no token at $TOKEN_FILE"
 TOKEN=$(cat "$TOKEN_FILE")
 
-# Search test -- query the search endpoint on the empty DB.
-SEARCH_BODY=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $TOKEN" \
-    "http://127.0.0.1:$PORT/v1/search?q=test&limit=1")
+# Search test -- query the search endpoint on the empty DB.  The bearer goes in
+# on stdin via --config, never on curl's argv: an argument is readable through
+# ps by any local user for the lifetime of the request.
+SEARCH_BODY=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" \
+    | curl -s -w "\n%{http_code}" --config - \
+        "http://127.0.0.1:$PORT/v1/search?q=test&limit=1")
 SEARCH_STATUS=$(echo "$SEARCH_BODY" | tail -1)
 SEARCH_RESPONSE=$(echo "$SEARCH_BODY" | sed '$d')  # portable 'all but last'
 if [ "$SEARCH_STATUS" != "200" ]; then

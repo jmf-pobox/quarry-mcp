@@ -44,10 +44,13 @@ type Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 class JsonContentTypeGuard:
     """ASGI middleware: every ``POST`` must carry ``Content-Type: application/json``.
 
-    A fail-closed CSRF choke point for the no-auth loopback daemon.  A browser
+    A fail-closed CSRF choke point layered under the bearer check.  A browser
     can send the CORS "simple" content types (``text/plain``, the form types) or
     none at all cross-origin without a preflight; requiring JSON forces a
-    preflight the daemon's CORS policy refuses.  Because it sits at request
+    preflight the daemon's CORS policy refuses.  Defence in depth, not the only
+    defence: the daemon requires ``serve.token`` on every engine request,
+    loopback included, so this stands behind authentication rather than in place
+    of it.  Because it sits at request
     admission it guards *every* POST — including routes that read no body
     (``/captures/push``) or accept an empty one (optimize/backfill/sync) and any
     future POST route — so no handler has to repeat the check.  ``GET``/``DELETE``
