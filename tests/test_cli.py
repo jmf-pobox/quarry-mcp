@@ -433,7 +433,6 @@ def _status_request(
             "chunk_count": 0,
             "registered_directories": 0,
             "database_path": "/db",
-            "database_size_bytes": 0,
             "embedding_model": "m",
             "provider": "cpu",
             "embedding_dimension": 768,

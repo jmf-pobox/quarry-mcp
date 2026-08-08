@@ -100,3 +100,6 @@ uv.toml
 
 # punt-kit CLAUDE.md import lock — a machine-local artifact, never a repo file.
 .CLAUDE.md.punt-import.lock
+
+# vox machine-local config (the enabled marker and vox.md ship; local prefs do not)
+.punt-labs/vox/vox.local.md

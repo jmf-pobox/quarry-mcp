@@ -45,7 +45,6 @@ class StatusResponse(BaseModel):
     chunk_count: int
     registered_directories: int
     database_path: str
-    database_size_bytes: int
     embedding_model: str
     provider: str
     embedding_dimension: int

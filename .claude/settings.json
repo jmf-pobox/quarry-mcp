@@ -41,7 +41,8 @@
       "Bash(quarry:*)",
       "Write",
       "Read",
-      "Edit"
+      "Edit",
+      "Bash(vox:*)"
     ],
     "deny": [
       "Bash(curl:*)",

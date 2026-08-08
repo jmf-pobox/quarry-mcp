@@ -26,12 +26,11 @@ class ResultFormatter:
 
     @staticmethod
     def databases(databases: list[dict[str, object]]) -> str:
-        """Format named databases with document counts and storage size."""
+        """Format named databases with their document counts."""
         if not databases:
             return "No databases found."
         return "\n".join(
-            f"{db.get('name', '')}: {db.get('document_count', 0)} documents, "
-            f"{db.get('size_description', '')}"
+            f"{db.get('name', '')}: {db.get('document_count', 0)} documents"
             for db in databases
         )
 

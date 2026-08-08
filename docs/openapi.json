@@ -67,8 +67,7 @@
         "type": "object"
       },
       "DatabaseInfo": {
-        "additionalProperties": true,
-        "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so the list returns exactly one\nentry.  ``extra=\"allow\"`` keeps parity with the local\n``discover_databases`` shape the CLI renders identically.",
+        "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so the list returns exactly one\nentry.  No size field: producing it meant walking the whole tree per\nrequest (10-19 s here), and LanceDB's O(1) statistic measures the live\ndataset rather than the directory, so it cannot stand in.\n\nThe model is CLOSED, unlike its siblings here.  Those mirror an engine\ncatalog or registry row and stay open so a new upstream field is not a\nvalidation error; this one is built from a literal two-key dict in the\nroute, so there is no upstream to track.  Closed also means a daemon that\nre-grew ``size_bytes`` fails client validation instead of quietly serving\nit again.",
         "properties": {
           "document_count": {
             "title": "Document Count",
@@ -77,21 +76,11 @@
           "name": {
             "title": "Name",
             "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
-          },
-          "size_description": {
-            "title": "Size Description",
-            "type": "string"
           }
         },
         "required": [
           "name",
-          "document_count",
-          "size_bytes",
-          "size_description"
+          "document_count"
         ],
         "title": "DatabaseInfo",
         "type": "object"
@@ -501,10 +490,6 @@
             "title": "Database Path",
             "type": "string"
           },
-          "database_size_bytes": {
-            "title": "Database Size Bytes",
-            "type": "integer"
-          },
           "document_count": {
             "title": "Document Count",
             "type": "integer"
@@ -532,7 +517,6 @@
           "chunk_count",
           "registered_directories",
           "database_path",
-          "database_size_bytes",
           "embedding_model",
           "provider",
           "embedding_dimension"
@@ -850,7 +834,7 @@
     },
     "/v1/databases": {
       "get": {
-        "description": "Return a single-entry list describing the server's database.\n\nThe server process is fixed to one database \u2014 selection is a\nclient-side concern.  The response shape matches ``discover_databases``\nso the CLI can format remote and local output identically.",
+        "description": "Return a single-entry list describing the server's database.\n\nThe server process is fixed to one database \u2014 selection is a\nclient-side concern.\n\nNo size is reported.  The only way to produce the database's on-disk\nsize is to walk the tree, which cost 10 to 19 seconds per request here\nand which any client could trigger.  LanceDB's O(1) ``table.stats()``\nis not a substitute: it measures the LIVE DATASET, not the directory,\nso it misses whatever else the directory holds -- superseded data-file\nversions, index files -- which measured 43% and 81% of the total on two\nstores.  A varying shortfall is not one a caller can correct for.",
         "operationId": "databases_v1_databases_get",
         "responses": {
           "200": {

@@ -11,7 +11,6 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from quarry.api import API_VERSION
 from quarry.api.meta import FdHealth
 from quarry.daemon.routes.base import RouteGroup
-from quarry.db.storage import dir_size_bytes
 from quarry.fd_headroom import FdHeadroom
 from quarry.ingestion.provider import ProviderSelection
 from quarry.sync_registry import SyncRegistry
@@ -95,12 +94,6 @@ class MetaRoutes(RouteGroup):
         else:
             regs = []
 
-        db_size_bytes = (
-            dir_size_bytes(settings.lancedb_path)
-            if settings.lancedb_path.exists()
-            else 0
-        )
-
         return JSONResponse(
             {
                 "document_count": doc_count,
@@ -108,7 +101,6 @@ class MetaRoutes(RouteGroup):
                 "chunk_count": chunks,
                 "registered_directories": len(regs),
                 "database_path": str(settings.lancedb_path),
-                "database_size_bytes": db_size_bytes,
                 "embedding_model": settings.embedding_model,
                 "provider": ProviderSelection.display_cached(),
                 "embedding_dimension": settings.embedding_dimension,
