@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quarry import doctor, doctor_inference
+from quarry import (
+    doctor,
+    doctor_captures,
+    doctor_daemon,
+    doctor_inference,
+    doctor_sync,
+)
 from quarry.doctor import (
     _check_claude_code_mcp,
     _check_claude_desktop_mcp,
@@ -398,25 +404,41 @@ class TestQuietLogging:
 
 
 class TestNoExpensiveChecks:
-    """Doctor is a fast environment check; nothing in it may walk or load.
+    """Doctor is a fast environment check; no module of it may walk or load.
 
     Structural rather than timed: a wall-clock budget would measure the machine
     the suite happens to run on.  What is actually being defended is that the two
     operations that made doctor cost tens of seconds — a ``du`` walk of the whole
     data tree, and instantiating the OCR engine to prove it works — do not come
     back, whatever they might be renamed to.
+
+    Every module doctor draws checks from is scanned, not just ``doctor.py``: a
+    future expensive check is as likely to be added beside the sync or capture
+    diagnostics as beside the ones that already live in the entry module.
     """
+
+    @staticmethod
+    def _doctor_sources() -> dict[str, str]:
+        """Return the source of every module ``check_environment`` draws from."""
+        modules = (
+            doctor,
+            doctor_captures,
+            doctor_daemon,
+            doctor_inference,
+            doctor_sync,
+        )
+        return {m.__name__: Path(m.__file__ or "").read_text() for m in modules}
 
     def test_the_data_tree_is_never_walked(self) -> None:
         """No check may size the data directory; that walk cost 9-14 seconds."""
-        source = Path(doctor.__file__).read_text()
-        assert "dir_size_bytes" not in source
+        for name, source in self._doctor_sources().items():
+            assert "dir_size_bytes" not in source, name
 
     def test_no_ocr_engine_is_built(self) -> None:
         """Loading RapidOCR's models to report availability cost 1.8 seconds."""
         assert not hasattr(InferenceDiagnostics, "local_ocr")
-        source = Path(doctor_inference.__file__).read_text()
-        assert "OcrEngine" not in source
+        for name, source in self._doctor_sources().items():
+            assert "OcrEngine" not in source, name
 
 
 class TestCheckEnvironment:
