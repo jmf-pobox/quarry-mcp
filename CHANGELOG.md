@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Security
+
+- **`infra`** — **starlette raised to `>=1.3.1`** (resolves 1.5.0), closing five
+  advisories that affected every prior release: `request.form()` limits silently
+  ignored for `application/x-www-form-urlencoded`, enabling DoS (high); SSRF and
+  NTLM credential theft via UNC paths in `StaticFiles` on Windows (high); missing
+  Host header validation poisoning `request.url.path` and bypassing path-based
+  checks (medium); arbitrary HTTP methods dispatched to `HTTPEndpoint` attributes
+  via `getattr` (medium); and an unvalidated request path concatenated into the
+  authority, poisoning `request.url.hostname` (low).
+
+  The previous `starlette<1.0.0` ceiling is **removed, not raised** — it was what
+  made these unfixable by any version bump, since the patches exist only in 1.x.
+  `fastapi`'s floor rises to `>=0.133.0` for a dependent reason: every earlier
+  release caps starlette below 1.3.1 and so cannot coexist with the secure floor.
+
 ### Fixed
 
 - **`infra`** — `quarry`'s test suite no longer writes to the user's real
