@@ -105,7 +105,6 @@ class HermeticEnv:
         """Redirect the environment and return the resulting hermetic session."""
         real_quarry = Path.home() / ".punt-labs" / "quarry"
         real_tree = (
-            real_quarry / "logs" / "quarry.log",
             real_quarry / "config.toml",
             real_quarry / "data" / "default" / "registry.db",
         )
@@ -141,15 +140,24 @@ class HermeticEnv:
 
 @final
 class ProductionTreeGuard:
-    """Prove the redirect holds by watching the three files that would move.
+    """Prove the redirect holds by watching the files that would move.
 
     A smoke check, not a tree fingerprint.  Prevention is the ``HOME`` redirect,
     which is total; reaching production now requires an absolute path written
-    into source, and these three files are where such a path would land.  Only
-    files are watched: a directory's ``mtime`` moves when an entry is added to
-    *that* directory and not when a file below it is written, so a directory
-    stat would detect almost nothing.  A recursive walk is not an alternative --
-    the operator's tree is 15 GB across ~1,600 files.
+    into source, and these files are where such a path would land.  Only files
+    are watched: a directory's ``mtime`` moves when an entry is added to *that*
+    directory and not when a file below it is written, so a directory stat would
+    detect almost nothing.  A recursive walk is not an alternative -- the
+    operator's tree is 15 GB across ~1,600 files.
+
+    ``quarry.log`` is deliberately NOT watched, though it is the file whose
+    leak motivated all of this.  Two independent redirects now stand between a
+    test and it (``QUARRY_LOG_DIR``, and ``HOME`` behind that as the fallback
+    root), so its true-positive rate is about zero -- while its false-positive
+    rate equals the rate at which anything else on the machine logs, and the
+    daemon plus every live MCP client writes it continuously.  A watch that
+    cannot catch what it is for, and fires on unrelated processes, costs more
+    than it defends.  The two files left are the ones nothing writes routinely.
 
     It watches the files, not the writer, so it cannot attribute a change.  On a
     machine whose live daemon watches this repository, editing source during a

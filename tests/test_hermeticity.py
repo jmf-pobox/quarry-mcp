@@ -115,10 +115,16 @@ class TestProductionTreeGuard:
         assert str(first) in breaches[0]
         assert str(second) in breaches[1]
 
-    def test_watches_exactly_the_three_production_files(self) -> None:
-        """Files only -- a directory stat does not move when a file below it does."""
+    def test_watches_exactly_the_diagnostic_production_files(self) -> None:
+        """Files only, and only ones nothing else on the machine writes.
+
+        ``quarry.log`` is excluded on purpose: two redirects already make it
+        unreachable from a test, while the daemon and every live MCP client
+        write it continuously, so watching it reported other processes rather
+        than breaches.
+        """
         names = [p.name for p in ENV.real_tree]
-        assert names == ["quarry.log", "config.toml", "registry.db"]
+        assert names == ["config.toml", "registry.db"]
         assert all(not p.is_dir() for p in ENV.real_tree)
 
 

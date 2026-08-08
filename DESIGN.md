@@ -2363,7 +2363,7 @@ not stylistic: `os.path.expanduser` reads `$HOME` and ignores the patched
 classmethod, so a `Path.home`-only patch leaves two of the three resolution
 routes on production.
 
-A per-test guard stats three *files* — the log, `config.toml`, and the default
+A per-test guard stats two *files* — `config.toml` and the default
 `registry.db` — and fails the test that moves one. Files only. A directory's
 `mtime` changes when an entry is added to that directory and not when a file
 below it is written, so a directory stat detects almost nothing; the obvious
@@ -2371,6 +2371,16 @@ repair, a recursive walk, is unavailable because the operator's tree is 15 GB
 across ~1,600 files and `os.walk` with a stat per file did not finish inside two
 minutes. The guard is a smoke check that the redirect is in force, not a tree
 fingerprint. Do not reinstate the fingerprint.
+
+`quarry.log` — the very file whose leak opened this entry — is deliberately not
+among the watched two. `QUARRY_LOG_DIR` and, behind it, the `HOME` fallback are
+two independent redirects, so a test reaching the real log requires an absolute
+path written into source; the watch's true-positive rate is therefore about
+zero. Its false-positive rate is not: the daemon and every live MCP client write
+that log continuously, so the watch reported other processes' writes against
+whichever test happened to be in flight. A check that cannot catch what it exists
+for, and fires on unrelated processes, costs more than it defends. The two files
+that remain are the ones nothing writes routinely.
 
 **Decision 2 — no `pytest-xdist`, ever.** The suite is dominated by filesystem
 and LanceDB I/O. Workers would multiply the 180 MB base footprint and the tokio
