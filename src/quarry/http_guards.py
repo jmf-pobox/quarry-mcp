@@ -50,11 +50,15 @@ class RequestGuards:
     def require_json_content_type(request: Request) -> JSONResponse | None:
         """Reject a request whose media type is not ``application/json``.
 
-        A CSRF guard for the no-auth loopback daemon: a browser can send the
+        A CSRF guard layered under the bearer check: a browser can send the
         CORS "simple" content types (``text/plain``, the form types) or none at
         all cross-origin *without* a preflight, but ``application/json`` forces a
         preflight the daemon's CORS policy refuses for a disallowed origin.
         ``None`` means the media type is acceptable and the caller may proceed.
+
+        Defence in depth, not the only defence: the daemon requires
+        ``serve.token`` on every engine request, loopback included, so this guard
+        stands behind authentication rather than in place of it.
         """
         media_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
         if media_type.lower() == "application/json":
