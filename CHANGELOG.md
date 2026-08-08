@@ -32,6 +32,22 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **`tool`** — `quarry enable` now ensures `.punt-labs/quarry/captures/` is
+  excluded from the target repo's `.gitignore` (creating the file if missing,
+  appending the line if absent, and leaving it untouched if already present).
+  Previously `enable` never wrote this exclusion, so a repo without its own
+  rule could commit raw, unscrubbed capture files. The step is idempotent and
+  backfills a missing exclusion on an already-enabled repo; `disable` never
+  prunes the line, since it is additive-only. Surfaced as
+  `EnableResult.gitignore_ensured` and a new CLI summary line. (pkit-kcps)
+- **`infra`** — `quarry`'s capture scrubber now redacts common English
+  inflections of its profanity list (`-s`/`-es`, `-ed`, `-ing`,
+  `-er`/`-ers`), not just the bare word. Two real transcripts leaked
+  "fucking" and "fucked" unredacted because only exact base-form matches were
+  scrubbed. Inflected forms that collide with unrelated real words or
+  surnames (e.g. "dicker", "Heller") are excluded so ordinary text is never
+  over-redacted; whole-word boundary matching still protects safe substrings
+  like "class", "passing", and "embassy". (pkit-kcps)
 - **`infra`** — `quarry`'s test suite no longer writes to the user's real
   `~/.punt-labs/quarry/` tree. A full run previously appended ~7,000 lines to
   `logs/quarry.log`, rotating away real daemon history every seven or eight

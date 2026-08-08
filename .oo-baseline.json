@@ -2131,6 +2131,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/profanity_inflection.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.86,
+    "max_complexity": 5.0,
+    "avg_complexity": 3.14,
+    "module_size": 104.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/proxy.py": {
     "method_ratio": 0.0,
     "encapsulation_ratio": 1.0,
@@ -2329,10 +2342,10 @@
   "src/quarry/scrub.py": {
     "method_ratio": 0.846,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.38,
+    "avg_params": 1.31,
     "max_complexity": 7.0,
-    "avg_complexity": 3.31,
-    "module_size": 286.0,
+    "avg_complexity": 3.0,
+    "module_size": 280.0,
     "classes_per_module": 2.0,
     "class_to_func_ratio": 0.5,
     "init_violations": 0.0,
