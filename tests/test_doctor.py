@@ -410,7 +410,8 @@ class TestNoExpensiveChecks:
     the suite happens to run on.  What is actually being defended is that the two
     operations that made doctor cost tens of seconds — a ``du`` walk of the whole
     data tree, and instantiating the OCR engine to prove it works — do not come
-    back, whatever they might be renamed to.
+    back under their current names (``dir_size_bytes``, ``OcrEngine``); a
+    reimplementation under new names would need a fresh review to slip past.
 
     Every module doctor draws checks from is scanned, not just ``doctor.py``: a
     future expensive check is as likely to be added beside the sync or capture
