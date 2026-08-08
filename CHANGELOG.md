@@ -46,7 +46,11 @@ across `transform`, `index`, and `connector`).
   fail-closed. The step is idempotent and backfills a missing exclusion on
   an already-enabled repo; `disable` never prunes the line, since it is
   additive-only. Surfaced as `EnableResult.gitignore_ensured` and a new CLI
-  summary line. (pkit-kcps)
+  summary line. The ensured `.gitignore` also now excludes
+  `FileLock`'s own lock files (e.g. `.CLAUDE.md.lock`, `..gitignore.lock`) --
+  `FileLock` creates one beside every host file it locks and, by design,
+  never removes it, so without this every `quarry enable` left a
+  machine-local artifact a bare `git add -A` could commit. (pkit-kcps)
 - **`infra`** — `quarry`'s capture scrubber now redacts common English
   inflections of its profanity list (`-s`/`-es`, `-ed`, `-ing`,
   `-er`/`-ers`), not just the bare word. Two real transcripts leaked

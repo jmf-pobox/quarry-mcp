@@ -8,7 +8,7 @@ from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
-from quarry.gitignore import CapturesGitignore
+from quarry.gitignore import QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
 
 if TYPE_CHECKING:
@@ -53,14 +53,14 @@ class Enablement:
     _guidance: Guidance
     _marker: EnabledMarker
     _import: ClaudeMdImport
-    _gitignore: CapturesGitignore
+    _gitignore: QuarryGitignore
 
     def __new__(cls, root: Path) -> Self:
         self = super().__new__(cls)
         self._guidance = Guidance(root)
         self._marker = EnabledMarker(root)
         self._import = ClaudeMdImport(root / "CLAUDE.md")
-        self._gitignore = CapturesGitignore(root)
+        self._gitignore = QuarryGitignore(root)
         return self
 
     def enable(self) -> EnablementResult:

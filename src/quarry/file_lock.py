@@ -12,7 +12,13 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import TracebackType
 
-__all__ = ["FileLock"]
+__all__ = ["FILE_LOCK_GITIGNORE_GLOB", "FileLock"]
+
+# Matches every lock filename this class creates (".{target.name}.lock",
+# e.g. ".CLAUDE.md.lock", "..gitignore.lock"). Exposed for quarry.gitignore
+# to exclude, since a lock file is created and, by design, never removed --
+# unignored, a bare `git add -A` commits a machine-local artifact.
+FILE_LOCK_GITIGNORE_GLOB = ".*.lock"
 
 
 @final

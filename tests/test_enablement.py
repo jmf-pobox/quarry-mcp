@@ -11,7 +11,7 @@ from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
 from quarry.file_lock import FileLock
-from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, CapturesGitignore
+from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, QuarryGitignore
 from quarry.guidance import REPO_IMPORT_LINE
 
 
@@ -56,7 +56,23 @@ def test_enable_gitignore_survives_disable(tmp_path: Path) -> None:
     Enablement(tmp_path).enable()
     Enablement(tmp_path).disable()
     assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
-    assert CapturesGitignore(tmp_path).ensure() is False
+    assert QuarryGitignore(tmp_path).ensure() is False
+
+
+def test_enable_excludes_the_claude_md_lock_file(tmp_path: Path) -> None:
+    """enable() must not leave .CLAUDE.md.lock unignored (Bugbot MEDIUM finding).
+
+    FileLock creates .CLAUDE.md.lock and never removes it (see FileLock's
+    docstring); without a matching .gitignore entry, every enable() leaves a
+    machine-local artifact a bare ``git add -A`` could commit.
+    """
+    from quarry.file_lock import FILE_LOCK_GITIGNORE_GLOB
+
+    Enablement(tmp_path).enable()
+
+    assert (tmp_path / ".CLAUDE.md.lock").exists()
+    ignore_lines = (tmp_path / ".gitignore").read_text().splitlines()
+    assert FILE_LOCK_GITIGNORE_GLOB in ignore_lines
 
 
 def test_enable_ensures_gitignore_before_guide_deposit_fails_closed(

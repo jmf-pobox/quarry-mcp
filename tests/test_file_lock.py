@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import fnmatch
 import multiprocessing
 import os
 import time
@@ -10,13 +11,52 @@ from pathlib import Path
 
 import pytest
 
-from quarry.file_lock import FileLock
+from quarry.file_lock import FILE_LOCK_GITIGNORE_GLOB, FileLock
 
 
 def test_lock_file_created_beside_target(tmp_path: Path) -> None:
     target = tmp_path / "CLAUDE.md"
     with FileLock(target):
         assert (tmp_path / ".CLAUDE.md.lock").is_file()
+
+
+def test_lock_file_is_never_removed_after_release(tmp_path: Path) -> None:
+    """The lock file persists post-release, by design (see FileLock's docstring).
+
+    A waiter and a holder must always flock the same inode; unlinking it would
+    let a new process create a fresh inode at the same path and race the old
+    one's still-open descriptor. Because nothing else cleans it up, it must be
+    excluded from the target repo's .gitignore -- see quarry.gitignore.
+    """
+    target = tmp_path / "CLAUDE.md"
+    with FileLock(target):
+        pass
+    assert (tmp_path / ".CLAUDE.md.lock").is_file()
+
+
+@pytest.mark.parametrize(
+    ("target_name", "lock_name"),
+    [
+        ("CLAUDE.md", ".CLAUDE.md.lock"),
+        (".gitignore", "..gitignore.lock"),
+    ],
+)
+def test_gitignore_glob_matches_every_lock_filename(
+    tmp_path: Path, target_name: str, lock_name: str
+) -> None:
+    """FILE_LOCK_GITIGNORE_GLOB matches FileLock's real naming convention.
+
+    Tied to actual FileLock behavior (creates a lock, reads its real name back
+    off disk) rather than re-deriving the ``.{name}.lock`` pattern by hand, so
+    a future naming change here is caught instead of silently desyncing the
+    glob quarry.gitignore relies on to keep these artifacts unignored.
+    """
+    target = tmp_path / target_name
+    with FileLock(target):
+        pass
+    created = [p.name for p in tmp_path.iterdir()]
+    assert lock_name in created
+    assert fnmatch.fnmatch(lock_name, FILE_LOCK_GITIGNORE_GLOB)
 
 
 def test_reentrant_sequential_acquire(tmp_path: Path) -> None:
