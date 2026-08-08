@@ -7,6 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from quarry import (
+    doctor,
+    doctor_captures,
+    doctor_daemon,
+    doctor_inference,
+    doctor_sync,
+)
 from quarry.doctor import (
     _check_claude_code_mcp,
     _check_claude_desktop_mcp,
@@ -15,7 +22,6 @@ from quarry.doctor import (
     _check_fts_health,
     _check_imports,
     _check_python_version,
-    _check_storage,
     _configure_claude_code,
     _configure_claude_desktop,
     _configure_ethos_ext,
@@ -157,24 +163,6 @@ class TestCheckImportsExcludesCv2:
             result = _check_imports()
         assert result.passed is True
         assert "cv2" not in result.message
-
-
-class TestCheckStorage:
-    def test_reports_size(self, tmp_path: Path, monkeypatch: MP):
-        data_dir = tmp_path / ".punt-labs" / "quarry" / "data"
-        data_dir.mkdir(parents=True)
-        (data_dir / "test.db").write_bytes(b"x" * 1024)
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _check_storage()
-        assert result.passed is True
-        assert result.required is False
-        assert "KB" in result.message
-
-    def test_no_data_dir(self, tmp_path: Path, monkeypatch: MP):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        result = _check_storage()
-        assert result.passed is True
-        assert "no data yet" in result.message
 
 
 class TestCheckClaudeCodeMcp:
@@ -415,6 +403,45 @@ class TestQuietLogging:
         assert logging.getLogger().level != logging.CRITICAL
 
 
+class TestNoExpensiveChecks:
+    """Doctor is a fast environment check; no module of it may walk or load.
+
+    Structural rather than timed: a wall-clock budget would measure the machine
+    the suite happens to run on.  What is actually being defended is that the two
+    operations that made doctor cost tens of seconds — a ``du`` walk of the whole
+    data tree, and instantiating the OCR engine to prove it works — do not come
+    back under their current names (``dir_size_bytes``, ``OcrEngine``); a
+    reimplementation under new names would need a fresh review to slip past.
+
+    Every module doctor draws checks from is scanned, not just ``doctor.py``: a
+    future expensive check is as likely to be added beside the sync or capture
+    diagnostics as beside the ones that already live in the entry module.
+    """
+
+    @staticmethod
+    def _doctor_sources() -> dict[str, str]:
+        """Return the source of every module ``check_environment`` draws from."""
+        modules = (
+            doctor,
+            doctor_captures,
+            doctor_daemon,
+            doctor_inference,
+            doctor_sync,
+        )
+        return {m.__name__: Path(m.__file__ or "").read_text() for m in modules}
+
+    def test_the_data_tree_is_never_walked(self) -> None:
+        """No check may size the data directory; that walk cost 9-14 seconds."""
+        for name, source in self._doctor_sources().items():
+            assert "dir_size_bytes" not in source, name
+
+    def test_no_ocr_engine_is_built(self) -> None:
+        """Loading RapidOCR's models to report availability cost 1.8 seconds."""
+        assert not hasattr(InferenceDiagnostics, "local_ocr")
+        for name, source in self._doctor_sources().items():
+            assert "OcrEngine" not in source, name
+
+
 class TestCheckEnvironment:
     def test_returns_zero_when_all_pass(self, tmp_path: Path, monkeypatch: MP):
         data_dir = tmp_path / ".punt-labs" / "quarry" / "data" / "default" / "lancedb"
@@ -423,11 +450,6 @@ class TestCheckEnvironment:
         import quarry.doctor as doctor_mod
 
         _ok = CheckResult
-        monkeypatch.setattr(
-            InferenceDiagnostics,
-            "local_ocr",
-            lambda: _ok(name="Local OCR", passed=True, message="mocked"),
-        )
         monkeypatch.setattr(
             doctor_mod,
             "_check_imports",
@@ -491,13 +513,6 @@ class TestCheckEnvironment:
         # return code — the point here is that the required data_directory check
         # fails (home is an empty tmp_path) and drives the exit code to 1.
         _ok = CheckResult
-        monkeypatch.setattr(
-            InferenceDiagnostics,
-            "local_ocr",
-            lambda: _ok(
-                name="Local OCR", passed=True, message="mocked", required=False
-            ),
-        )
         monkeypatch.setattr(
             InferenceDiagnostics,
             "onnx_provider",

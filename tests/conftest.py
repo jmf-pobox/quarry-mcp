@@ -436,8 +436,9 @@ def _guard_production_tree() -> Generator[None]:
     """Fail the test that writes to the operator's real quarry tree.
 
     Runs unconditionally, including in CI where ``HOME`` differs but the same
-    three paths must stay untouched.  Three stats per test measured at 25.9 ms
-    across the whole suite.
+    path must stay untouched.  One stat per test, down from three: the other two
+    watched files are written constantly by the daemon and its clients, so they
+    reported those processes rather than breaches (see ``ProductionTreeGuard``).
     """
     guard = ProductionTreeGuard(ENV.real_tree)
     yield
@@ -511,12 +512,12 @@ def database(lance_db: LanceDB) -> Database:
 @pytest.fixture(scope="session")
 def pdf_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Generate 2-page PDF with embedded text via PyMuPDF."""
-    import fitz
+    import pymupdf
 
     tmp = tmp_path_factory.mktemp("fixtures")
     path = tmp / "test-document.pdf"
 
-    doc = fitz.open()
+    doc = pymupdf.open()
 
     page1 = doc.new_page(width=612, height=792)
     page1.insert_text(

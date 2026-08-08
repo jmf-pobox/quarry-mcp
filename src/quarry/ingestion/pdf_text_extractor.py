@@ -5,14 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import fitz
+import pymupdf
 
 from quarry.ingestion.pdf_reflow import PdfReflow
 from quarry.models import PageContent, PageType
 
 logger = logging.getLogger(__name__)
 
-_DICT_FLAGS = fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES  # exclude image bytes
+# exclude image bytes
+_DICT_FLAGS = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES
 
 
 def extract_text_pages(
@@ -39,7 +40,7 @@ def extract_text_pages(
     """
     results: list[PageContent] = []
 
-    with fitz.open(pdf_path) as doc:
+    with pymupdf.open(pdf_path) as doc:
         logger.debug(
             "Extracting %d text pages from %s", len(page_numbers), pdf_path.name
         )

@@ -1,52 +1,24 @@
-"""Health checks for the optional inference capabilities: OCR and ONNX provider."""
+"""The ONNX execution-provider health check."""
 
 from __future__ import annotations
 
 from typing import final
 
-from quarry.ingestion.ocr_availability import OcrAvailability
-from quarry.ingestion.ocr_engine import OcrEngine
 from quarry.ingestion.provider import ProviderSelection
 from quarry.results import CheckResult
 
 
 @final
 class InferenceDiagnostics:
-    """``quarry doctor`` checks for OCR and the ONNX execution provider.
+    """``quarry doctor``'s report of the selected ONNX execution provider.
 
-    Both are advisory (``required=False``) optional capabilities: quarry's core
-    (embedding, search, text ingest) runs without them, so a machine that cannot
-    load OpenCV or a GPU provider warns rather than failing ``quarry install``.
+    Advisory (``required=False``): quarry's core runs on the CPU provider, so a
+    machine without a GPU provider warns rather than failing ``quarry install``.
+    Reading the selection is a configuration lookup and costs nothing; it does
+    not construct a session or load a model.
     """
 
     __slots__ = ()
-
-    @staticmethod
-    def local_ocr() -> CheckResult:
-        """Report local OCR (RapidOCR) availability.
-
-        A headless box where cv2 will not load warns with an actionable message
-        naming the exact force-reinstall command to run — uv-aware and targeting
-        this environment (``uv pip install --python <env> --force-reinstall
-        --no-deps`` when uv is present) — rather than failing the run.
-        """
-        availability = OcrAvailability.probe()
-        if not availability.is_available:
-            return CheckResult(
-                name="Local OCR",
-                passed=False,
-                message=availability.reason,
-                required=False,
-            )
-        try:
-            OcrEngine.get()
-        except Exception as exc:  # noqa: BLE001
-            return CheckResult(
-                name="Local OCR", passed=False, message=str(exc), required=False
-            )
-        return CheckResult(
-            name="Local OCR", passed=True, message="RapidOCR engine OK", required=False
-        )
 
     @staticmethod
     def onnx_provider() -> CheckResult:

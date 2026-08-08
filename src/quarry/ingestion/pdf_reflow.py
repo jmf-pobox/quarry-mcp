@@ -7,7 +7,7 @@ boundaries are paragraph breaks; a lone page-number line in a page margin is
 dropped. De-hyphenation is delegated to :class:`~quarry.ingestion.hyphenation`
 and page-number chrome detection to :class:`~quarry.ingestion.page_geometry`.
 
-Entry point :meth:`PdfReflow.page_text` (fitz page in, string out, with a
+Entry point :meth:`PdfReflow.page_text` (pymupdf page in, string out, with a
 flat-text fallback); :meth:`PdfReflow.from_page_dict` / :meth:`PdfReflow.text`
 are the pure, dict-testable core. The OCR path is a separate follow-on.
 """
@@ -54,7 +54,7 @@ class ReflowLine:
     y1: float
 
     @classmethod
-    def from_line_dict(cls, line: Any) -> Self | None:  # fitz line dict; no stubs
+    def from_line_dict(cls, line: Any) -> Self | None:  # pymupdf line dict; no stubs
         """Build a line, or None if the bbox is malformed (skip, don't crash)."""
         bbox = line.get("bbox")
         if not (
@@ -124,7 +124,7 @@ class ReflowBlock:
         object.__setattr__(self, "_width", right - left)
 
     @classmethod
-    def from_block_dict(cls, block: Any) -> Self:  # fitz block dict; no stubs
+    def from_block_dict(cls, block: Any) -> Self:  # pymupdf block dict; no stubs
         lines = tuple(
             line
             for raw in block.get("lines", [])
@@ -203,7 +203,7 @@ class ReflowBlock:
     def _toc_rows(self) -> list[str]:
         """Reassemble TOC fragments into one clean line per visual row.
 
-        fitz fragments each entry into separate title, dot-leader, and
+        pymupdf fragments each entry into separate title, dot-leader, and
         page-number lines sharing a baseline — but with differing font sizes
         their reported bbox tops (``y0``) differ by a point or two. Clustering
         by *adjacency* — a new row starts only when the ``y0`` gap to the
@@ -241,13 +241,13 @@ class ReflowBlock:
 
 @dataclass(frozen=True, slots=True)
 class PdfReflow:
-    """Reflowed view of a single PDF page reconstructed from fitz dict blocks."""
+    """Reflowed view of a single PDF page reconstructed from pymupdf dict blocks."""
 
     blocks: tuple[ReflowBlock, ...]
     page_height: float = 0.0  # physical page height; 0 falls back to text span
 
     @classmethod
-    def from_page_dict(cls, page: Any) -> Self:  # fitz get_text("dict"); no stubs
+    def from_page_dict(cls, page: Any) -> Self:  # pymupdf get_text("dict"); no stubs
         blocks: list[ReflowBlock] = []
         for raw in page.get("blocks", []):
             if raw.get("type") != 0 or not raw.get("lines"):

@@ -2363,14 +2363,28 @@ not stylistic: `os.path.expanduser` reads `$HOME` and ignores the patched
 classmethod, so a `Path.home`-only patch leaves two of the three resolution
 routes on production.
 
-A per-test guard stats three *files* — the log, `config.toml`, and the default
-`registry.db` — and fails the test that moves one. Files only. A directory's
+A per-test guard stats one *file* — `config.toml` — and fails the test that
+moves it. A file, not a directory. A directory's
 `mtime` changes when an entry is added to that directory and not when a file
 below it is written, so a directory stat detects almost nothing; the obvious
 repair, a recursive walk, is unavailable because the operator's tree is 15 GB
 across ~1,600 files and `os.walk` with a stat per file did not finish inside two
 minutes. The guard is a smoke check that the redirect is in force, not a tree
 fingerprint. Do not reinstate the fingerprint.
+
+The watch list is chosen for silence, not importance. `quarry.log` — the very
+file whose leak opened this entry — is not on it, and neither is `registry.db`.
+Each sits behind two independent redirects (`QUARRY_LOG_DIR` and `QUARRY_ROOT`,
+with `HOME` behind both), so reaching either from a test requires an absolute
+path written into source and the true-positive rate is about zero. The
+false-positive rate is not: the daemon and every live MCP client write the log
+continuously, and the DES-045 watch loop writes a registry row whenever anything
+under a registered tree changes — which includes this repository while an agent
+edits it during a run. Because the guard watches files rather than writers, both
+reported other processes against whichever test was in flight. A check that
+cannot catch what it exists for, and fires on unrelated processes, costs more
+than it defends. `config.toml` is quiescent, so a firing there is likely to mean
+something.
 
 **Decision 2 — no `pytest-xdist`, ever.** The suite is dominated by filesystem
 and LanceDB I/O. Workers would multiply the 180 MB base footprint and the tokio

@@ -1,6 +1,6 @@
 """Tests for PyMuPDF text extraction with soft-wrap reflow.
 
-These drive a real fitz document end-to-end (the extractor's boundary) rather
+These drive a real pymupdf document end-to-end (the extractor's boundary) rather
 than mocking ``get_text``, so the ``get_text("dict")`` reflow path is exercised.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import fitz
+import pymupdf
 import pytest
 
 from quarry.ingestion.pdf_text_extractor import extract_text_pages
@@ -22,9 +22,9 @@ _WRAPPING_BODY = (
 
 
 def _write_pdf(path: Path, body: str, *, page_number: str | None = None) -> None:
-    with fitz.open() as doc:
+    with pymupdf.open() as doc:
         page = doc.new_page()
-        page.insert_textbox(fitz.Rect(72, 72, 523, 700), body, fontsize=11)
+        page.insert_textbox(pymupdf.Rect(72, 72, 523, 700), body, fontsize=11)
         if page_number is not None:
             page.insert_text((300, 815), page_number)
         doc.save(str(path))
@@ -35,7 +35,7 @@ class TestReflowExtraction:
         pdf = tmp_path / "wrapped.pdf"
         _write_pdf(pdf, _WRAPPING_BODY)
 
-        with fitz.open(pdf) as doc:
+        with pymupdf.open(pdf) as doc:
             flat_text = str(doc[0].get_text())
         flat_lines = [ln for ln in flat_text.split("\n") if ln]
         flat_longest = max(len(ln) for ln in flat_lines)
@@ -72,7 +72,7 @@ class TestReflowExtraction:
 
     def test_blank_page_yields_empty_text(self, tmp_path: Path) -> None:
         pdf = tmp_path / "blank.pdf"
-        with fitz.open() as doc:
+        with pymupdf.open() as doc:
             doc.new_page()
             doc.save(str(pdf))
 
@@ -81,7 +81,7 @@ class TestReflowExtraction:
         assert pages[0].text == ""
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(fitz.FileNotFoundError):
+        with pytest.raises(pymupdf.FileNotFoundError):
             extract_text_pages(tmp_path / "absent.pdf", [1], 1)
 
     def test_dict_request_excludes_preserve_images_flag(self, tmp_path: Path) -> None:
@@ -118,11 +118,13 @@ class TestReflowExtraction:
         doc.__exit__ = lambda self, *args: None
         doc.__getitem__ = lambda _, idx: page
 
-        with patch("quarry.ingestion.pdf_text_extractor.fitz.open", return_value=doc):
+        with patch(
+            "quarry.ingestion.pdf_text_extractor.pymupdf.open", return_value=doc
+        ):
             extract_text_pages(pdf_path, [1], 1)
 
         dict_flags = [flags for kind, flags in recorded if kind == "dict"]
         assert dict_flags, "extractor never requested the dict form"
         for flags in dict_flags:
             assert flags is not None
-            assert not (flags & fitz.TEXT_PRESERVE_IMAGES)
+            assert not (flags & pymupdf.TEXT_PRESERVE_IMAGES)
