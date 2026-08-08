@@ -1,4 +1,25 @@
-"""Logging configuration for punt-quarry."""
+"""Logging configuration for punt-quarry, and the level policy that governs it.
+
+THE LEVEL POLICY, which binds every ``logger.*`` call in this codebase:
+
+    INFO is one line per user-visible operation or coarser.
+    Sub-operation detail is DEBUG.
+
+A "user-visible operation" is something the operator asked for or would
+recognise having happened: a document indexed, a collection swept, a database
+optimized, the daemon started. Anything that fires more often than that —
+per flush window, per request, per row — is DEBUG, however interesting it looked
+when it was written.
+
+The rule exists because the daemon spent its whole life logging nowhere: it
+never configured logging at all, so INFO was discarded before reaching a
+handler and nobody ever saw the volume. Switching the file on without a policy
+would have replaced silence with a firehose, and a log too noisy to read fails
+the same way a log that does not exist does. Two lines were demoted on the day
+the file appeared — ``ChunkStore``'s per-flush insert and the search route's
+per-request result count — and the next person tempted to log per-row should
+read this instead of rediscovering it from a flooded file.
+"""
 
 from __future__ import annotations
 

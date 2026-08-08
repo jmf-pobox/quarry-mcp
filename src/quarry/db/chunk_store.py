@@ -65,9 +65,10 @@ class ChunkStore:
         if table is not None:
             with _write_lock:
                 table.add(records)
-        # DEBUG, not INFO: this fires once per FLUSH WINDOW (DES-034 progressive
-        # commit), so a single large document emits it many times.  The
-        # per-document totals the operator reads are logged by the pipeline.
+        # DEBUG per the level policy in quarry.logging_config: this fires once
+        # per FLUSH WINDOW (DES-034 progressive commit), so one large document
+        # emits it many times.  The per-document totals are logged by the
+        # pipeline, which is the user-visible operation.
         logger.debug("Inserted %d chunks into %s", len(records), TABLE_NAME)
         return len(records)
 
