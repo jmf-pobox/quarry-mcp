@@ -1342,3 +1342,36 @@ def test_request_scan_skips_an_unresolvable_root(tmp_path: Path) -> None:
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_reconcile_finalizes_each_database_once_not_once_per_collection(
+    tmp_path: Path,
+) -> None:
+    """A reconcile sweep over N collections submits ONE finalize, not N.
+
+    A finalize is table-wide — it compacts the database's chunks table and
+    rebuilds the whole FTS index, every collection's rows included.  Submitting
+    one per collection therefore does the identical table-wide work N times per
+    sweep, which is what the operator's log showed: bursts of six back-to-back
+    optimize+rebuild pairs, one per registered collection, every safety scan.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, root = _build(tmp_path, queue=queue)  # registers "col"
+        for extra in ("col2", "col3"):
+            sibling = root.parent / extra
+            sibling.mkdir()
+            _register(ctx.settings, sibling.resolve(), extra)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        queue.submitted.clear()
+        await _reconciler(loop).run_once()
+        # Every collection is rescanned...
+        assert len(queue.jobs(CollectionSyncJob)) == 3
+        # ...but the table-wide finalize runs once for the one database.
+        assert len(queue.jobs(CollectionFinalizeJob)) == 1
+        await loop.stop()
+
+    asyncio.run(_run())

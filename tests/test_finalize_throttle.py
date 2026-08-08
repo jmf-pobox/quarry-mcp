@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Self, final
 
-from quarry.daemon.watch_submit import FinalizeThrottle
+from quarry.daemon.finalize_throttle import FinalizeThrottle
 
 _INTERVAL = 0.05
 

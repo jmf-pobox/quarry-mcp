@@ -201,6 +201,10 @@ class WatchReconciler:
         """
         roster, submitter = self._deps.roster, self._deps.submitter
         current: set[RouteKey] = set()
+        # One sweep for the whole cycle: every collection is rescanned, but the
+        # table-wide finalize runs once per database instead of once per
+        # collection (which repeated identical optimize+FTS work N times).
+        sweep = submitter.sweep()
         try:
             watched = set(roster.keys())
             for name in roster.roster_names():
@@ -228,7 +232,7 @@ class WatchReconciler:
                     if key not in watched:
                         self._deps.begin(name, collection, root)
                     else:
-                        submitter.submit_scan(key, resolved)
+                        sweep.add(key, resolved)
         except Exception as exc:  # noqa: BLE001 — reconcile liveness: no enumeration
             # error may escape and kill the safety loop; fail closed and self-heal.
             # exc_info: a production enumeration failure needs the traceback.
@@ -236,6 +240,12 @@ class WatchReconciler:
                 "watch: safety-scan reconcile failed: %s", exc, exc_info=True
             )
             return set(), current, False
+        finally:
+            # Finalize whatever WAS scanned, including on the failure path: those
+            # collections were rescanned and their FTS would otherwise lag until
+            # the next cycle, and a partial cycle is when the self-heal matters
+            # most.
+            sweep.finish()
         return watched, current, True
 
     def _drain_pending(self, live: set[RouteKey]) -> None:
