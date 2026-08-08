@@ -7,6 +7,7 @@ unreachable, and the three-file guard that proves the redirect is in force.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -199,3 +200,48 @@ class TestNoRealDns:
     def test_the_overlong_label_boundary_still_raises(self) -> None:
         """The fake reproduces the real resolver's UnicodeError, not just success."""
         assert UrlSafetyCheck.reject_reason(f"https://{'a' * 64}.example.com/")
+
+
+class TestSubprocessNetworkIsRefused:
+    """A subprocess resolves and connects on its own, past the in-process fake.
+
+    The DNS fake patches ``socket.getaddrinfo`` in THIS interpreter, which does
+    nothing for a ``git`` the suite shells out to.  Restricting git to local
+    transports is what actually closes that, so these prove the pin holds by
+    running the real binary rather than by reading the environment back.
+    """
+
+    def test_git_refuses_a_remote_protocol(self, tmp_path: Path) -> None:
+        """An ssh remote fails in git itself — no resolver, no socket, no wait."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@h:o/r.git"], cwd=repo, check=True
+        )
+        proc = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert proc.returncode != 0
+        assert "not allowed" in proc.stderr
+
+    def test_a_local_path_remote_still_works(self, tmp_path: Path) -> None:
+        """The pin must refuse the network without disabling git's local use."""
+        origin = tmp_path / "origin"
+        origin.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare"], cwd=origin, check=True)
+        clone = tmp_path / "clone"
+        proc = subprocess.run(
+            ["git", "clone", "-q", str(origin), str(clone)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert (clone / ".git").is_dir()

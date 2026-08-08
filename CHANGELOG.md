@@ -32,6 +32,28 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **`index`** — **the daemon no longer re-embeds a document whose content did
+  not change.** A filesystem event fires on every write, and most writes leave
+  the bytes identical — an editor saving in place, a branch switch restoring the
+  same content, a `touch`. The watch loop's per-file path had no change
+  detection at all: it deleted the document's stored chunks and re-embedded the
+  whole thing every time, which is how one document came to be embedded five
+  times in a row under churn. The bulk sync path already had the rule; it now
+  lives in one place (`quarry.sync_change.FileChangeDetector`) that both paths
+  consult, so unchanged content is a no-op and content that merely moved its
+  `(mtime, size)` refreshes the registry row without touching LanceDB.
+
+- **`index`** — **table optimization now runs once per database per rescan
+  sweep, not once per collection.** A finalize compacts a database's chunks
+  table and rebuilds its entire full-text index in one table-wide pass, but the
+  periodic reconcile and `quarry sync` both submitted one per registered
+  collection — repeating identical work N times. With six collections
+  registered, one daemon log showed sustained bursts of six back-to-back
+  optimize-and-rebuild pairs per sweep. The finalize stays immediate rather than
+  rate-limited, because these sweeps are the FTS self-heal and must always run;
+  what changed is that they are now deduplicated to the granularity the work
+  actually has.
+
 - **`tool`** — `quarry enable` now ensures `.punt-labs/quarry/captures/` is
   excluded from the target repo's `.gitignore` (creating the file if missing,
   appending the line if absent, and leaving it untouched if already present),

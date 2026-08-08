@@ -34,6 +34,7 @@ from quarry.scratch_paths import ScratchGuard
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.fs_events import FsEvent, FsEventSource
+    from quarry.daemon.scan_sweep import ScanSweep
     from quarry.daemon.tasks import TaskState
 
 logger = logging.getLogger(__name__)
@@ -217,31 +218,38 @@ class WatchLoop:
         shed/failed or the poll deadline hit — no silent success.
         """
         with task_terminal(umbrella):
-            children = self._submit_all_scans()
+            sweep = self._sweep_all_scans()
+            children = sweep.finish() if sweep is not None else []
+            scanned = sweep.collections if sweep is not None else 0
             timed_out = await self._await_children(children)
-            WatchSubmitter.summarize_scan(umbrella, children, timed_out=timed_out)
+            WatchSubmitter.summarize_scan(
+                umbrella, children, scanned, timed_out=timed_out
+            )
 
-    def _submit_all_scans(self) -> list[TaskState]:
-        """Scan+finalize every active-DB registration (runs even if observer off).
+    def _sweep_all_scans(self) -> ScanSweep | None:
+        """Scan every active-DB registration; ``None`` when ``start()`` never ran.
 
         Applies the temp/scratch guard explicitly: ``request_scan`` (an on-demand
         ``quarry sync``) reaches the queue here, NOT through ``_begin_collection``,
         so a registered ``/private/tmp`` would otherwise be scanned on demand even
         though the live watch refuses it.  Refused (and unresolvable) roots are
         skipped here too, via the same fail-closed helper.
+
+        Returns the sweep UNFINISHED so the caller finalizes once for the
+        database rather than once per collection.
         """
         roster, submitter = self._roster, self._submitter
-        if roster is None or submitter is None:  # start() never ran
-            return []
+        if roster is None or submitter is None:
+            return None
         name = self._ctx.database_name
         roster.ensure_database(name)
-        children: list[TaskState] = []
+        sweep = submitter.sweep()
         for collection, root in roster.registrations(name):
             resolved = self._resolve_watchable(root, collection)
             if resolved is None:
                 continue
-            children.extend(submitter.submit_scan(RouteKey(name, collection), resolved))
-        return children
+            sweep.add(RouteKey(name, collection), resolved)
+        return sweep
 
     # -- internals ----------------------------------------------------------
 

@@ -19,26 +19,25 @@ instead of duplicating the delete-tail/overwrite and resume-watermark logic.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Self, final
 
-from quarry.db.chunk_table import ChunkTable, DocumentRef
+from quarry.db.chunk_table import DocumentRef
+from quarry.ingestion.file_flush_target import SingleFileFlushTarget
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import ProgressiveIndexer
 from quarry.ingestion.streaming import DocumentStreamer
+from quarry.sync_change import FileChange, FileChangeDetector
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
 from quarry.sync_messages import FileMeta
 from quarry.sync_resume import ResumePolicy
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from pathlib import Path
-
-    import numpy as np
-    from numpy.typing import NDArray
 
     from quarry.config import Settings
     from quarry.db.chunk_store import ChunkStore
@@ -84,17 +83,15 @@ class FileIndexOutcome:
 class SingleFileIndexer:
     """Index one file through the DES-034 core, shared by bulk sync and the watch loop.
 
-    Doubles as the :class:`~quarry.ingestion.progressive.FlushTarget` for the
-    single-file :meth:`index_one` path: ``_pending`` names the file whose rows a
-    flush checkpoints, set transiently for the duration of one ``index_one`` call
-    (single-threaded, so no lock is needed).  The bulk path never sets it — it
-    drives :meth:`plan_file`, :meth:`reconcile_store`, and :meth:`checkpoint_row`
-    against its own cross-file indexer instead.
+    :meth:`index_one` drives the whole per-file path itself, against a
+    :class:`~quarry.ingestion.file_flush_target.SingleFileFlushTarget` built for
+    that one run.  The bulk path instead drives :meth:`plan_file`,
+    :meth:`reconcile_store`, and :meth:`checkpoint_row` against its own
+    cross-file indexer.
     """
 
     __slots__ = (
         "_collection",
-        "_pending",
         "_policy",
         "_registry",
         "_resolved",
@@ -108,7 +105,6 @@ class SingleFileIndexer:
     _collection: str
     _resolved: Path
     _policy: ResumePolicy
-    _pending: FileMeta | None
 
     def __new__(
         cls,
@@ -126,7 +122,6 @@ class SingleFileIndexer:
         self._collection = collection
         self._resolved = resolved
         self._policy = ResumePolicy()
-        self._pending = None
         return self
 
     @property
@@ -209,14 +204,17 @@ class SingleFileIndexer:
         document_name = str(file_path.relative_to(self._resolved))
         file_id = str(file_path)
         record = self._registry.files.get_file(file_id)
+        settled = self._settled_without_embedding(record, file_path, document_name)
+        if settled is not None:
+            return settled
         try:
             plan = self.plan_file(file_path, record)
         except _RECOVERABLE as exc:
             return self._plan_failed(document_name, record, file_path, exc)
+        target = SingleFileFlushTarget(self, self._store, self._registry, plan.meta)
         indexer = ProgressiveIndexer(
-            self, flush_bytes=self._settings.sync_flush_mb * 1024 * 1024
+            target, flush_bytes=self._settings.sync_flush_mb * 1024 * 1024
         )
-        self._pending = plan.meta
         try:
             self.reconcile_store(plan.meta)
             indexer.begin_file(
@@ -240,9 +238,53 @@ class SingleFileIndexer:
             return FileIndexOutcome(
                 document_name, indexer.inserted_count, error=f"{document_name}: {exc}"
             )
-        finally:
-            self._pending = None
         return FileIndexOutcome(document_name, indexer.inserted_count, error=None)
+
+    def _settled_without_embedding(
+        self, record: FileRecord | None, file_path: Path, document_name: str
+    ) -> FileIndexOutcome | None:
+        """Return the outcome for a file whose stored chunks are already current.
+
+        A watch event fires on every write, and most writes leave the content
+        identical — an editor saving in place, a branch switch restoring the same
+        bytes, a ``touch``.  Re-embedding those recomputes the same vectors and
+        rewrites the same rows, which is what made one document embed five times
+        in a row under churn.  ``None`` means the file genuinely needs indexing.
+
+        A file that vanished since the event has no ``stat`` to compare; that is
+        the normal TOCTOU case, and returning ``None`` hands it to the regular
+        path, which reports it as the per-file error it is.
+        """
+        try:
+            stat = file_path.stat()
+        except OSError:
+            return None
+        decision = FileChangeDetector().classify(record, file_path, stat)
+        if decision.needs_embedding:
+            return None
+        if record is not None and decision.change is FileChange.REFRESH:
+            self._refresh_row(record, stat, decision.content_hash)
+        return FileIndexOutcome(document_name, 0, error=None)
+
+    def _refresh_row(
+        self, record: FileRecord, stat: os.stat_result, content_hash: str | None
+    ) -> None:
+        """Re-stamp *record*'s metadata for content that did not actually change.
+
+        The file's ``(mtime, size)`` moved but its bytes did not, so the stored
+        chunks stay and only the row is brought current — which stops the next
+        scan from re-deciding the same non-change.
+        """
+        self._registry.files.upsert_file(
+            replace(
+                record,
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+                ingested_at=datetime.now(UTC).isoformat(),
+                content_hash=content_hash,
+            ),
+            commit=True,
+        )
 
     def _plan_failed(
         self,
@@ -257,28 +299,6 @@ class SingleFileIndexer:
             self.clear_stale(record)
             self._registry.files.delete_file(str(file_path), commit=True)
         return FileIndexOutcome(document_name, 0, error=f"{document_name}: {exc}")
-
-    # -- FlushTarget for the single-file index_one path ---------------------
-
-    def build_records(
-        self, chunks: list[Chunk], vectors: NDArray[np.float32]
-    ) -> list[dict[str, object]]:
-        """Build LanceDB row dicts for one embed window (FlushTarget half)."""
-        return ChunkTable.build_records(chunks, vectors)
-
-    def insert_records(self, records: list[dict[str, object]]) -> int:
-        """Append one flush's rows to LanceDB (FlushTarget half)."""
-        return self._store.insert_records(records)
-
-    def on_flush(self, checkpoints: Sequence[FlushCheckpoint]) -> None:
-        """Commit the single file's watermark row(s) in one registry transaction."""
-        if self._pending is None:
-            return
-        for checkpoint in checkpoints:
-            self._registry.files.upsert_file(
-                self.checkpoint_row(self._pending, checkpoint), commit=False
-            )
-        self._registry.commit()
 
     def _build_record(
         self, file_path: Path, document_name: str, content_hash: str | None

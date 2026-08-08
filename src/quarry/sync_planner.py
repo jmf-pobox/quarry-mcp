@@ -25,6 +25,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
+from quarry.sync_change import FileChange, FileChangeDetector
 from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
@@ -131,20 +132,17 @@ class SyncPlanner:
         to_ingest: list[Path] = []
         to_refresh: list[tuple[Path, str]] = []
         unchanged = 0
+        detector = FileChangeDetector()
         for file_path in disk_files:
             stat = self._stat_or_skip(file_path, disk_paths)
             if stat is None:
                 continue
             record = known_files.get(str(file_path))
-            if record is None or record.is_partial:
-                to_ingest.append(file_path)
-                continue
-            if record.mtime == stat.st_mtime and record.size == stat.st_size:
+            decision = detector.classify(record, file_path, stat)
+            if decision.change is FileChange.UNCHANGED:
                 unchanged += 1
-                continue
-            refresh = self._refresh_hash(file_path, record, stat)
-            if refresh is not None:
-                to_refresh.append((file_path, refresh))
+            elif decision.content_hash is not None:
+                to_refresh.append((file_path, decision.content_hash))
             else:
                 to_ingest.append(file_path)
         return to_ingest, to_refresh, unchanged
@@ -194,22 +192,3 @@ class SyncPlanner:
         return [
             r.document_name for r in known_files.values() if r.path not in disk_paths
         ]
-
-    @staticmethod
-    def _refresh_hash(
-        file_path: Path, record: FileRecord, stat: os.stat_result
-    ) -> str | None:
-        """Return the disk hash when *file_path* is an unchanged refresh, else None.
-
-        A refresh means ``(mtime, size)`` shifted but the content hash still
-        matches the stored value, so only the registry row needs updating —
-        LanceDB is left alone. Missing stored hash, size mismatch, or a hash read
-        error all decline.
-        """
-        if record.content_hash is None or record.size != stat.st_size:
-            return None
-        try:
-            disk_hash = FileDiscovery.content_hash(file_path)
-        except OSError:
-            return None
-        return disk_hash if disk_hash == record.content_hash else None

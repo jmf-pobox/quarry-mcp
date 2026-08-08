@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import ipaddress
 import zlib
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Self, final
+from unittest.mock import patch
 
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from numpy.typing import NDArray
 
     from quarry.config import Settings
+    from quarry.types import EmbeddingBackend
 
 DEFAULT_DIMENSION: Final[int] = 768
 
@@ -179,3 +184,18 @@ class FakeResolver:
             return str(ipaddress.ip_address(host.strip("[]")))
         except ValueError:
             return self._address
+
+
+@contextmanager
+def patched_embedder(embedder: EmbeddingBackend) -> Generator[EmbeddingBackend]:
+    """Pin *embedder* as the streaming path's backend for the block.
+
+    The autouse fixture installs a FRESH fake per factory call, which is right
+    for isolation and useless for counting: a test that wants to assert on what
+    was embedded needs one instance it holds a reference to.  This pins that
+    instance at the one site the ingest path reads.
+    """
+    with patch(
+        "quarry.ingestion.streaming.get_embedding_backend", return_value=embedder
+    ):
+        yield embedder

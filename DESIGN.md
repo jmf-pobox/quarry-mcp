@@ -2405,5 +2405,21 @@ session-scoped invariant asserts no non-daemon thread outlived the run —
 session-scoped because LanceDB starts its pool lazily, so a per-test check would
 fail on correct code.
 
+**Amendment — network hermeticity covers subprocesses, not just this process.**
+The original enforcement faked DNS by patching `socket.getaddrinfo`, which binds
+only the interpreter running the tests. Anything the suite shells out to
+resolves and connects on its own: the shadow tests' `git fetch` against a
+deliberately unreachable remote spawned a real `ssh` on every run, passing only
+because the lookup usually failed fast, and hanging for 30 seconds per call the
+day it did not. The class is *subprocess network access*, of which git-over-ssh
+is today's only instance; the pin is stated at that level — `GIT_ALLOW_PROTOCOL`
+restricts git to local transports so any remote protocol is refused inside git
+before a resolver or socket is reached, and `GIT_TERMINAL_PROMPT=0` closes the
+other way a subprocess wedges, blocking on a credential prompt with no terminal.
+Both are faithful rather than permissive: the operation still fails, which is
+what those tests already assert, and it fails locally and instantly. A future
+subprocess that can reach the network must be pinned the same way; a fake that
+lives inside this interpreter will not cover it.
+
 Sibling to DES-045 (the watch loop whose scratch guard constrains where a test's
 project root may live) and DES-046 (the daemon's descriptor envelope).
