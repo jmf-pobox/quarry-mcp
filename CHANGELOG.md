@@ -32,6 +32,37 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- **`tool`** — `quarry enable` now ensures `.punt-labs/quarry/captures/` is
+  excluded from the target repo's `.gitignore` (creating the file if missing,
+  appending the line if absent, and leaving it untouched if already present),
+  and does so BEFORE any step that makes capture writing more live: within
+  `Enablement.enable()` the `.gitignore` ensure now runs first, and
+  `enable_project()` runs `Enablement.enable()` before writing
+  `config.md` (whose `compaction: true` has no dependency on gitignore/marker
+  state and is what makes hook-triggered capture writes go live). Previously
+  `enable` never wrote this exclusion at all, and even after adding it the
+  write-order left a fail-open window where a mid-sequence failure could
+  leave a repo "capturing enabled, unprotected." Both orderings are now
+  fail-closed. The step is idempotent and backfills a missing exclusion on
+  an already-enabled repo; `disable` never prunes the line, since it is
+  additive-only. Surfaced as `EnableResult.gitignore_ensured` and a new CLI
+  summary line. The ensured `.gitignore` also now excludes
+  `FileLock`'s own lock files (e.g. `.CLAUDE.md.lock`, `..gitignore.lock`) --
+  `FileLock` creates one beside every host file it locks and, by design,
+  never removes it, so without this every `quarry enable` left a
+  machine-local artifact a bare `git add -A` could commit. (pkit-kcps)
+- **`infra`** — `quarry`'s capture scrubber now redacts common English
+  inflections of its profanity list (`-s`/`-es`, `-ed`, `-ing`,
+  `-er`/`-ers`), not just the bare word. Two real transcripts leaked
+  "fucking" and "fucked" unredacted because only exact base-form matches were
+  scrubbed. Inflected forms that collide with unrelated real words, dice
+  games, occupational terms, or surnames (e.g. "dicker", "Heller", "craps",
+  "jerker") are excluded, per a systematic audit of every generated
+  inflection — not just the agent-noun `-er` form — against a real English
+  dictionary, so ordinary text is never over-redacted; whole-word boundary
+  matching still protects safe substrings like "class", "passing", and
+  "embassy". A consonant-doubling heuristic bug that mis-inflected the
+  disyllabic "moron" ("moronned"/"moronning") is also fixed. (pkit-kcps)
 - **`infra`** — `quarry`'s test suite no longer writes to the user's real
   `~/.punt-labs/quarry/` tree. A full run previously appended ~7,000 lines to
   `logs/quarry.log`, rotating away real daemon history every seven or eight

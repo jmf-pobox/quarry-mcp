@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from re import Pattern
 from typing import Self
 
+from quarry.profanity_inflection import ProfanityInflector
 from quarry.scrub_rules import (
     AWS_SECRET_LINE_HINT,
     BLOCK_RULES,
@@ -78,7 +79,6 @@ DEFAULT_PROFANITY: tuple[str, ...] = (
     "hell",
     "douche",
 )
-
 
 # ---------------------------------------------------------------------------
 # PII patterns
@@ -154,30 +154,24 @@ class Scrubber:
     __slots__ = (
         "_block_rules",
         "_config",
-        "_email_re",
-        "_host_re",
         "_line_rules",
-        "_path_re",
+        "_pii_rules",
         "_profanity_re",
     )
 
     _config: ScrubConfig
     _block_rules: tuple[SecretRule, ...]
     _line_rules: tuple[SecretRule, ...]
-    _path_re: Pattern[str]
-    _email_re: Pattern[str]
+    _pii_rules: tuple[SecretRule, ...]
     _profanity_re: Pattern[str] | None
-    _host_re: Pattern[str] | None
 
     def __new__(cls, config: ScrubConfig | None = None) -> Self:
         self = super().__new__(cls)
         self._config = config if config is not None else ScrubConfig()
         self._block_rules = BLOCK_RULES
         self._line_rules = LINE_RULES
-        self._path_re = _PATH_RE
-        self._email_re = _EMAIL_RE
         self._profanity_re = self._build_profanity_re()
-        self._host_re = self._build_host_re()
+        self._pii_rules = self._build_pii_rules()
         return self
 
     @property
@@ -204,9 +198,7 @@ class Scrubber:
             )
 
         if cfg.scrub_pii:
-            text = self._scrub_paths(text, counts)
-            text = self._scrub_emails(text, counts)
-            text = self._scrub_hostname(text, counts)
+            text = self._scrub_pii(text, counts)
 
         if cfg.scrub_profanity:
             text = self._scrub_profanity(text, counts)
@@ -216,10 +208,7 @@ class Scrubber:
     def _scrub_block_secrets(self, text: str, counts: Counter[str]) -> str:
         """Apply whole-document redactions (PEM/GPG/env-secret)."""
         for rule in self._block_rules:
-            new_text, n = rule.pattern.subn(rule.replacement(), text)
-            if n:
-                counts[rule.category] += n
-                text = new_text
+            text = self._redact(rule, text, counts)
         return text
 
     def _scrub_line_secrets(self, line: str, counts: Counter[str]) -> str:
@@ -229,54 +218,59 @@ class Scrubber:
                 line
             ):
                 continue
-            new_line, n = rule.pattern.subn(rule.replacement(), line)
-            if n:
-                counts[rule.category] += n
-                line = new_line
+            line = self._redact(rule, line, counts)
         return line
 
-    def _scrub_paths(self, text: str, counts: Counter[str]) -> str:
-        """Replace home directories with ``~`` (the trailing slash is kept)."""
-        new_text, n = self._path_re.subn("~", text)
-        if n:
-            counts["path"] += n
-        return new_text
-
-    def _scrub_emails(self, text: str, counts: Counter[str]) -> str:
-        """Replace RFC-shaped addresses with the email placeholder."""
-        new_text, n = self._email_re.subn(self._config.email_placeholder, text)
-        if n:
-            counts["email"] += n
-        return new_text
-
-    def _scrub_hostname(self, text: str, counts: Counter[str]) -> str:
-        """Redact the local machine hostname, if one was resolved."""
-        if self._host_re is None:
-            return text
-        new_text, n = self._host_re.subn(self._config.hostname_placeholder, text)
-        if n:
-            counts["hostname"] += n
-        return new_text
+    def _scrub_pii(self, text: str, counts: Counter[str]) -> str:
+        """Apply every whole-document PII rule (path, email, hostname) in order."""
+        for rule in self._pii_rules:
+            text = self._redact(rule, text, counts)
+        return text
 
     def _scrub_profanity(self, text: str, counts: Counter[str]) -> str:
-        """Replace whole-word profanity matches with the marker."""
+        """Replace whole-word profanity matches with the marker, if configured."""
         if self._profanity_re is None:
             return text
-        new_text, n = self._profanity_re.subn("[REDACTED:profanity]", text)
+        return self._redact(SecretRule("profanity", self._profanity_re), text, counts)
+
+    @staticmethod
+    def _redact(rule: SecretRule, text: str, counts: Counter[str]) -> str:
+        """Apply one whole-document substitution, counting hits by the rule's category.
+
+        Shared by every pass above — block secrets, line secrets, and every
+        PII/profanity rule in :attr:`_pii_rules` — each previously
+        duplicated this subn+count+return shape on its own compiled pattern.
+        """
+        new_text, n = rule.pattern.subn(rule.replacement(), text)
         if n:
-            counts["profanity"] += n
+            counts[rule.category] += n
         return new_text
 
-    def _build_profanity_re(self) -> Pattern[str] | None:
-        """Compile a whole-word regex covering the config's profanity words.
+    def _build_pii_rules(self) -> tuple[SecretRule, ...]:
+        """Build the PII rules: path, email, and, if resolved, hostname."""
+        rules = [
+            SecretRule("path", _PATH_RE, "~"),
+            SecretRule("email", _EMAIL_RE, self._config.email_placeholder),
+        ]
+        host_re = self._build_host_re()
+        if host_re is not None:
+            placeholder = self._config.hostname_placeholder
+            rules.append(SecretRule("hostname", host_re, placeholder))
+        return tuple(rules)
 
-        Returns ``None`` if the list is empty.
+    def _build_profanity_re(self) -> Pattern[str] | None:
+        """Compile a whole-word regex over the config's words and their inflections.
+
+        ``None`` if the list is empty. :class:`ProfanityInflector` expands
+        each base word first, so the ``\\b...\\b`` regex still matches
+        exactly, not via an over-matching optional suffix.
         """
         words = self._config.profanity_words
         cleaned = sorted({w.strip().lower() for w in words if w.strip()})
         if not cleaned:
             return None
-        body = "|".join(re.escape(w) for w in cleaned)
+        forms = ProfanityInflector().expand(cleaned)
+        body = "|".join(re.escape(f) for f in sorted(forms))
         return re.compile(rf"\b(?:{body})\b", re.IGNORECASE)
 
     def _build_host_re(self) -> Pattern[str] | None:

@@ -15,6 +15,7 @@ def test_enable_report_lists_claudemd_steps() -> None:
         guide_deposited=True,
         enabled_marker_written=True,
         import_registered=True,
+        gitignore_ensured=True,
     )
     lines = EnableReport(result).lines()
     assert lines[0] == "Enabled quarry for /p"
@@ -23,6 +24,7 @@ def test_enable_report_lists_claudemd_steps() -> None:
     assert "Registered @.punt-labs/quarry/CLAUDE.md" in joined
     # Symmetry with DisableReport's marker line: the write is surfaced.
     assert "Wrote enabled marker" in joined
+    assert ".gitignore excludes captures and lock files" in joined
 
 
 def test_enable_report_omits_absent_steps() -> None:
@@ -34,6 +36,29 @@ def test_enable_report_omits_absent_steps() -> None:
     # An idempotent re-enable's marker no-op is visible by its absence, like
     # DisableReport omits the marker line when nothing was removed.
     assert "Wrote enabled marker" not in joined
+    assert ".gitignore excludes captures and lock files" not in joined
+
+
+def test_enable_report_gitignore_message_states_postcondition_not_delta() -> None:
+    """The .gitignore line must not name one entry when only the other was added.
+
+    Regression for a Bugbot LOW finding: gitignore_ensured is a single bool
+    covering two possible entries (captures path, FileLock's lock-artifact
+    glob). The message states the guaranteed postcondition (both entries are
+    now present) rather than which specific entry this run backfilled, so it
+    stays accurate whether this run added the captures line, the lock glob,
+    or both.
+    """
+    result = EnableResult(
+        directory="/p",
+        collection="p",
+        captures_collection="p-captures",
+        gitignore_ensured=True,
+    )
+    joined = "\n".join(EnableReport(result).lines())
+    assert ".gitignore excludes captures and lock files" in joined
+    # The old wording claimed one specific entry -- must not reappear.
+    assert "Added captures/ exclusion" not in joined
 
 
 def test_enable_report_reports_ethos_skipped() -> None:
