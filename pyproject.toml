@@ -65,7 +65,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.13.0",
+    # 0.15.8 is the first ruff whose S603 stops flagging a subprocess call
+    # with fully literal argv (bisected: 0.15.7 flags hooks.py:139, 0.15.8
+    # does not).  Below it the repo cannot be green on any single source
+    # state: the older ruff demands a `# noqa: S603` there and the newer
+    # one rejects that same directive as unused (RUF100).
+    "ruff>=0.15.8",
     "mypy>=1.18.1",
     "pyright>=1.1.0",
     "pytest>=8.4.2",

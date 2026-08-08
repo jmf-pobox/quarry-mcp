@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Self, final
 
 if TYPE_CHECKING:
     import asyncio
+    from collections.abc import Callable
     from types import TracebackType
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,15 @@ class UncaughtExceptionLog:
 
     __slots__ = ("_prior_system", "_prior_thread")
 
-    _prior_system: object
-    _prior_thread: object
+    # The exact shapes the interpreter installs, so the delegation below needs
+    # no callable() narrowing: sys.excepthook takes the exception triple,
+    # threading.excepthook takes the single args object.
+    _prior_system: Callable[
+        [type[BaseException], BaseException, TracebackType | None], None
+    ]
+    # ``object`` return, not ``None``: typeshed types threading.excepthook's
+    # return as object, and narrowing it here would reject the real hook.
+    _prior_thread: Callable[[threading.ExceptHookArgs], object]
 
     def __new__(cls) -> Self:
         self = super().__new__(cls)
@@ -62,20 +70,28 @@ class UncaughtExceptionLog:
     def bind_loop(loop: asyncio.AbstractEventLoop) -> None:
         """Route the loop's unhandled-exception reports into the log.
 
-        The default handler writes to stderr through the ``asyncio`` logger only
-        when a handler exists for it; binding explicitly makes the message ours
-        and keeps the context dict, which names the task that failed.
+        The message alone is not enough: asyncio puts the failing object under
+        ``future`` (or ``task``), and its repr is what carries the task NAME.
+        In a daemon whose tasks are named, that name is the forensic detail
+        this logging exists to preserve, so it goes into the logged line.
+
+        The handler then chains to ``default_exception_handler``, matching the
+        other two hooks: ours is an addition, not a replacement, and the
+        supervisor's stderr keeps its copy.
         """
 
         def handler(
-            _loop: asyncio.AbstractEventLoop, context: dict[str, object]
+            loop: asyncio.AbstractEventLoop, context: dict[str, object]
         ) -> None:
             message = context.get("message", "unhandled exception in event loop")
+            source = context.get("future") or context.get("task")
+            where = f" in {source!r}" if source is not None else ""
             exception = context.get("exception")
             if isinstance(exception, BaseException):
-                logger.error("%s", message, exc_info=exception)
+                logger.error("%s%s", message, where, exc_info=exception)
             else:
-                logger.error("%s (context: %r)", message, context)
+                logger.error("%s%s (context: %r)", message, where, context)
+            loop.default_exception_handler(context)
 
         loop.set_exception_handler(handler)
 
@@ -92,9 +108,7 @@ class UncaughtExceptionLog:
             logger.info("interrupted")
         else:
             logger.critical("uncaught exception", exc_info=(exc_type, exc, traceback))
-        prior = self._prior_system
-        if callable(prior):
-            prior(exc_type, exc, traceback)
+        self._prior_system(exc_type, exc, traceback)
 
     def _on_thread_exception(self, args: threading.ExceptHookArgs) -> None:
         """Log a worker-thread exception, then let the prior hook run."""
@@ -102,6 +116,4 @@ class UncaughtExceptionLog:
         name = args.thread.name if args.thread is not None else "unknown"
         if exc is not None:
             logger.critical("uncaught exception in thread %s", name, exc_info=exc)
-        prior = self._prior_thread
-        if callable(prior):
-            prior(args)
+        self._prior_thread(args)

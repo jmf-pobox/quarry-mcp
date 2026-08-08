@@ -124,6 +124,35 @@ class TestEventLoop:
         assert "Task exception was never retrieved" in caplog.text
         assert "RuntimeError: task died" in caplog.text
 
+    def test_the_task_name_survives_into_the_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The name is the forensic detail; the message alone does not carry it."""
+
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            UncaughtExceptionLog.bind_loop(loop)
+
+            async def boom() -> None:
+                msg = "task died"
+                raise RuntimeError(msg)
+
+            task = asyncio.create_task(boom(), name="watch-sweep")
+            await asyncio.sleep(0)
+            with pytest.raises(RuntimeError):
+                await task
+            loop.call_exception_handler(
+                {
+                    "message": "Task exception was never retrieved",
+                    "exception": task.exception(),
+                    "future": task,
+                }
+            )
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(main())
+        assert "watch-sweep" in caplog.text, "the task name must reach the log"
+
     def test_a_context_without_an_exception_still_reports(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
