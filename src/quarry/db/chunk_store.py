@@ -65,7 +65,10 @@ class ChunkStore:
         if table is not None:
             with _write_lock:
                 table.add(records)
-        logger.info("Inserted %d chunks into %s", len(records), TABLE_NAME)
+        # DEBUG, not INFO: this fires once per FLUSH WINDOW (DES-034 progressive
+        # commit), so a single large document emits it many times.  The
+        # per-document totals the operator reads are logged by the pipeline.
+        logger.debug("Inserted %d chunks into %s", len(records), TABLE_NAME)
         return len(records)
 
     def delete_document(

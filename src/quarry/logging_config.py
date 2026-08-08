@@ -11,9 +11,19 @@ from typing import final
 
 @final
 class LoggingConfig:
-    """Configure logging with rotating file and stderr handlers."""
+    """Configure logging with rotating file and stderr handlers.
 
-    _LOG_FILE_NAME: str = "quarry.log"
+    Two processes configure logging into the same directory under two names.
+    ``quarry.log`` is the client tier: many short-lived CLI and MCP processes.
+    ``quarryd.log`` is the daemon: one long-lived writer.  They are kept apart
+    because interleaving them makes attribution hard exactly when it matters --
+    reading a single file, you cannot tell which of a dozen processes emitted a
+    line, and a daemon incident is diagnosed by reading the daemon's own
+    sequence.  Same directory, same format, same rotation policy; two files.
+    """
+
+    CLIENT_LOG: str = "quarry.log"
+    DAEMON_LOG: str = "quarryd.log"
 
     _FORMAT: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     _DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"
@@ -37,12 +47,18 @@ class LoggingConfig:
         return Path.home() / ".punt-labs" / "quarry" / "logs"
 
     @classmethod
-    def configure(cls, *, stderr_level: str = "WARNING") -> None:
+    def configure(
+        cls, *, stderr_level: str = "WARNING", log_file: str = CLIENT_LOG
+    ) -> None:
         """Configure logging with rotating file and stderr handlers.
 
         File handler is always active at INFO level.
         Stderr handler level is controlled by the caller, unless overridden
         by the ``QUARRY_LOG_LEVEL`` environment variable.
+
+        *log_file* selects which file in the resolved directory receives the
+        output -- :attr:`CLIENT_LOG` for CLI and MCP processes,
+        :attr:`DAEMON_LOG` for ``quarryd``.
         """
         log_dir = cls.log_dir()
         log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -67,7 +83,7 @@ class LoggingConfig:
                 "handlers": {
                     "file": {
                         "class": "logging.handlers.RotatingFileHandler",
-                        "filename": str(log_dir / cls._LOG_FILE_NAME),
+                        "filename": str(log_dir / log_file),
                         "maxBytes": cls._MAX_BYTES,
                         "backupCount": cls._BACKUP_COUNT,
                         "encoding": "utf-8",

@@ -42,7 +42,10 @@ class SearchRoutes(RouteGroup):
         )
         formatted = [r.to_dict() for r in results]
 
-        logger.info("Search results=%d", len(formatted))
+        # DEBUG, not INFO: search is the daemon's highest-frequency request, and
+        # a result count per query would bury the operational record it shares a
+        # file with.  Raise the level to trace query volume when investigating.
+        logger.debug("Search results=%d", len(formatted))
         return JSONResponse(
             {"query": query, "total_results": len(formatted), "results": formatted}
         )

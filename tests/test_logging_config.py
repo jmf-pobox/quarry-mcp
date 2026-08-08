@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from quarry.logging_config import LoggingConfig
+from tests.hermetic_env import ENV
 
 if TYPE_CHECKING:
     import pytest
@@ -81,3 +84,87 @@ class TestLogDirResolution:
         config = mock_dc.call_args[0][0]
         assert config["handlers"]["file"]["filename"] == str(target / "quarry.log")
         assert target.is_dir(), "configure must create the directory it names"
+
+
+class TestDaemonLogFile:
+    """The daemon writes its own file beside the client's, not into it."""
+
+    def test_daemon_and_client_write_different_files(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """One long-lived writer and many short-lived ones stay separable.
+
+        Interleaved, a line cannot be attributed to a process, which is what
+        made the week's forensics hard; separate files make the daemon's own
+        sequence readable on its own.
+        """
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure(log_file=LoggingConfig.DAEMON_LOG)
+        daemon_file = mock_dc.call_args[0][0]["handlers"]["file"]["filename"]
+        with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+            LoggingConfig.configure()
+        client_file = mock_dc.call_args[0][0]["handlers"]["file"]["filename"]
+
+        assert daemon_file == str(tmp_path / "quarryd.log")
+        assert client_file == str(tmp_path / "quarry.log")
+        assert daemon_file != client_file
+
+    def test_both_files_share_one_rotation_policy(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Splitting the file must not split the size cap or the backup count."""
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        policies = []
+        for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
+            with patch("quarry.logging_config.logging.config.dictConfig") as mock_dc:
+                LoggingConfig.configure(log_file=name)
+            handler = mock_dc.call_args[0][0]["handlers"]["file"]
+            policies.append(
+                (handler["class"], handler["maxBytes"], handler["backupCount"])
+            )
+        assert policies[0] == policies[1]
+        assert policies[0] == ("logging.handlers.RotatingFileHandler", 5_242_880, 5)
+
+
+class TestDaemonLoggingIsRealAndContained:
+    """Configure for real (no mocks) and read the bytes back off disk."""
+
+    def test_operational_lines_land_timestamped_in_the_daemon_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The defect was that these lines reached no file at all."""
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        monkeypatch.delenv("QUARRY_LOG_LEVEL", raising=False)
+        root = logging.getLogger()
+        prior = (root.handlers[:], root.level)
+        try:
+            LoggingConfig.configure(log_file=LoggingConfig.DAEMON_LOG)
+            logging.getLogger("quarry.db.optimizer").info("Optimized table chunks")
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            written = (tmp_path / "quarryd.log").read_text()
+        finally:
+            for handler in logging.getLogger().handlers:
+                handler.close()
+            root.handlers[:], root.level = prior
+        assert "Optimized table chunks" in written
+        assert "[INFO] quarry.db.optimizer" in written
+        # A timestamp is the whole point: an undated traceback in the
+        # supervisor's stderr file is what made a dead error look live.
+        assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", written)
+
+    def test_the_suite_redirect_contains_daemon_logging(self) -> None:
+        """Hermeticity: with no override set, the session HOME still binds it.
+
+        The redirect is what keeps a daemon-path test out of the operator's
+        real tree, and it must hold for the new file exactly as for the old.
+        """
+        resolved = LoggingConfig.log_dir()
+        assert str(resolved).startswith(str(ENV.home)), resolved
+        # Not ``Path("~").expanduser()`` for the negative: the redirect works by
+        # moving $HOME, so expanduser resolves to the session home too and the
+        # check would pass no matter what.  ENV.real_tree names the production
+        # file directly, which is the only fixed reference to compare against.
+        real_quarry = ENV.real_tree[0].parent
+        assert not str(resolved).startswith(str(real_quarry)), resolved
