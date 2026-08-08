@@ -49,6 +49,23 @@ _THREAD_PINS: Final[dict[str, str]] = {
     "LANCE_IO_THREADS": "2",
 }
 
+# Faking DNS in-process does nothing for a SUBPROCESS, which resolves and
+# connects on its own.  The shadow tests bootstrap against a deliberately
+# unreachable remote, so ``git fetch`` spawned a real ``ssh`` on every run; that
+# passed only because the lookup usually failed fast, and turned into a 30-second
+# hang per call the day it did not.  Restricting git to local transports refuses
+# every remote protocol instantly, in git itself, before any resolver or socket.
+# ``file`` stays allowed so a test may still use a local path as a remote.
+#
+# This is faithful rather than permissive: the fetch still FAILS, which is what
+# those tests already assert -- it just fails locally.  ``GIT_TERMINAL_PROMPT``
+# closes the other way a subprocess can wedge, blocking on a credential prompt
+# with no terminal to answer it.
+_NETWORK_PINS: Final[dict[str, str]] = {
+    "GIT_ALLOW_PROTOCOL": "file",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
 
 def _drop_ambient_git_config() -> None:
     """Remove the shell's ``GIT_CONFIG_*`` injection for this process.
@@ -102,6 +119,7 @@ class HermeticEnv:
         os.environ["QUARRY_ROOT"] = str(quarry_dir / "data")
         os.environ["QUARRY_LOG_DIR"] = str(quarry_dir / "logs")
         os.environ.update(_THREAD_PINS)
+        os.environ.update(_NETWORK_PINS)
         _drop_ambient_git_config()
 
         return cls(home, real_tree)
