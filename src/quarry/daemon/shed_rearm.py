@@ -55,12 +55,13 @@ class ShedEventRearmer:
         """Wire the debouncer shed events are fed back through."""
         self._dispatcher = dispatcher
 
-    def forget(self, key: RouteKey) -> None:
-        """Drop *key*'s backoff state (deregister/stop-watching)."""
-        self._backoff.pop(key, None)
+    def reset(self, key: RouteKey) -> None:
+        """Drop *key*'s accumulated delay, so its next shed starts from the base.
 
-    def clear(self, key: RouteKey) -> None:
-        """Reset *key*'s delay after a batch cleared without shedding."""
+        Both callers want exactly this: a batch that cleared without shedding
+        has no failure left to back off from, and a deregistered key has no
+        events left at all.
+        """
         self._backoff.pop(key, None)
 
     def cancel_pending(self) -> None:

@@ -42,7 +42,14 @@ logger = logging.getLogger(__name__)
 
 @final
 class WatchSubmitter:
-    """Submit watch-derived IngestUnits to the queue, re-arming shed live events."""
+    """Submit watch-derived IngestUnits to the queue, re-arming shed live events.
+
+    Carries known cohesion debt: LCOM 0.78 against a 0.5 target, because the
+    batch path and the scan path reach different collaborators.  Three classes
+    have already moved out (the finalize throttle, the scan sweep, the shed
+    re-arm), and the rule for whoever comes next is that the remainder gets
+    split further rather than relaxed again.
+    """
 
     __slots__ = ("_ctx", "_rearm", "_roster", "_throttle")
 
@@ -74,7 +81,7 @@ class WatchSubmitter:
 
     def forget(self, key: RouteKey) -> None:
         """Drop *key*'s backoff state (deregister/stop-watching)."""
-        self._rearm.forget(key)
+        self._rearm.reset(key)
 
     def on_batch(self, batch: FlushBatch) -> None:
         """Dispatcher sink: turn one quiescent batch into queue submissions."""
@@ -99,7 +106,7 @@ class WatchSubmitter:
         if failed:
             self._rearm.defer(batch.key, failed)
             return
-        self._rearm.clear(batch.key)  # batch cleared — reset backoff
+        self._rearm.reset(batch.key)  # batch cleared — reset backoff
         # Rate-limit the heavy finalize: sustained churn coalesces into one
         # optimize+FTS-rebuild per interval per database, not one per batch. The
         # finalize is table-wide, so running under this batch's (possibly later
