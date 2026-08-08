@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Self
 
-import fitz
+import pymupdf
 from PIL import Image
 
 from quarry.config import Settings
@@ -121,7 +121,7 @@ class LocalOcrBackend:
 
     @classmethod
     def _ocr_pdf(cls, pdf_path: Path, job: OcrJob) -> list[PageContent]:
-        with fitz.open(pdf_path) as doc:
+        with pymupdf.open(pdf_path) as doc:
             pages = ((num, cls._render_pdf_page(doc, num)) for num in job.page_numbers)
             return cls._ocr_pages(pages, job)
 
@@ -164,7 +164,7 @@ class LocalOcrBackend:
         return results
 
     @staticmethod
-    def _render_pdf_page(doc: fitz.Document, page_number: int) -> Image.Image:
+    def _render_pdf_page(doc: pymupdf.Document, page_number: int) -> Image.Image:
         """Render a 1-indexed PDF page to a PIL Image at 200 DPI."""
         page = doc[page_number - 1]
         pix = page.get_pixmap(dpi=200)

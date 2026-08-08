@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import fitz
+import pymupdf
 
 from quarry.config import Settings
 from quarry.extractors.pdf_extractor import MIN_TEXT_CHARS_FOR_TEXT_PAGE, PdfExtractor
@@ -37,7 +37,7 @@ class TestClassifyPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page(text)
 
         with patch(
-            "quarry.extractors.pdf_extractor.fitz.open",
+            "quarry.extractors.pdf_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = PdfExtractor._classify_pages(pdf_path)
@@ -56,7 +56,7 @@ class TestClassifyPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
         with patch(
-            "quarry.extractors.pdf_extractor.fitz.open",
+            "quarry.extractors.pdf_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = PdfExtractor._classify_pages(pdf_path)
@@ -78,7 +78,7 @@ class TestClassifyPages:
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
         with patch(
-            "quarry.extractors.pdf_extractor.fitz.open",
+            "quarry.extractors.pdf_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = PdfExtractor._classify_pages(pdf_path)
@@ -97,7 +97,7 @@ class TestClassifyPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("short")
 
         with patch(
-            "quarry.extractors.pdf_extractor.fitz.open",
+            "quarry.extractors.pdf_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = PdfExtractor._classify_pages(pdf_path)
@@ -111,7 +111,7 @@ class TestExtractPagesDegradesWithoutOcr:
 
     def _mixed_pdf(self, tmp_path: Path) -> Path:
         pdf_path = tmp_path / "mixed.pdf"
-        doc = fitz.open()
+        doc = pymupdf.open()
         text_page = doc.new_page()
         text_page.insert_text((72, 72), "This page has a real text layer. " * 4)
         doc.new_page()  # blank → classified IMAGE → routed to OCR

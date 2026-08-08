@@ -52,7 +52,7 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: pages[idx]
 
         with patch(
-            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            "quarry.ingestion.pdf_text_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1, 3], total_pages=3)
@@ -71,7 +71,7 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("content")
 
         with patch(
-            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            "quarry.ingestion.pdf_text_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1], total_pages=10)
@@ -88,7 +88,7 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: _mock_page("  text with spaces  \n")
 
         with patch(
-            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            "quarry.ingestion.pdf_text_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1], total_pages=1)
@@ -122,7 +122,7 @@ class TestExtractTextPages:
         mock_doc.__getitem__ = lambda _, idx: page
 
         with patch(
-            "quarry.ingestion.pdf_text_extractor.fitz.open",
+            "quarry.ingestion.pdf_text_extractor.pymupdf.open",
             return_value=_mock_doc_cm(mock_doc),
         ):
             results = extract_text_pages(pdf_path, [1], total_pages=1)

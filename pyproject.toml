@@ -212,7 +212,6 @@ disallow_incomplete_defs = false
 [[tool.mypy.overrides]]
 module = [
     "lancedb.*",
-    "fitz",
     "openpyxl",
     "openpyxl.*",
     "pptx",
@@ -235,12 +234,23 @@ module = [
 ]
 ignore_missing_imports = true
 
+# pymupdf gets its own block because it needs one setting the others do not.
+# The old `fitz` alias was unresolvable, so ignore_missing_imports was enough;
+# pymupdf ships a real package, which mypy follows into unannotated source and
+# then reports every call into it as untyped. Skipping the follow restores the
+# treatment the stub-less libraries above already get — Any at the boundary,
+# with our own annotations checked on our side of it.
+[[tool.mypy.overrides]]
+module = ["pymupdf", "pymupdf.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
 # Resolve first-party ``tools.eval`` (the eval harness) imported from tests.
 extraPaths = ["."]
-# These 6 suppressions exist because lancedb, rapidocr, onnxruntime, fitz,
+# These 6 suppressions exist because lancedb, rapidocr, onnxruntime, pymupdf,
 # and pyarrow ship no type stubs. Every value returned from these libraries
 # is Unknown, cascading 591 errors across the codebase. The alternative is
 # 591 inline pyright:ignore comments — strictly worse.

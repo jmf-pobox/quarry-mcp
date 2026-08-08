@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
-import fitz
+import pymupdf
 import pytest
 from PIL import Image
 
@@ -35,7 +35,7 @@ def _mock_ocr_result(texts: list[str] | None) -> OcrResult:
 def _create_pdf(tmp_path: Path, text: str, num_pages: int = 1) -> Path:
     """Create a minimal PDF with text on each page."""
     pdf_path = tmp_path / "test.pdf"
-    doc = fitz.open()
+    doc = pymupdf.open()
     for i in range(num_pages):
         page = doc.new_page()
         page.insert_text((72, 72), f"{text} page {i + 1}")
@@ -86,7 +86,7 @@ class TestExtractText:
 class TestRenderPdfPage:
     def test_renders_to_pil_image(self, tmp_path: Path) -> None:
         pdf_path = _create_pdf(tmp_path, "test")
-        with fitz.open(pdf_path) as doc:
+        with pymupdf.open(pdf_path) as doc:
             img = LocalOcrBackend._render_pdf_page(doc, 1)
         assert isinstance(img, Image.Image)
         assert img.mode == "RGB"
@@ -95,7 +95,7 @@ class TestRenderPdfPage:
 
     def test_page_number_is_one_indexed(self, tmp_path: Path) -> None:
         pdf_path = _create_pdf(tmp_path, "test", num_pages=3)
-        with fitz.open(pdf_path) as doc:
+        with pymupdf.open(pdf_path) as doc:
             img1 = LocalOcrBackend._render_pdf_page(doc, 1)
             img3 = LocalOcrBackend._render_pdf_page(doc, 3)
         assert isinstance(img1, Image.Image)

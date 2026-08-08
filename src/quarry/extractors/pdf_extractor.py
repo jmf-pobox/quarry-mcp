@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
-import fitz
+import pymupdf
 
 from quarry.ingestion.pdf_text_extractor import extract_text_pages
 from quarry.models import PageAnalysis, PageContent, PageType
@@ -86,7 +86,7 @@ class PdfExtractor:
         """Classify each page as TEXT or IMAGE based on extractable text content."""
         results: list[PageAnalysis] = []
 
-        with fitz.open(pdf_path) as doc:
+        with pymupdf.open(pdf_path) as doc:
             logger.debug("Opened %s: %d pages", pdf_path.name, len(doc))
             for page_num in range(len(doc)):
                 page = doc[page_num]

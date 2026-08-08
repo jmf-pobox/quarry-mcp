@@ -9,7 +9,7 @@ from quarry.ingestion.pdf_reflow import PdfReflow, ReflowBlock, ReflowLine
 
 @dataclass(frozen=True, slots=True)
 class _StubPage:
-    """Minimal fitz-page stand-in: ``get_text("dict")`` vs flat ``get_text()``."""
+    """Minimal pymupdf-page stand-in: ``get_text("dict")`` vs flat ``get_text()``."""
 
     dict_result: dict[str, object]
     flat_result: str
@@ -21,7 +21,7 @@ class _StubPage:
 def _line(
     text: str, x1: float, x0: float = 72.0, y0: float = 0.0, y1: float = 0.0
 ) -> dict[str, object]:
-    """Build a fitz-shaped line dict with an explicit bounding box."""
+    """Build a pymupdf-shaped line dict with an explicit bounding box."""
     return {"bbox": (x0, y0, x1, y1), "spans": [{"text": text}]}
 
 
@@ -113,7 +113,7 @@ class TestDecoratedIdentifiersGoldenOracle:
 class TestTableOfContentsOracle:
     """Pinned oracle mirroring architecture.pdf p2 TOC geometry.
 
-    fitz fragments each TOC entry into three lines sharing a baseline: a title
+    pymupdf fragments each TOC entry into three lines sharing a baseline: a title
     (left, well short of the margin), a dot-leader run (middle), and a page
     number (far right, reaching the margin). Consecutive rows sit ~12pt apart.
     Without row reassembly the prose soft-wrap heuristic concatenates the title
@@ -228,7 +228,7 @@ class TestMixedFontRowReassembly:
     """A TOC row whose fragments differ in ``y0`` still reflows to one line.
 
     Real TOCs mix font sizes: a title and its page number share a baseline but
-    their bbox tops (``y0``, what fitz reports) differ by a point or two. A
+    their bbox tops (``y0``, what pymupdf reports) differ by a point or two. A
     fixed global y-grid would drop the two into different bands and split the
     page number off as an orphan. Adjacency clustering keeps the row together.
     """
@@ -332,7 +332,7 @@ class TestWrapJoining:
 
     def test_paragraph_break_inside_one_block(self) -> None:
         # A short sentence-ending line followed by a capitalised line is a real
-        # paragraph break even though fitz grouped both paragraphs in one block.
+        # paragraph break even though pymupdf grouped both paragraphs in one block.
         page = _page(
             _block(
                 _line("Quarry ingests documents and serves semantic search to", 523.0),

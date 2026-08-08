@@ -511,12 +511,12 @@ def database(lance_db: LanceDB) -> Database:
 @pytest.fixture(scope="session")
 def pdf_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Generate 2-page PDF with embedded text via PyMuPDF."""
-    import fitz
+    import pymupdf
 
     tmp = tmp_path_factory.mktemp("fixtures")
     path = tmp / "test-document.pdf"
 
-    doc = fitz.open()
+    doc = pymupdf.open()
 
     page1 = doc.new_page(width=612, height=792)
     page1.insert_text(

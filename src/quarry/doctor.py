@@ -118,13 +118,12 @@ def _check_imports() -> CheckResult:
     # OCR's modules (rapidocr, cv2) are deliberately absent: they are an optional
     # capability, and importing rapidocr can transitively load the GUI-linked cv2
     # that fails on a headless box. Their absence must not fail this required
-    # check; OCR availability is reported separately (advisory) by
-    # InferenceDiagnostics.local_ocr().
+    # check.
     modules = [
         "lancedb",
         "tokenizers",
         "huggingface_hub",
-        "fitz",
+        "pymupdf",
         "PIL",
         "onnxruntime",
     ]
