@@ -341,7 +341,7 @@ def test_subsume_purge_failure_is_logged_and_reported(
     asyncio.run(_run())
 
 
-def test_index_one_reembeds_unchanged_content(tmp_path: Path) -> None:
+def test_index_one_does_not_reembed_unchanged_content(tmp_path: Path) -> None:
     """A second index of byte-identical content must not embed anything again.
 
     A watch event fires on any write, including the many that leave content
