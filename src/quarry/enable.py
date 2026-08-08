@@ -134,10 +134,14 @@ def enable_project(
 
     ethos = EthosMemoryBootstrap().run()
 
-    config_path = _write_project_config(directory)
+    # Enablement runs BEFORE the config write: config.md's compaction flag
+    # has no gitignore/marker dependency, so it makes hook-triggered capture
+    # writes live the moment it lands. This order keeps a mid-failure repo
+    # "not yet enabled" rather than "enabled and unprotected".
     claudemd = Enablement(directory).enable()
     if claudemd.import_registered:
         logger.info("Registered quarry @-import in CLAUDE.md")
+    config_path = _write_project_config(directory)
 
     return EnableResult(
         directory=str(directory),

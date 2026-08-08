@@ -18,15 +18,19 @@ __all__ = ["ProfanityInflector"]
 # Vowels for the plural/doubling heuristics below (English spelling rules).
 _VOWELS = frozenset("aeiou")
 
-# Inflected forms that are unrelated real English words or common surnames,
-# not slurs -- excluded so the ``-er`` agent-noun inflection never redacts
-# ordinary text. "dicker"/"dickers" means "to negotiate" (unrelated to
-# "dick"); "heller"/"hellers" is both a historical coin denomination and a
-# common surname (e.g. author Joseph Heller), unrelated to "hell". Accepted
-# limit: this set is curated by inspection of ``DEFAULT_PROFANITY``'s current
-# 19 words, not derived automatically -- a future addition to that tuple
-# needs the same by-hand check for its own ``-er`` collisions.
-_EXCLUDED_INFLECTIONS = frozenset({"dicker", "dickers", "heller", "hellers"})
+# Inflected forms that are separate, unrelated real English lexemes, not
+# slurs, excluded so an inflection never redacts ordinary text: "dicker"
+# ("to negotiate"), "heller" (coin denomination / surname), "jerker"
+# (archaic: "soda jerker"), "craps" (the dice game). Contrast "damning"/
+# "damned"/"damner" -- damn's own morphological paradigm, kept matched, same
+# as this scrubber's no-sense-discrimination base words ("hell" in "what the
+# hell" still redacts). Curated against DEFAULT_PROFANITY's 19 words,
+# cross-checked in /usr/share/dict/{web2,web2a,propernames} for EVERY
+# inflection (not just ``-er`` -- that's how "craps" slipped through). A
+# future addition to that tuple needs the same by-hand check.
+_EXCLUDED_INFLECTIONS = frozenset(
+    {"dicker", "dickers", "heller", "hellers", "jerker", "jerkers", "craps"}
+)
 
 
 @final
@@ -113,10 +117,13 @@ class ProfanityInflector:
 
         Requires a consonant-vowel-consonant tail (e.g. "c-r-a-p") and a
         final letter outside ``w``/``x``/``y`` (English never doubles those).
-        The 3-5 character band targets this profanity list's short, single-
-        syllable roots; see :meth:`_verb_forms` for why length matters.
+        Doubling applies to a *stressed* final syllable -- every monosyllable
+        qualifies, but "MOR-on" is stressed on its FIRST syllable, so
+        doubling would misspell "moronned". The 3-4 band is this list's
+        monosyllabic-root length; "moron" (5, CVC-shaped) is disyllabic and
+        excluded rather than mis-doubled.
         """
-        if not 3 <= len(word) <= 5:
+        if not 3 <= len(word) <= 4:
             return False
         if word[-1] in "wxy":
             return False

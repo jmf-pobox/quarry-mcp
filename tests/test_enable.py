@@ -624,6 +624,43 @@ class TestEnableEnsuresCapturesGitignore:
         assert "*.pyc" in content
         assert CAPTURES_GITIGNORE_ENTRY in content
 
+    def test_enable_ensures_gitignore_before_writing_capture_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The .gitignore exclusion lands BEFORE config.md's compaction flag.
+
+        config.md's ``compaction: true`` is what makes hook-triggered capture
+        writes live; it has no dependency on gitignore/marker state. If
+        config.md landed first, a failure between the two writes would leave
+        the repo "capturing enabled, unprotected". Enablement().enable() must
+        run — and therefore the .gitignore exclusion must exist — before
+        config.md is ever written, so a failure at the config-write step
+        still leaves the repo protected.
+        """
+        import quarry.enable as enable_module
+
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+
+        def boom(directory: Path) -> str:
+            raise OSError("config write failed")
+
+        monkeypatch.setattr(enable_module, "_write_project_config", boom)
+
+        with (
+            patch(_NO_ETHOS, tmp_path / "no-ethos"),
+            pytest.raises(OSError, match="config write failed"),
+        ):
+            enable_project(project, client)
+
+        # Enablement().enable() already ran and committed its protection
+        # before the config write raised.
+        assert CAPTURES_GITIGNORE_ENTRY in (project / ".gitignore").read_text()
+        assert EnabledMarker(project).is_present()
+        config_path = project / ".punt-labs" / "quarry" / "config.md"
+        assert not config_path.exists()
+
 
 class TestEnableImportIdempotent:
     def test_running_enable_twice_does_not_duplicate(self, tmp_path: Path) -> None:

@@ -59,6 +59,29 @@ def test_enable_gitignore_survives_disable(tmp_path: Path) -> None:
     assert CapturesGitignore(tmp_path).ensure() is False
 
 
+def test_enable_ensures_gitignore_before_guide_deposit_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The .gitignore exclusion must land even when a later enable step fails.
+
+    A repo that never gets past guide deposit is still protected: the
+    vulnerability window (unprotected capture writing) never opens, even
+    though enable() itself did not complete.
+    """
+    from quarry.guidance import Guidance
+
+    def boom(self: Guidance) -> None:
+        raise OSError("deposit failed")
+
+    monkeypatch.setattr(Guidance, "deposit", boom)
+
+    with pytest.raises(OSError, match="deposit failed"):
+        Enablement(tmp_path).enable()
+
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+    assert not EnabledMarker(tmp_path).is_present()
+
+
 def test_enable_biconditional_marker_iff_import(tmp_path: Path) -> None:
     """§2.11: after enable, marker present AND import present, together."""
     Enablement(tmp_path).enable()

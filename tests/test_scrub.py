@@ -373,6 +373,20 @@ def test_profanity_excludes_heller_surname_collision() -> None:
     assert counts.get("profanity", 0) == 0
 
 
+def test_profanity_excludes_craps_dice_game_collision() -> None:
+    """ "craps" is a real dice game, unrelated to the "crap" slur."""
+    out, counts = _scrub("we played a round of craps at the casino")
+    assert "craps" in out
+    assert counts.get("profanity", 0) == 0
+
+
+def test_profanity_excludes_jerker_occupational_term_collision() -> None:
+    """ "jerker" (e.g. "soda jerker") is a real, unrelated occupational term."""
+    out, counts = _scrub("the soda jerker made a milkshake")
+    assert "jerker" in out
+    assert counts.get("profanity", 0) == 0
+
+
 # ---------------------------------------------------------------------------
 # Flag toggles and idempotence
 # ---------------------------------------------------------------------------

@@ -21,13 +21,16 @@ __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
 class Enablement:
     """Turn quarry's repo-scoped CLAUDE.md guidance composition on and off.
 
-    Owns the ordering of the tool-enable-disable.md § 2.3 steps: deposit the
-    vendored guide, register the one bare ``@``-import line, write the
-    ``enabled`` marker, and ensure the repo's ``.gitignore`` excludes
-    quarry's captures path. ``disable`` reverses the first three; the
-    ``.gitignore`` line is additive-only, since an ignore rule the user may
-    keep for other reasons is not ours to prune, and its absence plays no
-    part in the § 2.11 invariant below.
+    Owns the ordering of the tool-enable-disable.md § 2.3 steps: ensure the
+    repo's ``.gitignore`` excludes quarry's captures path, deposit the
+    vendored guide, register the one bare ``@``-import line, and write the
+    ``enabled`` marker — in that order, fail-closed: every later step (and
+    the config write in ``enable_project()`` after it) only makes capture
+    writing MORE live, so a mid-sequence failure never leaves the repo
+    "enabled and unprotected." ``disable`` reverses the last three; the
+    ``.gitignore`` line is additive-only — not ours to prune an ignore rule
+    the user may keep for other reasons — and plays no part in the § 2.11
+    invariant below.
 
     The enforced invariant (§ 2.11) is one-directional: marker present ⇒
     import present. Both operations make the near-infallible marker their
@@ -61,26 +64,24 @@ class Enablement:
         return self
 
     def enable(self) -> EnablementResult:
-        """Deposit the guide, register the import, write the marker, ensure the ignore.
+        """Ensure the ignore, deposit the guide, register the import, write the marker.
 
-        Register, marker, and the ``.gitignore`` ensure each report whether
-        they changed anything, so an idempotent re-enable returns all three
-        booleans ``False``. Register runs before the near-infallible marker
-        write so a register failure leaves neither present, never the
-        marker-without-import state § 2.11 forbids — the marker is the
-        commit point. Register and marker share one :class:`FileLock` so a
-        concurrent ``disable`` cannot strand the marker without its import.
-
-        The ``.gitignore`` ensure locks its own sibling file
-        (:class:`~quarry.gitignore.CapturesGitignore`), unrelated to that
-        invariant, and runs last so an idempotent re-enable still backfills a
-        missing exclusion on a repo enabled before this step existed.
+        The ``.gitignore`` ensure runs FIRST — protection lands before any
+        step that depends on it, so a re-enable still backfills a missing
+        exclusion on a repo enabled before this step existed. Register,
+        marker, and the ensure each report whether they changed anything, so
+        an idempotent re-enable returns all three booleans ``False``.
+        Register runs before the near-infallible marker write so a register
+        failure leaves neither present, never the marker-without-import
+        state § 2.11 forbids. Register and marker share one
+        :class:`FileLock` so a concurrent ``disable`` cannot strand the
+        marker without its import.
         """
+        gitignore_ensured = self._gitignore.ensure()
         self._guidance.deposit()
         with FileLock(self._import.path):
             import_registered = self._import.register(REPO_IMPORT_LINE)
             enabled_marker_written = self._marker.write()
-        gitignore_ensured = self._gitignore.ensure()
         return EnablementResult(
             guide_deposited=True,
             enabled_marker_written=enabled_marker_written,
