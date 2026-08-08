@@ -14,6 +14,22 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Removed
+
+- **`tool`** — **`quarry doctor` no longer reports storage size or probes the
+  OCR engine**, and is roughly ten times faster for it: 1.7 seconds where it
+  previously took 15 to 52 depending on how busy the machine was. The Storage
+  line ran `du` across the whole data tree — 9 to 14 seconds on a 5.6 GB store,
+  and almost all of the system time the command spent — while the OCR line
+  instantiated RapidOCR and loaded its models to prove they load, another 1.8
+  seconds. Doctor's job is a fast environment check; neither operation belonged
+  in it, so both are gone rather than cached or hidden behind a flag. Every
+  remaining check costs at most a quarter-second, and the daemon is untouched:
+  doctor's only calls to it are two `/health` probes totalling 0.02 seconds.
+
+  To see storage size, use `quarry list databases`, which reports it per
+  database and pays the walk only when you ask for it.
+
 ### Security
 
 - **`infra`** — **starlette raised to `>=1.3.1`** (resolves 1.5.0), closing five

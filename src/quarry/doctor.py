@@ -147,27 +147,6 @@ def _check_imports() -> CheckResult:
     )
 
 
-def _check_storage() -> CheckResult:
-    """Report database storage size."""
-    data_dir = Path.home() / ".punt-labs" / "quarry" / "data"
-    if not data_dir.exists():
-        return CheckResult(
-            name="Storage",
-            passed=True,
-            message="no data yet",
-            required=False,
-        )
-    from quarry.db.storage import dir_size_bytes  # noqa: PLC0415
-
-    total = dir_size_bytes(data_dir)
-    return CheckResult(
-        name="Storage",
-        passed=True,
-        message=f"{_human_size(total)} in {data_dir}",
-        required=False,
-    )
-
-
 def _human_size(nbytes: float) -> str:
     """Format byte count as human-readable string (float: /=1024 stays in-type)."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -879,14 +858,12 @@ def check_environment(*, _skip_header: bool = False) -> int:
         all_results: list[CheckResult | None] = [
             _check_python_version(),
             _check_data_directory(),
-            InferenceDiagnostics.local_ocr(),
             _check_embedding_model(),
             InferenceDiagnostics.onnx_provider(),
             _check_imports(),
             _check_mcp_proxy(),
             _check_claude_code_mcp(),
             _check_claude_desktop_mcp(),
-            _check_storage(),
             DaemonDiagnostics.reachability(),
             DaemonDiagnostics.serve_token(),
             DaemonDiagnostics.fd_headroom(),
