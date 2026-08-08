@@ -55,6 +55,7 @@ class EnableReport:
                     r.enabled_marker_written,
                     "  Wrote enabled marker",
                 ),
+                (r.gitignore_ensured, "  Added captures/ exclusion to .gitignore"),
             )
         )
         return lines + self._ethos_lines()

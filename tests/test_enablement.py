@@ -11,6 +11,7 @@ from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
 from quarry.enablement import Enablement
 from quarry.file_lock import FileLock
+from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY, CapturesGitignore
 from quarry.guidance import REPO_IMPORT_LINE
 
 
@@ -22,6 +23,40 @@ def test_enable_writes_guide_marker_and_import(tmp_path: Path) -> None:
     assert EnabledMarker(tmp_path).is_present()
     assert REPO_IMPORT_LINE in (tmp_path / "CLAUDE.md").read_text()
     assert (tmp_path / ".punt-labs" / "quarry" / "CLAUDE.md").exists()
+
+
+def test_enable_ensures_captures_gitignore_entry(tmp_path: Path) -> None:
+    result = Enablement(tmp_path).enable()
+    assert result.gitignore_ensured is True
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+
+
+def test_enable_gitignore_is_idempotent(tmp_path: Path) -> None:
+    first = Enablement(tmp_path).enable()
+    second = Enablement(tmp_path).enable()
+    assert first.gitignore_ensured is True
+    assert second.gitignore_ensured is False
+    content = (tmp_path / ".gitignore").read_text()
+    assert content.count(CAPTURES_GITIGNORE_ENTRY) == 1
+
+
+def test_enable_backfills_gitignore_on_already_enabled_repo(tmp_path: Path) -> None:
+    """A repo enabled before this step existed gets the line backfilled, not skipped."""
+    Enablement(tmp_path).enable()
+    (tmp_path / ".gitignore").unlink()  # simulate: enabled, but no gitignore entry yet
+
+    result = Enablement(tmp_path).enable()
+
+    assert result.gitignore_ensured is True
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+
+
+def test_enable_gitignore_survives_disable(tmp_path: Path) -> None:
+    """disable() is additive-only for .gitignore — it never prunes the entry."""
+    Enablement(tmp_path).enable()
+    Enablement(tmp_path).disable()
+    assert CAPTURES_GITIGNORE_ENTRY in (tmp_path / ".gitignore").read_text()
+    assert CapturesGitignore(tmp_path).ensure() is False
 
 
 def test_enable_biconditional_marker_iff_import(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ def test_enable_report_lists_claudemd_steps() -> None:
         guide_deposited=True,
         enabled_marker_written=True,
         import_registered=True,
+        gitignore_ensured=True,
     )
     lines = EnableReport(result).lines()
     assert lines[0] == "Enabled quarry for /p"
@@ -23,6 +24,7 @@ def test_enable_report_lists_claudemd_steps() -> None:
     assert "Registered @.punt-labs/quarry/CLAUDE.md" in joined
     # Symmetry with DisableReport's marker line: the write is surfaced.
     assert "Wrote enabled marker" in joined
+    assert "Added captures/ exclusion to .gitignore" in joined
 
 
 def test_enable_report_omits_absent_steps() -> None:
@@ -34,6 +36,7 @@ def test_enable_report_omits_absent_steps() -> None:
     # An idempotent re-enable's marker no-op is visible by its absence, like
     # DisableReport omits the marker line when nothing was removed.
     assert "Wrote enabled marker" not in joined
+    assert "Added captures/ exclusion to .gitignore" not in joined
 
 
 def test_enable_report_reports_ethos_skipped() -> None:

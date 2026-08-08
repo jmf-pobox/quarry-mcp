@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Self, final
 
 from quarry.claude_import import ClaudeMdImport
 from quarry.enabled_marker import EnabledMarker
+from quarry.enablement_result import DisablementResult, EnablementResult
 from quarry.file_lock import FileLock
+from quarry.gitignore import CapturesGitignore
 from quarry.guidance import REPO_IMPORT_LINE, Guidance
 
 if TYPE_CHECKING:
@@ -16,85 +17,75 @@ if TYPE_CHECKING:
 __all__ = ["DisablementResult", "Enablement", "EnablementResult"]
 
 
-@dataclass(frozen=True, slots=True)
-class EnablementResult:
-    """What the § 2.3 enable steps did to a repo's CLAUDE.md."""
-
-    guide_deposited: bool
-    enabled_marker_written: bool
-    import_registered: bool
-
-
-@dataclass(frozen=True, slots=True)
-class DisablementResult:
-    """What the § 2.3 disable steps did — the guide is left dormant (§ 2.9)."""
-
-    import_pruned: bool
-    enabled_marker_removed: bool
-
-
 @final
 class Enablement:
     """Turn quarry's repo-scoped CLAUDE.md guidance composition on and off.
 
-    Owns the ordering of the tool-enable-disable.md § 2.3 steps so ``enable`` /
-    ``disable`` stay a single call rather than loose orchestration inside the
-    capture flow: deposit the vendored guide, register the one bare ``@``-import
-    line, and write the ``enabled`` marker — and the symmetric teardown.
+    Owns the ordering of the tool-enable-disable.md § 2.3 steps: deposit the
+    vendored guide, register the one bare ``@``-import line, write the
+    ``enabled`` marker, and ensure the repo's ``.gitignore`` excludes
+    quarry's captures path. ``disable`` reverses the first three; the
+    ``.gitignore`` line is additive-only, since an ignore rule the user may
+    keep for other reasons is not ours to prune, and its absence plays no
+    part in the § 2.11 invariant below.
 
-    The enforced invariant (§ 2.11) is one-directional: marker present ⇒ import
-    present. Both operations make the near-infallible marker their commit point —
-    ``enable`` registers the import before touching the marker, ``disable``
-    removes the marker before pruning the import — so a mid-operation failure can
-    only leave import-present + marker-absent, the recoverable state a re-run
-    reconciles, never marker-present + import-absent (a marker advertising
-    guidance that is not wired in).
+    The enforced invariant (§ 2.11) is one-directional: marker present ⇒
+    import present. Both operations make the near-infallible marker their
+    commit point — ``enable`` registers the import before touching the
+    marker, ``disable`` removes the marker before pruning the import — so a
+    mid-operation failure can only leave import-present + marker-absent, the
+    recoverable state a re-run reconciles, never marker-present +
+    import-absent (a marker advertising guidance that is not wired in).
 
     A single :class:`FileLock` on the CLAUDE.md path wraps the whole
-    register+marker (and marker+prune) sequence, so the marker change and the
-    import edit commit atomically w.r.t. a concurrent op. Without it a
-    concurrent ``enable`` and ``disable`` could interleave — enable's import
-    lands, disable's prune removes it, then enable's marker write still runs —
-    leaving exactly the marker-present + import-absent state § 2.11 forbids. The
-    lock is reentrant, so ``register``/``prune`` re-acquiring it for the edit
-    itself share the one hold.
+    register+marker (and marker+prune) sequence so the marker change and the
+    import edit commit atomically w.r.t. a concurrent op — without it, a
+    concurrent ``enable``/``disable`` could interleave and strand the
+    marker. The lock is reentrant, so ``register``/``prune`` re-acquiring it
+    for the edit itself share the one hold.
     """
 
-    __slots__ = ("_guidance", "_import", "_marker")
+    __slots__ = ("_gitignore", "_guidance", "_import", "_marker")
 
     _guidance: Guidance
     _marker: EnabledMarker
     _import: ClaudeMdImport
+    _gitignore: CapturesGitignore
 
     def __new__(cls, root: Path) -> Self:
         self = super().__new__(cls)
         self._guidance = Guidance(root)
         self._marker = EnabledMarker(root)
         self._import = ClaudeMdImport(root / "CLAUDE.md")
+        self._gitignore = CapturesGitignore(root)
         return self
 
     def enable(self) -> EnablementResult:
-        """Deposit the guide, then register the import and write the marker atomically.
+        """Deposit the guide, register the import, write the marker, ensure the ignore.
 
-        The deposit is unconditional (wholesale-overwrite determinism, § 2.2);
-        register and marker each report whether they changed anything, so an
-        idempotent re-enable returns both booleans ``False``. Register (read +
-        atomic temp+rename) runs before the near-infallible marker write so a
-        register failure leaves neither present, never the marker-without-import
-        state the § 2.11 biconditional forbids — the marker is the commit point.
+        Register, marker, and the ``.gitignore`` ensure each report whether
+        they changed anything, so an idempotent re-enable returns all three
+        booleans ``False``. Register runs before the near-infallible marker
+        write so a register failure leaves neither present, never the
+        marker-without-import state § 2.11 forbids — the marker is the
+        commit point. Register and marker share one :class:`FileLock` so a
+        concurrent ``disable`` cannot strand the marker without its import.
 
-        Both run under one :class:`FileLock` so a concurrent ``disable`` cannot
-        slip its prune between the register and the marker write and strand the
-        marker without its import.
+        The ``.gitignore`` ensure locks its own sibling file
+        (:class:`~quarry.gitignore.CapturesGitignore`), unrelated to that
+        invariant, and runs last so an idempotent re-enable still backfills a
+        missing exclusion on a repo enabled before this step existed.
         """
         self._guidance.deposit()
         with FileLock(self._import.path):
             import_registered = self._import.register(REPO_IMPORT_LINE)
             enabled_marker_written = self._marker.write()
+        gitignore_ensured = self._gitignore.ensure()
         return EnablementResult(
             guide_deposited=True,
             enabled_marker_written=enabled_marker_written,
             import_registered=import_registered,
+            gitignore_ensured=gitignore_ensured,
         )
 
     def disable(self) -> DisablementResult:

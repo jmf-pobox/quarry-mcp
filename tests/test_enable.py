@@ -21,6 +21,7 @@ from quarry.enable import (
     enable_project,
 )
 from quarry.enabled_marker import EnabledMarker
+from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.guidance import REPO_IMPORT_LINE
 from tests.conftest import FakeRegistryClient
 
@@ -579,6 +580,49 @@ class TestEnableRegistersImportAndMarker:
         assert claudemd.read_text().rstrip("\n").endswith(REPO_IMPORT_LINE)
         guide = project / ".punt-labs" / "quarry" / "CLAUDE.md"
         assert "Local semantic search is available via quarry." in guide.read_text()
+
+
+class TestEnableEnsuresCapturesGitignore:
+    def test_enable_writes_captures_gitignore_entry(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result = enable_project(project, client)
+
+        assert result.gitignore_ensured is True
+        gitignore = project / ".gitignore"
+        assert gitignore.exists()
+        assert CAPTURES_GITIGNORE_ENTRY in gitignore.read_text()
+
+    def test_enable_gitignore_ensure_is_idempotent(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            result1 = enable_project(project, client)
+            result2 = enable_project(project, client)
+
+        assert result1.gitignore_ensured is True
+        assert result2.gitignore_ensured is False
+        content = (project / ".gitignore").read_text()
+        assert content.count(CAPTURES_GITIGNORE_ENTRY) == 1
+
+    def test_enable_preserves_existing_gitignore_content(self, tmp_path: Path) -> None:
+        project = tmp_path / "myproject"
+        project.mkdir()
+        (project / ".gitignore").write_text("node_modules/\n*.pyc\n")
+        client = FakeRegistryClient()
+
+        with patch(_NO_ETHOS, tmp_path / "no-ethos"):
+            enable_project(project, client)
+
+        content = (project / ".gitignore").read_text()
+        assert "node_modules/" in content
+        assert "*.pyc" in content
+        assert CAPTURES_GITIGNORE_ENTRY in content
 
 
 class TestEnableImportIdempotent:
