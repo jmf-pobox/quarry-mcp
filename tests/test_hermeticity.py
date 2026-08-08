@@ -116,7 +116,7 @@ class TestProductionTreeGuard:
         assert str(second) in breaches[1]
 
     def test_watches_exactly_the_one_quiescent_production_file(self) -> None:
-        """A file, and only one nothing else on the machine writes.
+        """The guard watches exactly one file — the one nothing else writes.
 
         ``quarry.log`` and ``registry.db`` are excluded on purpose: two
         redirects already put both out of a test's reach, while the daemon,
