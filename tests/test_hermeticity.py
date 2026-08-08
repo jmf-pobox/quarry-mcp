@@ -115,16 +115,16 @@ class TestProductionTreeGuard:
         assert str(first) in breaches[0]
         assert str(second) in breaches[1]
 
-    def test_watches_exactly_the_diagnostic_production_files(self) -> None:
-        """Files only, and only ones nothing else on the machine writes.
+    def test_watches_exactly_the_one_quiescent_production_file(self) -> None:
+        """A file, and only one nothing else on the machine writes.
 
-        ``quarry.log`` is excluded on purpose: two redirects already make it
-        unreachable from a test, while the daemon and every live MCP client
-        write it continuously, so watching it reported other processes rather
-        than breaches.
+        ``quarry.log`` and ``registry.db`` are excluded on purpose: two
+        redirects already put both out of a test's reach, while the daemon,
+        every live MCP client, and the watch loop write them continuously — so
+        watching them reported other processes rather than breaches.
         """
         names = [p.name for p in ENV.real_tree]
-        assert names == ["config.toml", "registry.db"]
+        assert names == ["config.toml"]
         assert all(not p.is_dir() for p in ENV.real_tree)
 
 

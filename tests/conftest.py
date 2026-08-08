@@ -436,8 +436,9 @@ def _guard_production_tree() -> Generator[None]:
     """Fail the test that writes to the operator's real quarry tree.
 
     Runs unconditionally, including in CI where ``HOME`` differs but the same
-    three paths must stay untouched.  Three stats per test measured at 25.9 ms
-    across the whole suite.
+    path must stay untouched.  One stat per test, down from three: the other two
+    watched files are written constantly by the daemon and its clients, so they
+    reported those processes rather than breaches (see ``ProductionTreeGuard``).
     """
     guard = ProductionTreeGuard(ENV.real_tree)
     yield

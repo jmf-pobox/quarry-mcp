@@ -104,10 +104,7 @@ class HermeticEnv:
     def install(cls) -> Self:
         """Redirect the environment and return the resulting hermetic session."""
         real_quarry = Path.home() / ".punt-labs" / "quarry"
-        real_tree = (
-            real_quarry / "config.toml",
-            real_quarry / "data" / "default" / "registry.db",
-        )
+        real_tree = (real_quarry / "config.toml",)
 
         cache = Path.home() / ".cache" / "quarry-pytest-homes"
         cache.mkdir(parents=True, exist_ok=True)
@@ -140,32 +137,30 @@ class HermeticEnv:
 
 @final
 class ProductionTreeGuard:
-    """Prove the redirect holds by watching the files that would move.
+    """Prove the redirect holds by watching the one file that would move.
 
     A smoke check, not a tree fingerprint.  Prevention is the ``HOME`` redirect,
     which is total; reaching production now requires an absolute path written
-    into source, and these files are where such a path would land.  Only files
-    are watched: a directory's ``mtime`` moves when an entry is added to *that*
-    directory and not when a file below it is written, so a directory stat would
-    detect almost nothing.  A recursive walk is not an alternative -- the
-    operator's tree is 15 GB across ~1,600 files.
+    into source, and ``config.toml`` is where such a path would plausibly land.
+    Only a file is watched: a directory's ``mtime`` moves when an entry is added
+    to *that* directory and not when a file below it is written, so a directory
+    stat would detect almost nothing.  A recursive walk is not an alternative --
+    the operator's tree is 15 GB across ~1,600 files.
 
-    ``quarry.log`` is deliberately NOT watched, though it is the file whose
-    leak motivated all of this.  Two independent redirects now stand between a
-    test and it (``QUARRY_LOG_DIR``, and ``HOME`` behind that as the fallback
-    root), so its true-positive rate is about zero -- while its false-positive
-    rate equals the rate at which anything else on the machine logs, and the
-    daemon plus every live MCP client writes it continuously.  A watch that
-    cannot catch what it is for, and fires on unrelated processes, costs more
-    than it defends.  The two files left are the ones nothing writes routinely.
+    One watcher, chosen for silence rather than importance.  ``quarry.log`` and
+    ``registry.db`` were both watched and are not any more: each sits behind two
+    redirects a test cannot cross, so neither could catch a real breach, while
+    both are written constantly by processes that are not the suite -- the
+    daemon and every live MCP client log, and the DES-045 watch loop writes a
+    registry row whenever anything under a registered tree changes, which
+    includes this repository while an agent edits it.  Watching them reported
+    other processes against whichever test happened to be in flight.
+    ``config.toml`` is quiescent by contrast, so a firing here is likely to mean
+    something.  A check that cannot catch what it exists for, and fires on
+    unrelated processes, costs more than it defends.
 
-    It watches the files, not the writer, so it cannot attribute a change.  On a
-    machine whose live daemon watches this repository, editing source during a
-    run makes that daemon reindex and write ``registry.db``, and the guard
-    reports it against whichever test happened to be in flight.  A firing that
-    names a test which plainly touches nothing is likelier that write than a
-    real breach -- confirm by rerunning with the tree quiet before hunting the
-    named test.
+    It still watches the file rather than the writer and so cannot attribute a
+    change; a firing names the test in flight, not necessarily the cause.
     """
 
     __slots__ = ("_before", "_paths")
