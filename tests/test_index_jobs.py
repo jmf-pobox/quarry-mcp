@@ -23,7 +23,7 @@ from quarry.daemon.tasks import TaskState
 from quarry.db import Database
 from quarry.ingestion.file_indexer import SingleFileIndexer
 from quarry.sync_registry import SyncRegistry
-from tests.fakes import FakeEmbeddingBackend
+from tests.fakes import FakeEmbeddingBackend, patched_embedder
 
 if TYPE_CHECKING:
     import pytest
@@ -339,3 +339,33 @@ def test_subsume_purge_failure_is_logged_and_reported(
         assert "subsume purge failed for collection child-col" in caplog.text
 
     asyncio.run(_run())
+
+
+def test_index_one_reembeds_unchanged_content(tmp_path: Path) -> None:
+    """A second index of byte-identical content must not embed anything again.
+
+    A watch event fires on any write, including the many that leave content
+    identical (an editor's save-in-place, a `git checkout` restoring the same
+    bytes, a `touch`).  Re-embedding on those is pure waste: the same vectors
+    are recomputed and the same rows deleted and rewritten.
+    """
+    db, settings, root = _fixture(tmp_path)
+    (root / "a.md").write_text("# Title\n\nsome indexable body text here")
+    conn = SyncRegistry(settings.registry_path)
+    try:
+        indexer = SingleFileIndexer(
+            db.store, conn, settings, collection="col", resolved=root
+        )
+        first = FakeEmbeddingBackend(_DIM)
+        with patched_embedder(first):
+            indexer.index_one(root / "a.md")
+        assert first.embedded  # the first pass really did embed
+
+        second = FakeEmbeddingBackend(_DIM)
+        with patched_embedder(second):
+            outcome = indexer.index_one(root / "a.md")
+    finally:
+        conn.close()
+    assert outcome.error is None
+    assert not second.embedded
+    assert "a.md" in _docs(db)  # the chunks are still there, not deleted
