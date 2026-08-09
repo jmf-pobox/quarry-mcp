@@ -2492,8 +2492,7 @@ client-triggerable outage.
 **Decision.** Quarry reports no storage size on any surface. The walk and its
 helpers (`dir_size_bytes`, `format_size`, `_fmt_size`, `DatabaseSummary`, the
 already-dead `discover_databases`) are deleted, not cached and not flagged.
-Operators who want the number ask the filesystem (`du -sh
-~/.punt-labs/quarry/data`) and pay the walk knowingly.
+Operators who want the number ask the filesystem (`du -sh "${QUARRY_ROOT:-$HOME/.punt-labs/quarry/data}"`) and pay the walk knowingly.
 
 **Rejected: LanceDB `table.stats().total_bytes` as a cheap replacement.** It
 is genuinely O(1) (~0.3–13 ms) and it is the obvious future proposal — which

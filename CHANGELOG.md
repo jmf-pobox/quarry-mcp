@@ -75,7 +75,7 @@ across `transform`, `index`, and `connector`).
 
   Storage size is no longer reported by any quarry surface (see the daemon
   entry above for why no cheap, honest number exists); when you want it, ask
-  the filesystem: `du -sh ~/.punt-labs/quarry/data`.
+  the filesystem: `du -sh "${QUARRY_ROOT:-$HOME/.punt-labs/quarry/data}"`.
 
 ### Security
 
