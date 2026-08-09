@@ -163,6 +163,31 @@ class TestEventLoop:
             "the task name must reach OUR record, not just asyncio's copy"
         )
 
+    def test_a_prior_handler_is_called_not_clobbered(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Binding must ADD to whatever the loop already had, never replace it.
+
+        This is the hook that could destroy behaviour rather than merely fail
+        to add: a component's own handler would simply stop being called, and
+        nothing would report that it had.
+        """
+        seen: list[str] = []
+
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(
+                lambda _loop, context: seen.append(str(context.get("message")))
+            )
+            UncaughtExceptionLog.bind_loop(loop)
+            loop.call_exception_handler({"message": "socket leaked"})
+
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(main())
+        assert seen == ["socket leaked"], "the prior handler must still run"
+        ours = [r for r in caplog.records if r.name == "quarry.crash_logging"]
+        assert ours, "and ours must run too — delegation is an addition"
+
     def test_a_context_without_an_exception_still_reports(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

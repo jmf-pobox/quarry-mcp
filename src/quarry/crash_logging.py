@@ -84,13 +84,24 @@ class UncaughtExceptionLog:
         In a daemon whose tasks are named, that name is the forensic detail
         this logging exists to preserve, so it goes into the logged line.
 
-        The handler then chains to ``default_exception_handler`` so ours is an
-        addition rather than a replacement.  Note what that costs and buys:
-        asyncio reports through its own LOGGER, not straight to stderr, so its
-        copy goes through the same root handlers and the file gets both entries.
-        Two records for one fault, in exchange for never silently keeping less
-        than the default would have.
+        Delegation matches the other two hooks: whatever handler the loop
+        already had is captured here and called afterwards, falling back to
+        ``default_exception_handler`` when there is none.  Chaining to the
+        default unconditionally would have made this the one hook that can
+        DESTROY behaviour -- a component that installed its own handler would
+        simply stop being called.  Nothing in the daemon's path installs one
+        today (uvicorn does not; anyio's is on its TestRunner, which is test
+        infrastructure), but "nothing does yet" is not a property worth
+        depending on when capturing the predecessor costs one line.
+
+        Note what the chain preserves, which differs from the interpreter
+        hooks: ``default_exception_handler`` reports through the ``asyncio``
+        LOGGER rather than writing stderr directly, so its copy travels the
+        same root handlers as ours and reaches the file too.  A loop failure is
+        therefore recorded twice -- the deliberate trade being two entries for
+        one fault rather than silently keeping less than the default would.
         """
+        prior = loop.get_exception_handler()
 
         def handler(
             loop: asyncio.AbstractEventLoop, context: dict[str, object]
@@ -103,7 +114,10 @@ class UncaughtExceptionLog:
                 logger.error("%s%s", message, where, exc_info=exception)
             else:
                 logger.error("%s%s (context: %r)", message, where, context)
-            loop.default_exception_handler(context)
+            if prior is not None:
+                prior(loop, context)
+            else:
+                loop.default_exception_handler(context)
 
         loop.set_exception_handler(handler)
 
