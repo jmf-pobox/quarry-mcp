@@ -11,32 +11,21 @@ list, and the CLI surface is a static command so the module stays class-first.
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass, replace
 from typing import Annotated, Self, final
 
 import typer
 
 from quarry.config import DEFAULT_PORT, Settings
+from quarry.crash_logging import UncaughtExceptionLog
+from quarry.daemon.bind_options import BindOptions
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.db_pointer import SELECTION
+from quarry.logging_config import LoggingConfig
 from quarry.net import LoopbackPolicy
 from quarry.tls import TLS_DIR
 
 # 256-bit URL-safe token — the loopback bearer minted when no key is supplied.
 _TOKEN_BYTES = 32
-
-
-@final
-@dataclass(frozen=True, slots=True)
-class BindOptions:
-    """The daemon's parsed bind options as one value, not a parameter list."""
-
-    host: str
-    port: int
-    db: str
-    api_key: str | None
-    cors_origins: tuple[str, ...]
-    tls: bool
 
 
 @final
@@ -47,53 +36,8 @@ class DaemonLauncher:
 
     def __new__(cls, options: BindOptions) -> Self:
         self = super().__new__(cls)
-        self._options = cls._normalized(options)
+        self._options = options.normalized()
         return self
-
-    @staticmethod
-    def _normalized(options: BindOptions) -> BindOptions:
-        """Normalize the bind options once, at the single launcher boundary — the
-        actual bind point — so the bind, the key gate, and the client all agree.
-
-        Three normalizations:
-
-        - Strip the api_key and map empty/whitespace -> None so
-          ``enforce_bind_key``, ``_effective_key``, and ``DaemonServer`` all see
-          the same value.  Without this a whitespace-only ``QUARRY_API_KEY`` is
-          truthy at the gate: a loopback bind would fail to mint and then exit at
-          the daemon boundary (won't start), and a network bind would pass the
-          gate only to fail inconsistently later.  Normalized here, a whitespace
-          key is absent everywhere — loopback mints, network is refused AT the
-          gate.
-        - Fail CLOSED on an api_key with INTERNAL whitespace.  The bearer scheme
-          parses ``Authorization`` with ``.split()`` and requires EXACTLY two
-          parts (``daemon/routes/base.py``), so ``Bearer abc def`` splits into
-          three parts and NO client can ever authenticate — quarryd would boot
-          but 401 every request, a silently-unreachable daemon from one bad env
-          var.  Reject it loudly at start (all binds) instead.  Leading/trailing
-          whitespace is already stripped above, so any remaining space is
-          internal.
-        - Canonicalize a loopback-NAME host to the IPv4 literal (localhost ->
-          127.0.0.1).  Both a managed service-unit start AND a direct ``quarryd
-          --host localhost`` pass through here, so the bind agrees with the
-          install probe and ``quarry login``, which use 127.0.0.1.  Binding the
-          name would land on ``::1`` on an IPv6-preferring host while the client
-          checks 127.0.0.1 (false timeout + 401).  An explicit ``::1`` or a
-          non-loopback ``0.0.0.0`` is left as the operator set it; the key gate
-          (:meth:`launch`) then runs on the canonical host, so ``localhost`` is
-          correctly loopback and needs no operator key.
-        """
-        api_key = (options.api_key or "").strip() or None
-        if api_key is not None and any(c.isspace() for c in api_key):
-            msg = (
-                "QUARRY_API_KEY must not contain whitespace — the HTTP bearer "
-                "scheme splits the Authorization header on whitespace, so an "
-                "embedded space would make the daemon permanently "
-                "unauthenticatable."
-            )
-            raise SystemExit(msg)
-        host = LoopbackPolicy(options.host).canonical_host
-        return replace(options, api_key=api_key, host=host)
 
     def launch(self) -> None:
         """Refuse an unsafe bind, mint the loopback token, and serve."""
@@ -189,5 +133,20 @@ class DaemonLauncher:
 
 
 def entrypoint() -> None:
-    """Console-script target: parse argv and launch the daemon."""
+    """Console-script target: configure logging, then parse argv and launch.
+
+    Logging is configured HERE rather than inside :meth:`DaemonLauncher.launch`
+    so it covers the whole process: argument parsing, the bind-key and TLS
+    refusals that exit before any server exists, and the uncaught-exception
+    hooks.  Until this call the daemon had no logging configuration at all --
+    root had no handlers, so Python fell back to ``logging.lastResort``, a
+    bare stderr handler at WARNING with no formatter.  Every operational INFO
+    line was discarded, and what did escape reached the supervisor's stderr
+    file with no timestamp.
+
+    ``stderr_level="INFO"`` keeps the supervisor's stderr file readable as a
+    live tail; the rotating file is the record.
+    """
+    LoggingConfig.configure(stderr_level="INFO", log_file=LoggingConfig.DAEMON_LOG)
+    UncaughtExceptionLog.install()
     typer.run(DaemonLauncher.cli)

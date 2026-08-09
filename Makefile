@@ -4,16 +4,34 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 test: ## Run tests (excludes slow integration tests)
-	uv run pytest
+	uv run --extra dev pytest
 
 # The slow tier the fast CI job never runs (-m 'not slow'): live-server / real-TLS
 # smokes that can hang a shared runner. Run here or in the wheel gate (quarry-5pg1).
 test-slow: ## Run the slow tier (real-TLS/live-server smokes)
-	uv run pytest -m slow
+	uv run --extra dev pytest -m slow
 
+# EVERY invocation of a dev-extra tool runs under `--extra dev`, and the flag is
+# load-bearing rather than tidy.  ruff, pytest, mypy, pyright and import-linter
+# all live in the dev extra; `uv run` syncs only the DEFAULT set, so none of them
+# is in a fresh .venv/bin and uv silently falls back to whatever is on PATH.  On
+# one machine that was a system Python's ruff 0.13.0 and pytest — versions nobody
+# pinned — which is how a red gate reproduced for a reviewer and not for the
+# author, on a file neither had touched.  Same failure the PYRIGHT_VERSION pin
+# below already guards against: a gate is worthless if it reports on a toolchain
+# the lock does not name.
+#
+# The `uv run python tools/...` lines are deliberately NOT flagged and are not an
+# oversight: `python` always comes from the project venv uv creates, so there is
+# no PATH to fall back to, and those scripts are stdlib-only or import quarry
+# itself, which is a default dependency.  Adding the flag there would imply a
+# risk that does not exist.
+#
+# When adding a target, the test is not "is this a gate" but "does this command
+# name a binary from the dev extra".  If it does, it takes the flag.
 lint: lint-docs ## Lint and format check
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run --extra dev ruff check .
+	uv run --extra dev ruff format --check .
 
 lint-docs: ## Lint markdown files (matches CI docs job)
 	npx markdownlint-cli2 "**/*.md"
@@ -25,11 +43,11 @@ lint-docs: ## Lint markdown files (matches CI docs job)
 # this PR's own incident: a cached 1.1.408 hid three reportDeprecated errors that
 # CI's 1.1.411 flagged.  Forcing the version keeps the local and CI checkers
 # identical.
-PYRIGHT_VERSION = $(shell uv run python -c "import importlib.metadata as m; print(m.version('pyright'))")
+PYRIGHT_VERSION = $(shell uv run --extra dev python -c "import importlib.metadata as m; print(m.version('pyright'))")
 
 type: ## Type check with mypy and pyright
-	uv run mypy src/ tests/
-	PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run pyright src/ tests/
+	uv run --extra dev mypy src/ tests/
+	PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run --extra dev pyright src/ tests/
 
 # Base-comparison flags injected by CI (e.g. --base-ref <merge-base> --require-base).
 # Empty locally, where the tools default base to `git merge-base origin/main HEAD`.
@@ -73,26 +91,26 @@ check-suppressions: ## Suppression ratchet — base-commit scoped, count must no
 # (quarry.client/api) may import an engine package. A violating import fails
 # here — not in review. Companion to the runtime engine-sabotage test.
 check-imports: ## Import-linter — enforce the DES-031 client/engine package boundary
-	uv run lint-imports --config .importlinter
+	uv run --extra dev lint-imports --config .importlinter
 
 update-suppressions: ## Update suppression baseline after justified additions
 	uv run python tools/suppression_ratchet.py src/quarry/ --update
 
 report: ## Full diagnostics (OO score + all checks, no fail-fast)
 	-uv run python tools/oo_score.py src/quarry/ --threshold
-	-uv run mypy src/ tests/
-	-uv run ruff format --check .
-	-uv run ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .
-	-PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run pyright src/ tests/
-	-uv run lint-imports --config .importlinter
-	-uv run pytest
+	-uv run --extra dev mypy src/ tests/
+	-uv run --extra dev ruff format --check .
+	-uv run --extra dev ruff check --preview --select PLR6301,PLR0913,UP035,UP040,UP007,N,I,SIM,C1901,S101 .
+	-PYRIGHT_PYTHON_FORCE_VERSION=$(PYRIGHT_VERSION) uv run --extra dev pyright src/ tests/
+	-uv run --extra dev lint-imports --config .importlinter
+	-uv run --extra dev pytest
 	@echo "Report complete."
 
 check-full: check test-wheel ## Full quality gate including wheel test
 
 format: ## Auto-format code
-	uv run ruff format .
-	uv run ruff check --fix .
+	uv run --extra dev ruff format .
+	uv run --extra dev ruff check --fix .
 
 install: build ## Build and install wheel locally for manual testing
 	uv tool install --force dist/*.whl
@@ -154,7 +172,7 @@ metrics: ## ABC complexity analysis (magnitude >200 needs attention)
 	@python3 -c "from pathlib import Path; import re, math; src = Path('src/quarry'); rows = []; [rows.append((len(t:=f.read_text().splitlines()), sum(1 for l in t if re.match(r'^\s*([\w.]+\s*=[^=]|[\w.]+\s*[+\-*/%&|^]=)', l)), sum(1 for l in t if re.search(r'\w+\(', l) and not re.match(r'^\s*(def |class |#|from |import )', l)), sum(1 for l in t if re.search(r'\b(if|elif|else|except|assert|and|or|not|in|is)\b', l) and not re.match(r'^\s*#', l)), f.name)) for f in sorted(src.glob('*.py'))]; rows.sort(key=lambda r: -math.sqrt(r[1]**2+r[2]**2+r[3]**2)); print(f\"{'Module':<30} {'Lines':>6} {'A':>5} {'B':>5} {'C':>5} {'|ABC|':>7}\"); print('-'*62); [print(f'{n:<30} {loc:>6} {a:>5} {b:>5} {c:>5} {math.sqrt(a**2+b**2+c**2):>7.1f}') for loc,a,b,c,n in rows]; print('-'*62); over=[n for loc,a,b,c,n in rows if math.sqrt(a**2+b**2+c**2)>200]; print(f'Modules over 200: {len(over)}' + (f' — {\", \".join(over)}' if over else ''))"
 
 coverage: ## Test coverage with HTML report
-	uv run pytest --cov=quarry --cov-report=html --cov-report=term-missing
+	uv run --extra dev pytest --cov=quarry --cov-report=html --cov-report=term-missing
 	@echo "HTML report: htmlcov/index.html"
 
 # Daemon log location + how many recent matching lines to show. Overridable per

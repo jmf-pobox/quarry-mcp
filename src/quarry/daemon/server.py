@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Self, cast, final
 import uvicorn
 
 from quarry.config import DEFAULT_PORT, Settings
+from quarry.crash_logging import UncaughtExceptionLog
 from quarry.daemon.app import build_app
 from quarry.daemon.context import DaemonContext
 from quarry.fd_config import FdEnvelope
@@ -261,6 +262,10 @@ class DaemonServer:
     async def _lifespan(self, app: Starlette) -> AsyncGenerator[None]:
         # Runs for the daemon's lifetime; cancelled on shutdown below.
         ctx = cast("DaemonContext", app.state.ctx)
+        # The loop exists only now, so its handler is bound here rather than
+        # beside the process-wide hooks at the entry point.  Without it, a task
+        # nobody awaited fails silently into asyncio's default reporting.
+        UncaughtExceptionLog.bind_loop(asyncio.get_running_loop())
         monitor = asyncio.create_task(FdTelemetry(_FD_TELEMETRY_INTERVAL_SECONDS).run())
         # Warm + queue are ready by now; start watching every roster database so
         # continuous indexing runs as a queue producer (DES-045).

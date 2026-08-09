@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from quarry.daemon.launcher import BindOptions, DaemonLauncher
+from quarry.daemon.bind_options import BindOptions
+from quarry.daemon.launcher import DaemonLauncher
 
 
 def _options(**overrides: object) -> BindOptions:

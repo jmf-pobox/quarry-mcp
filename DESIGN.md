@@ -2437,3 +2437,44 @@ lives inside this interpreter will not cover it.
 
 Sibling to DES-045 (the watch loop whose scratch guard constrains where a test's
 project root may live) and DES-046 (the daemon's descriptor envelope).
+
+## DES-048: Daemon operational logging — configured, separate, volume-governed
+
+**Context.** For its entire life the daemon ran with no logging configuration
+at all: `LoggingConfig.configure` was called only by the CLI's Typer root
+callback and the MCP client tier, never on the `quarryd` path, so the root
+logger had zero handlers and Python's `logging.lastResort` applied — INFO
+discarded before any handler, warnings reaching launchd's stderr file stripped
+of timestamp, level, and logger name. Three incidents in one week traced back
+to this blindness: the load-200 post-mortem read a log that was mostly test
+contamination, the ingest-churn fix could not observe its own
+six-finalizes-per-sweep fingerprint at the demo gate, and a dead
+`ModuleNotFoundError` traceback in the timestampless stderr file was mistaken
+for a live outage.
+
+**Decision.** The daemon configures logging at startup and writes a separate
+`quarryd.log` beside `quarry.log`, same directory resolution (`QUARRY_LOG_DIR`,
+falling back to the home path), same format, same rotation policy. Separate,
+not shared: one long-lived writer versus many short-lived ones — interleaving
+is what made attribution impossible. Uncaught exceptions reach the file through
+three hooks (main-thread excepthook, `threading.excepthook`, and the event
+loop's exception handler), each delegating onward so supervisor stderr remains
+the backstop for a crash before logging is up.
+
+**Volume policy (standing rule).** INFO is one line per user-visible operation
+or coarser — a document indexed, a collection swept, a database optimized, the
+daemon started; sub-operation detail is DEBUG. The rule exists because turning
+on a file nobody had ever seen would have replaced silence with a firehose: the
+per-flush chunk insert and the per-request search count were demoted to DEBUG
+under it. The binding statement lives in `quarry.logging_config`'s module
+docstring, where the next log line gets written; call sites cite it rather than
+restating it.
+
+**Invariant.** `quarryd.log` must never join the test suite's
+`ProductionTreeGuard`: the live daemon writes it continuously, so watching it
+reports other processes rather than breaches — the exact false-positive
+mechanism DES-047's amendment removed the log and registry watches for.
+
+Sibling to DES-047 (whose hermeticity redirects contain daemon-path logging in
+tests) and DES-032/DES-045 (whose sweep and optimize operations are the INFO
+lines the file exists to carry).

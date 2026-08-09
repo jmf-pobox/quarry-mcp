@@ -14,6 +14,29 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- **`tool`** — **`quarryd` now logs its operations to a file.** Until now it
+  logged nowhere: the daemon's entry point never configured logging, so Python
+  fell back to `logging.lastResort` — a bare stderr handler at WARNING with no
+  formatter. Every operational INFO line was discarded before reaching a
+  handler, and anything that did escape reached the supervisor's stderr file
+  with no timestamp, level, or logger name. Three incidents this week were
+  diagnosed the hard way because of it.
+
+  Operations now land in `quarryd.log`, beside the client tier's `quarry.log`
+  in the same directory, with the same format and the same 5 MB × 5 rotation.
+  The files are separate on purpose: one long-lived writer versus many
+  short-lived ones, and interleaving them makes a line impossible to attribute
+  to a process. Uncaught exceptions reach the file too — main thread, worker
+  threads, and unawaited event-loop tasks — while the supervisor's stderr keeps
+  its copy as a backstop.
+
+  Log volume is governed by a stated rule: INFO is one line per user-visible
+  operation or coarser, and sub-operation detail is DEBUG. Two lines that would
+  have flooded the new file move to DEBUG accordingly — the per-flush chunk
+  insert and the per-request search result count.
+
 ### Removed
 
 - **`tool`** — **the daemon no longer reports database size**, on either
