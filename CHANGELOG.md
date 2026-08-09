@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-08
+
 ### Added
 
 - **`tool`** — **`quarryd` now logs its operations to a file.** Until now it
