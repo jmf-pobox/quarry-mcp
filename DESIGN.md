@@ -2478,3 +2478,32 @@ mechanism DES-047's amendment removed the log and registry watches for.
 Sibling to DES-047 (whose hermeticity redirects contain daemon-path logging in
 tests) and DES-032/DES-045 (whose sweep and optimize operations are the INFO
 lines the file exists to carry).
+
+## DES-049: No database-size reporting — the walk was an outage, the cheap number is wrong
+
+**Context.** The daemon's `/v1/databases` and `/status` routes, the CLI's
+databases table and `Size:` line, and doctor's Storage check all reported
+on-disk size by walking the data tree (`dir_size_bytes`). Measured at 10–19
+seconds per request on a multi-GB store, payable by any authenticated client
+and stacking across clients — and under load the daemon could not answer
+inside the client's 15-second read timeout, turning a status query into a
+client-triggerable outage.
+
+**Decision.** Quarry reports no storage size on any surface. The walk and its
+helpers (`dir_size_bytes`, `format_size`, `_fmt_size`, `DatabaseSummary`, the
+already-dead `discover_databases`) are deleted, not cached and not flagged.
+Operators who want the number ask the filesystem (`du -sh "${QUARRY_ROOT:-$HOME/.punt-labs/quarry/data}"`) and pay the walk knowingly.
+
+**Rejected: LanceDB `table.stats().total_bytes` as a cheap replacement.** It
+is genuinely O(1) (~0.3–13 ms) and it is the obvious future proposal — which
+is why the rejection is recorded with its numbers. `stats()` measures the
+**live dataset**, not the directory: on a freshly optimized 1.13 GB store it
+under-reported the on-disk footprint by 43%; on a grown 3.5 GB store by 81%.
+The gap's composition varies (superseded data-file versions, index files), so
+no caller can correct for it — and it understates worst exactly when
+optimize/FTS work has inflated the tree. A varying shortfall published as
+"size" is a wrong number served fast. Do not resurrect the field on top of it.
+
+Sibling to DES-032/DES-045 (whose optimize and sweep work is what grows the
+directory beyond the live dataset) and DES-046 (the same file-descriptor
+class of daemon-resource protection).
