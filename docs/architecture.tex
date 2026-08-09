@@ -192,8 +192,8 @@ Optimizer     & \modpath{db/optimizer.py}      & Table compaction, FTS
                 index rebuild, and per-collection indexing. \\
 Schema        & \modpath{db/schema.py}         & Chunks-table schema and
                 idempotent migration (agent-memory columns, FTS index). \\
-Storage       & \modpath{db/storage.py}        & LanceDB connection,
-                database discovery, and size formatting. \\
+Storage       & \modpath{db/storage.py}        & LanceDB connection
+                management (discovery and size reporting removed --- DES-049). \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -913,9 +913,10 @@ All settings are environment variables read via pydantic-settings.
   Vector database location \\
 \texttt{REGISTRY\_PATH}  & \texttt{<root>/default/registry.db} &
   Directory sync SQLite database \\
-\texttt{LOG\_PATH}        & \texttt{\~{}/.punt-labs/quarry/logs/quarry.log} &
-  Log file (rotating, 5\,MB, 3 backups; independent of
-  \texttt{QUARRY\_ROOT}) \\
+\texttt{LOG\_PATH}        & \texttt{\~{}/.punt-labs/quarry/logs/} &
+  Log directory (\texttt{quarry.log} for the CLI/MCP client tier,
+  \texttt{quarryd.log} for the daemon --- DES-048; rotating, 5\,MB
+  $\times$ 5; resolvable per call via \texttt{QUARRY\_LOG\_DIR}) \\
 \midrule
 \multicolumn{3}{l}{\textbf{Chunking}} \\
 \midrule
@@ -1185,8 +1186,10 @@ Every module that performs I/O declares
 \texttt{logger = logging.getLogger(\_\_name\_\_)}.  Pure data modules
 (\texttt{models.py}, \texttt{types.py}, \texttt{chunker.py}) do not.
 
-Logging is configured once at the application entry point (CLI or MCP
-server).  Library modules never call \texttt{logging.basicConfig}.
+Logging is configured once at each application entry point --- the CLI,
+the MCP server, and the \texttt{quarryd} daemon (DES-048; the daemon writes
+its own \texttt{quarryd.log} with crash hooks for all three uncaught-exception
+routes).  Library modules never call \texttt{logging.basicConfig}.
 
 \begin{center}
 \begin{tabular}{lp{8cm}}

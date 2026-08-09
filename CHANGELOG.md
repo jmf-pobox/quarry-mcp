@@ -73,8 +73,9 @@ across `transform`, `index`, and `connector`).
   remaining check costs at most a quarter-second, and the daemon is untouched:
   doctor's only calls to it are two `/health` probes totalling 0.02 seconds.
 
-  To see storage size, use `quarry list databases`, which reports it per
-  database and pays the walk only when you ask for it.
+  Storage size is no longer reported by any quarry surface (see the daemon
+  entry above for why no cheap, honest number exists); when you want it, ask
+  the filesystem: `du -sh ~/.punt-labs/quarry/data`.
 
 ### Security
 
