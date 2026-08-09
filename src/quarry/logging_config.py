@@ -67,6 +67,28 @@ class LoggingConfig:
             return Path(override)
         return Path.home() / ".punt-labs" / "quarry" / "logs"
 
+    @staticmethod
+    def _require_bare_filename(log_file: str) -> None:
+        """Refuse a *log_file* that would write outside the resolved directory.
+
+        Both call sites pass a literal today, so nothing reaches this with a
+        traversal -- which is the argument for the check, not against it: a
+        parameter joined into a path is a boundary whether or not today's
+        callers exercise it, and the cost of being wrong later is writing
+        outside the directory the whole hermeticity contract is stated over.
+
+        ``Path(name).name != name`` catches separators and absolute paths.  It
+        does NOT catch ``..``, whose ``.name`` is ``".."`` -- verified, not
+        assumed -- so the dot directories are named explicitly.
+        """
+        if not log_file or log_file in {".", ".."} or Path(log_file).name != log_file:
+            msg = (
+                f"log_file must be a bare filename, not {log_file!r}: "
+                "the log's directory is chosen by QUARRY_LOG_DIR, not by "
+                "the filename"
+            )
+            raise ValueError(msg)
+
     @classmethod
     def configure(
         cls, *, stderr_level: str = "WARNING", log_file: str = CLIENT_LOG
@@ -79,8 +101,11 @@ class LoggingConfig:
 
         *log_file* selects which file in the resolved directory receives the
         output -- :attr:`CLIENT_LOG` for CLI and MCP processes,
-        :attr:`DAEMON_LOG` for ``quarryd``.
+        :attr:`DAEMON_LOG` for ``quarryd``.  It must be a bare filename;
+        anything that would leave the resolved directory is refused here
+        (PY-EH-1: validate at the boundary, trust within).
         """
+        cls._require_bare_filename(log_file)
         log_dir = cls.log_dir()
         log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 

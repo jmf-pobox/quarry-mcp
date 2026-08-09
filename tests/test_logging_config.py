@@ -3,14 +3,12 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 from unittest.mock import patch
+
+import pytest
 
 from quarry.logging_config import LoggingConfig
 from tests.hermetic_env import ENV
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_env_var_overrides_stderr_level(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,3 +166,36 @@ class TestDaemonLoggingIsRealAndContained:
         # file directly, which is the only fixed reference to compare against.
         real_quarry = ENV.real_tree[0].parent
         assert not str(resolved).startswith(str(real_quarry)), resolved
+
+
+class TestLogFileIsABareFilename:
+    """The directory is chosen by QUARRY_LOG_DIR; the filename may not move it.
+
+    Bug-class 2: a parameter joined into a path is a boundary, and the test
+    that matters is the one that makes it raise rather than the one that shows
+    the happy path working.
+    """
+
+    @pytest.mark.parametrize(
+        "escape",
+        [
+            "sub/quarry.log",  # separator
+            "/etc/quarry.log",  # absolute
+            "../quarry.log",  # traversal
+            "..",  # Path("..").name is ".." — the bare-name check misses it
+            ".",
+            "",  # would target the directory itself
+        ],
+    )
+    def test_a_path_is_refused(self, escape: str) -> None:
+        with pytest.raises(ValueError, match="bare filename"):
+            LoggingConfig.configure(log_file=escape)
+
+    def test_the_real_names_are_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The guard must not reject what the daemon and CLI actually pass."""
+        monkeypatch.setenv("QUARRY_LOG_DIR", str(tmp_path))
+        for name in (LoggingConfig.CLIENT_LOG, LoggingConfig.DAEMON_LOG):
+            with patch("quarry.logging_config.logging.config.dictConfig"):
+                LoggingConfig.configure(log_file=name)
