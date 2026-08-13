@@ -62,10 +62,12 @@ htmlcov/
 # OS
 .DS_Store
 
-# Claude Code (settings.json is tracked; everything else is local/runtime)
-.claude/
-!.claude/hooks/
+# Claude Code (settings.json is tracked; everything else is local/runtime).
+# Exclude the CONTENTS, not the directory: git does not descend into an
+# excluded directory, so a negation under `.claude/` can never re-include.
+.claude/*
 !.claude/settings.json
+*/**/.claude/
 
 # Scratch/temp directory (TMPDIR set via .envrc)
 .tmp/
