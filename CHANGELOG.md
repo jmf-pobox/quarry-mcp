@@ -18,8 +18,8 @@ across `transform`, `index`, and `connector`).
 
 - Action pin comments now state the version actually pinned.
   `actions/checkout` was pinned to v7.0.1's SHA but labelled `# v4`, and
-  `codecov/codecov-action` to a SHA carrying v6 and v7 but labelled
-  `# v5`. The SHA is the security control, but the comment is the only
+  `codecov/codecov-action` was pinned to a SHA carrying v6 and v7 but
+  labelled `# v5`. The SHA is the security control, but the comment is the only
   part a human reads — a wrong comment hides a stale pin, which is how
   `gh-action-pypi-publish` broke punt-kit's 0.12.0 release. Labels
   resolved against the GitHub API; no SHA changed
