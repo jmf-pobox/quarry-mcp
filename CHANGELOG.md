@@ -22,7 +22,7 @@ across `transform`, `index`, and `connector`).
   labelled `# v5`. The SHA is the security control, but the comment is the only
   part a human reads — a wrong comment hides a stale pin, which is how
   `gh-action-pypi-publish` broke punt-kit's 0.12.0 release. Labels
-  resolved against the GitHub API; no SHA changed
+  resolved against the GitHub API; no SHA changed.
 
 ## [3.0.0] - 2026-08-08
 
