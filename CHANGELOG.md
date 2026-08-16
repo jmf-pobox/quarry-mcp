@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Removed
+
+- `infra`: the `.punt-labs/ethos` git submodule. Quarry ships as a marketplace
+  plugin and Claude Code clones plugin repos with `--recurse-submodules`, so
+  the gitlink put the whole Punt Labs identity registry — ~1 MB, 246 files of
+  identities, personalities, writing styles, talents, roles and teams — onto
+  the disk of everyone who installed quarry. It is internal team data, not
+  part of the product. Quarry's gitlink used an HTTPS URL, so keyless installs
+  already worked and nothing about installation changes; this removes weight,
+  not a failure. Agents working in the repo resolve identity from the global
+  `~/.punt-labs/ethos/`. The two-line `.punt-labs/ethos.yaml` identity pointer
+  stays tracked — it is project config, not the org roster.
+
 ### Fixed
 
 - Action pin comments now state the version actually pinned.
