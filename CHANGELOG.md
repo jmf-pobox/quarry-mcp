@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-19
+
 ### Removed
 
 - `infra`: the `.punt-labs/ethos` git submodule. Quarry ships as a marketplace
