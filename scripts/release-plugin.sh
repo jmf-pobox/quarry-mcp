@@ -30,11 +30,22 @@ p.write_text(json.dumps(d, indent=2) + '\n')
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
 
-# Remove -dev commands (if any exist)
+# Remove -dev commands (if any exist).
+#
+# The find runs in a process substitution, whose exit status `set -e` does not
+# see. A wrong or missing COMMANDS_DIR would therefore leave dev_files empty and
+# fall through to the "name swap only" branch — shipping a prod release with the
+# *-dev commands still in it, silently. Assert the directory up front, and let
+# find's stderr through rather than discarding it.
+if [[ ! -d "$COMMANDS_DIR" ]]; then
+  echo "error: $COMMANDS_DIR not found" >&2
+  exit 1
+fi
+
 dev_files=()
 while IFS= read -r -d '' f; do
   dev_files+=("$f")
-done < <(find "$COMMANDS_DIR" -name '*-dev.md' -print0 2>/dev/null)
+done < <(find "$COMMANDS_DIR" -name '*-dev.md' -print0)
 
 if [[ ${#dev_files[@]} -gt 0 ]]; then
   for f in "${dev_files[@]}"; do

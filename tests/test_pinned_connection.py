@@ -209,7 +209,9 @@ class TestTlsSemantics:
         the discriminator is the *contents* of the trust store: a pinned context
         loads its one CA from a file, so it reports exactly that cert; a
         platform-default context reports whatever the platform holds.  Comparing
-        against a freshly built default context states that invariant directly.
+        against a freshly built default context asserts equivalence to the
+        platform default — not that the store is non-empty, which on some
+        platforms it legitimately is not.
 
         Do not reduce this to ``len(ctx.get_ca_certs()) > 1``.  That assertion
         tests the platform, not the code: ``get_ca_certs`` reports only what
