@@ -272,7 +272,7 @@ coherence is the one structural split criterion; "the diff is large" and
 
 ## Release
 
-Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir .` loads `quarry-dev` alongside the installed prod plugin.
+Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir plugin` loads `quarry-dev` alongside the installed prod plugin — the argument is the plugin root, which is `plugin/`, not the repo root (DES-050).
 
 ## Key Documents
 

@@ -5,8 +5,10 @@ set -euo pipefail
 # The tagged commit has only prod artifacts; the marketplace cache clones from it.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_JSON="${REPO_ROOT}/.claude-plugin/plugin.json"
-COMMANDS_DIR="${REPO_ROOT}/commands"
+# The shippable plugin surface lives under plugin/ so a git-subdir marketplace
+# install fetches only that subtree; the plugin root is ${REPO_ROOT}/plugin.
+PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
+COMMANDS_DIR="${REPO_ROOT}/plugin/commands"
 
 # Swap plugin name from *-dev to prod
 current_name="$(python3 -c "import json; print(json.load(open('${PLUGIN_JSON}'))['name'])")"

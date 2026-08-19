@@ -206,7 +206,7 @@ Docs were fragmented across 5+ markdown files with overlapping content. LaTeX pr
 
 Three complementary mechanisms:
 
-1. **Researcher agent** (`.claude-plugin/agents/researcher.md`) — subagent that combines quarry local search with web research. Auto-ingests valuable web findings.
+1. **Researcher agent** (`plugin/agents/researcher.md`) — subagent that combines quarry local search with web research. Auto-ingests valuable web findings.
 2. **CLAUDE.md injection** — `quarry install` appends a capabilities section to `~/.claude/CLAUDE.md` (idempotent, HTML comment sentinel).
 3. **SessionStart context enrichment** — hook returns `additionalContext` with tool names, slash commands, and researcher agent mention.
 
@@ -2507,3 +2507,59 @@ optimize/FTS work has inflated the tree. A varying shortfall published as
 Sibling to DES-032/DES-045 (whose optimize and sweep work is what grows the
 directory beyond the live dataset) and DES-046 (the same file-descriptor
 class of daemon-resource protection).
+
+---
+
+## DES-050: The shippable plugin surface lives in `plugin/` (git-subdir install)
+
+**Context.** The marketplace entry for quarry used a `github` source, so
+`claude plugin install quarry@punt-labs` cloned the **whole repository** into
+`~/.claude/plugins/cache/punt-labs/quarry/<version>/`. A user who wanted six
+slash commands and five hook scripts received `src/`, `tests/`, `tools/`,
+`benchmarks/`, `docs/`, `prfaq.pdf`, the beads config, and the LaTeX sources —
+tens of megabytes of material that is not the plugin and that no consumer can
+act on. The clone also ran `--recurse-submodules`, which is why the org
+identity registry had to be removed from this repo before it could be a
+well-behaved plugin at all.
+
+**Decision.** The four directories that constitute the plugin —
+`.claude-plugin/`, `commands/`, `hooks/`, `agents/` — move under a single
+top-level `plugin/` directory, and the marketplace entry switches to the
+`git-subdir` source type with `"path": "plugin"`. A client then fetches that
+subtree alone. `plugin/` is the plugin root: it is the directory Claude Code
+names in `${CLAUDE_PLUGIN_ROOT}`, the directory `claude --plugin-dir` must be
+pointed at, and the directory `installPath` refers to in
+`installed_plugins.json`. Every path *inside* the surface is unchanged, so
+`hooks.json`'s `${CLAUDE_PLUGIN_ROOT}/hooks/*.sh` entries and
+`session-start.sh`'s `dirname $0/..` derivation stay correct without edits;
+what breaks — and what this change fixes — is every reference from *outside*
+the surface that named it by a repo-root path. See
+`punt-kit/standards/plugins.md` for the org-wide layout this conforms to.
+
+**The `agents/` directory moves to where it is actually read.** The researcher
+agent (DES-013) sat at `.claude-plugin/agents/researcher.md` and was never
+loaded by any session. Claude Code resolves a plugin's default agent directory
+as `join(pluginRoot, "agents")` — a sibling of `.claude-plugin/`, not a child —
+and quarry's `plugin.json` declares no `agents` override, so the file was dead
+on arrival. It now lives at `plugin/agents/researcher.md`. Agent types are
+namespaced per plugin (`quarry:researcher`), so this does not collide with the
+`researcher` that prfaq ships.
+
+**Cone-mode caveat, stated so nobody re-measures it as a defect.** A sparse
+checkout in cone mode always materializes the repo-root *files* alongside the
+requested directory. Fetching `plugin/` therefore also lands `README.md`,
+`CLAUDE.md`, `DESIGN.md`, `prfaq.pdf`, and the other root files. The win comes
+entirely from the directories left behind, which for quarry is the great
+majority of the tree; a repo whose bulk sat in root files would gain little.
+
+**Rejected: a separate publish-only repository.** Mirroring the plugin surface
+into `punt-labs/quarry-plugin` on release would give a byte-exact minimal
+clone, but it adds a second repository to keep in sync, a release step that can
+silently skip, and a second review surface — to save a subtree that
+`git-subdir` already excludes. Rejected as more machinery than the problem.
+
+**Rejected: keeping the surface at the repo root and filtering at install
+time.** There is no marketplace mechanism for it. `git-subdir` *is* the
+mechanism, and it requires the content to be in a subdirectory. It also raises
+the client floor to Claude Code ≥ v2.1.69, which is accepted as the punt-labs
+baseline.

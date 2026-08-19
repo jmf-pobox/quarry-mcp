@@ -126,7 +126,7 @@ def find(query: str, limit: int = 10, ...) -> str:
   daemon owns the work. No client-side thread pool.
 
 **Quarry's plugin stops using mcp-proxy (R2).** `plugin.json`
-(`.claude-plugin/plugin.json:9-18`) today runs a shell shim: `if command -v
+(`plugin/.claude-plugin/plugin.json:9-18`) today runs a shell shim: `if command -v
 mcp-proxy … exec mcp-proxy --config quarry; else exec quarry mcp`. v2.2 replaces
 the whole `mcpServers.quarry` block with the vox-style direct spawn:
 
@@ -255,7 +255,7 @@ current in-process path pays inside the ~100 ms hook budget. `_hook_entry`/
   (`mcp_server.py:12-37`), `_database`/`_settings`/`_executor`/`_background`
   (`mcp_server.py:71-91`) deleted.
 - `quarry/hooks.py` — `Database.connect` → `QuarryClient` (R6).
-- `.claude-plugin/plugin.json` — shim → `quarry mcp` direct (R2).
+- `plugin/.claude-plugin/plugin.json` — shim → `quarry mcp` direct (R2).
 
 **Deleted:**
 
