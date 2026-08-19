@@ -205,9 +205,21 @@ class TestTlsSemantics:
     def test_public_fetch_context_uses_system_trust_not_a_pinned_ca(self) -> None:
         """The opener's HTTPS context verifies against the system store, hostname on.
 
-        This is the deliberate opposite of the daemon-RPC pinned-CA context: a
-        single-CA context would carry exactly one cert, so >1 CA proves the
-        system trust store is in use.
+        This is the deliberate opposite of the daemon-RPC pinned-CA context, and
+        the discriminator is the *contents* of the trust store: a pinned context
+        loads its one CA from a file, so it reports exactly that cert; a
+        platform-default context reports whatever the platform holds.  Comparing
+        against a freshly built default context states that invariant directly.
+
+        Do not reduce this to ``len(ctx.get_ca_certs()) > 1``.  That assertion
+        tests the platform, not the code: ``get_ca_certs`` reports only what
+        OpenSSL has actually loaded, and when the platform's default trust is a
+        hashed **CApath** directory (``SSL_CERT_DIR=/etc/ssl/certs`` with no
+        ``SSL_CERT_FILE`` bundle present — the Debian/Ubuntu layout) OpenSSL
+        looks certs up lazily by subject hash.  A correct, fully working default
+        context then reports *zero* CAs until the first handshake populates the
+        store, so the count assertion failed on machines whose trust store was
+        fine.
         """
         opener = SsrfGuardedRedirectHandler.build_opener()
         https = next(
@@ -216,7 +228,9 @@ class TestTlsSemantics:
         ctx = https._context
         assert ctx.check_hostname is True
         assert ctx.verify_mode == ssl.CERT_REQUIRED
-        assert len(ctx.get_ca_certs()) > 1
+        platform_default = ssl.create_default_context()
+        assert ctx.cert_store_stats() == platform_default.cert_store_stats()
+        assert ctx.get_ca_certs() == platform_default.get_ca_certs()
 
 
 class TestSocketHygiene:
