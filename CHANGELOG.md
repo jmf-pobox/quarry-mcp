@@ -14,6 +14,50 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Changed
+
+- `infra`: the shippable plugin surface moved into a top-level `plugin/`
+  directory — `plugin/.claude-plugin/`, `plugin/commands/`, `plugin/hooks/`,
+  `plugin/agents/`. Once the marketplace entry switches to the `git-subdir`
+  source type, `claude plugin install quarry@punt-labs` fetches that subtree
+  alone instead of cloning the whole repository (`src/`, `tests/`, `tools/`,
+  `benchmarks/`, `docs/`, `prfaq.pdf`) into every user's plugin cache. Nothing
+  inside the surface moved relative to the plugin root, so
+  `${CLAUDE_PLUGIN_ROOT}` paths in `hooks.json` are unchanged; the release and
+  dev-restore scripts, the hook-wiring tests, and the docs that named the
+  surface by a repo-root path were all repointed. Local dev-plugin loading is
+  now `claude --plugin-dir plugin`, not `--plugin-dir .`. See DES-050.
+
+### Fixed
+
+- `infra`: the researcher agent is now loaded. It sat at
+  `.claude-plugin/agents/researcher.md`, but Claude Code resolves a plugin's
+  default agent directory as `<plugin-root>/agents` — a sibling of
+  `.claude-plugin/`, not a child — and quarry's `plugin.json` declares no
+  `agents` override, so the file had never been read by any session since
+  DES-013 introduced it. It now lives at `plugin/agents/researcher.md`. Agent
+  types are namespaced per plugin, so it registers as `quarry:researcher`.
+- `infra`: the plugin's five hook scripts are now covered by the `shellcheck -x`
+  gate. Coverage had been extended from `install.sh` to `scripts/*.sh` and
+  stopped there, leaving the only shell that runs on a *user's* machine — on
+  every session — unlinted.
+- `infra`: the public-fetch TLS trust test no longer fails on a correctly
+  configured machine. It asserted `len(ctx.get_ca_certs()) > 1` to prove the
+  system trust store was in use, but `get_ca_certs` reports only what OpenSSL
+  has actually loaded — and where the platform default is a hashed **CApath**
+  directory (`SSL_CERT_DIR=/etc/ssl/certs`, no `SSL_CERT_FILE` bundle present:
+  the Debian/Ubuntu layout) OpenSSL resolves CAs lazily by subject hash, so a
+  fully working default context reports zero until the first handshake. The test
+  was measuring the platform's cert layout, not the code. It now compares the
+  fetch context's store against a freshly built platform-default context, which
+  states the actual invariant and still fails a pinned single-CA context on
+  either layout.
+- `infra`: `scripts/restore-dev-plugin.sh` no longer runs
+  `git add <commands-dir> 2>/dev/null || true` unconditionally. The add now sits
+  inside the same guard as the checkout that populates it, so a checkout that
+  restored nothing fails the script instead of being reported as a successful
+  restore.
+
 ## [3.0.1] - 2026-08-19
 
 ### Removed
