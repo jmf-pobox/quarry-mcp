@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-08-20
+
 ### Changed
 
 - `infra`: the shippable plugin surface moved into a top-level `plugin/`
