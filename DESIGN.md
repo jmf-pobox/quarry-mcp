@@ -359,9 +359,9 @@ Key design choices:
 
 1. **Raw file append, not YAML round-trip.** The function reads the raw text to detect existing keys, then appends the `session_context: |` block directly. `yaml.safe_load` is used only to extract the `memory_collection` value — the file is never re-serialized through `yaml.dump`.
 
-2. **Per-identity exception handling.** The scan loop wraps each identity in `try/except (OSError, yaml.YAMLError)`. A malformed file for one identity does not abort processing of the others. Failed identities are reported in the result message.
+2. **Per-identity exception handling.** The scan loop wraps each identity in a broad `try/except Exception`. A malformed file for one identity does not abort processing of the others. Failed identities are reported in the result message.
 
-3. **Three-way classification.** `_write_ethos_ext_session_context` returns `"updated"`, `"already_set"`, or `"no_collection"` — not a boolean. The `no_collection` case is surfaced in the install output so users know their config is incomplete.
+3. **Three-way classification.** `EthosExtDiagnostics.write_session_context` returns `"updated"`, `"already_set"`, or `"no_collection"` — not a boolean. The `no_collection` case is surfaced in the install output so users know their config is incomplete.
 
 ### Why This Design
 

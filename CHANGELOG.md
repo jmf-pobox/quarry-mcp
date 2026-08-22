@@ -14,6 +14,17 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `tool`: `quarry install`/`doctor` now registers the Claude Code MCP server
+  with `claude mcp add --scope user` instead of the `local` default, so the
+  entry is machine-wide rather than scoped to whatever directory the install
+  happened to run from. Caveat: a leftover `local`-scope entry from an older
+  install, or a per-project `.mcp.json`, still shadows the `user`-scope entry
+  for that one project — Claude Code resolves `local` before `user`. Remove a
+  stray local entry with `claude mcp remove quarry --scope local` from inside
+  that project.
+
 ## [3.0.2] - 2026-08-20
 
 ### Changed
