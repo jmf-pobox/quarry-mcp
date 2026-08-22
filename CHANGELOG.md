@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.0.3] - 2026-08-22
+
 ### Fixed
 
 - `tool`: `quarry install`/`doctor` now registers the Claude Code MCP server
