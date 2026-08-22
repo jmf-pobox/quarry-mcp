@@ -43,9 +43,25 @@ jobs:
       # post-release/vX.Y.Z PRs (phase 9) restore README/install.sh sync and
       # MUST still run this check — that pass is the actual proof the
       # propagation step worked, and a regression there is a real bug.
+      #
+      # The skip match is exact (release/vX.Y.Z, e.g. release/v3.0.4), not a
+      # prefix match — GHA's `if:` expression syntax has no native regex, so
+      # the exact-match gate runs shell-side. A loose prefix match (e.g.
+      # startsWith(head_ref, "release/v")) would also skip this
+      # supply-chain-relevant check for any contributor branch merely named
+      # "release/v*" (e.g. release/vnext-experiment), which is not punt-kit's
+      # automated release flow and is not the narrow exception this skip
+      # exists for.
       - name: Verify README install URL is not stale
-        if: "!(github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v'))"
-        run: ./scripts/check-readme-install-sha.sh
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$GH_EVENT_NAME" = "pull_request" ] && [[ "$GH_HEAD_REF" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping: $GH_HEAD_REF is punt-kit's release-bump branch — install.sh legitimately changes here before the README pin catches up in the later post-release PR."
+            exit 0
+          fi
+          ./scripts/check-readme-install-sha.sh
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
