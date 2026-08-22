@@ -53,7 +53,7 @@ class EthosExtDiagnostics:
         if identities_dir is None:
             identities_dir = Path.home() / ".punt-labs" / "ethos" / "identities"
 
-        if not identities_dir.exists():
+        if not identities_dir.is_dir():
             return CheckResult(
                 name="Ethos ext session_context",
                 passed=True,

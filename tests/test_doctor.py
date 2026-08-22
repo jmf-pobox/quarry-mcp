@@ -583,6 +583,17 @@ class TestConfigureEthosExt:
         assert result.required is False
         assert "ethos not installed" in result.message
 
+    def test_identities_dir_is_a_file_skips_gracefully(self, tmp_path: Path):
+        """A path that exists but is not a directory must soft-skip, not raise."""
+        not_a_dir = tmp_path / "identities"
+        not_a_dir.write_text("not a directory", encoding="utf-8")
+
+        result = EthosExtDiagnostics.configure(identities_dir=not_a_dir)
+
+        assert result.passed is True
+        assert result.required is False
+        assert "ethos not installed" in result.message
+
     def test_two_identities_one_needs_update(self, tmp_path: Path):
         import yaml
 
@@ -1234,6 +1245,23 @@ class TestConfigureClaudeCode:
         add_argv = claude.calls[-1]
         assert add_argv[-2:] == ["quarry", "mcp"]
         assert "mcp-proxy" not in " ".join(add_argv)
+
+    def test_remove_itself_fails_hints_local_scope(self, monkeypatch: MP):
+        """When the remove itself fails, the message hints at the known cause.
+
+        A stale ``local``-scope entry can shadow the ``user``-scope one and
+        cause exactly this kind of remove failure (documented in the
+        CHANGELOG). The failure message must name the remediation command
+        directly, not just point at ``claude mcp list``.
+        """
+        claude = self._install(monkeypatch, [(1, "already exists"), (1, "denied")])
+        result = _configure_claude_code()
+
+        assert result.passed is False
+        assert ["remove", "quarry"] in claude.verbs
+        assert "could not be removed" in result.message
+        assert "denied" in result.message
+        assert "claude mcp remove quarry --scope local" in result.message
 
     def test_removed_then_readd_fails_is_surfaced(self, monkeypatch: MP):
         """remove-succeeds + re-add-fails is NOT reported as configured (djb).
