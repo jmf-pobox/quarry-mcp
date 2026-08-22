@@ -1225,6 +1225,11 @@ class TestConfigureClaudeCode:
             ["remove", "quarry"],
             ["add", "quarry"],
         ]
+        # The remove targets --scope user too: an unscoped remove is ambiguous
+        # when a stale local-scope entry and the user-scope entry coexist, and
+        # may not clear the blocker.
+        remove_argv = claude.calls[1]
+        assert remove_argv[1:] == ["mcp", "remove", "quarry", "--scope", "user"]
         # The successful re-add registers the direct `quarry mcp`, not a proxy.
         add_argv = claude.calls[-1]
         assert add_argv[-2:] == ["quarry", "mcp"]
@@ -1246,6 +1251,9 @@ class TestConfigureClaudeCode:
         assert "removed" in result.message
         assert "re-add failed" in result.message
         assert "boom" in result.message
+        # The remediation command must itself use --scope user -- telling the
+        # user to run the scope-less form would reintroduce this bug.
+        assert "claude mcp add quarry --scope user -- quarry mcp" in result.message
 
     def test_fresh_add_fails_leaves_no_remove(self, monkeypatch: MP):
         """A non-"already exists" add failure surfaces and never removes."""

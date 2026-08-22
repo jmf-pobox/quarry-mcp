@@ -208,6 +208,7 @@ def _check_fts_health(db_path: Path) -> CheckResult:
 
 
 _MCP_SERVER_NAME = "quarry"
+_SCOPE_USER = ("--scope", "user")
 
 
 def _mcp_command(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
@@ -241,6 +242,13 @@ def _run_claude(claude_path: str, *argv: str) -> subprocess.CompletedProcess[str
     )
 
 
+def _claude_code_failure(message: str) -> CheckResult:
+    """Return a non-required, failed ``Claude Code MCP`` CheckResult."""
+    return CheckResult(
+        name="Claude Code MCP", passed=False, message=message, required=False
+    )
+
+
 def _configure_claude_code() -> CheckResult:
     """Register the quarry MCP server with Claude Code, replacing any stale entry.
 
@@ -265,52 +273,32 @@ def _configure_claude_code() -> CheckResult:
     )
     claude_path = shutil.which("claude")
     if claude_path is None:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message="claude CLI not found on PATH",
-            required=False,
-        )
+        return _claude_code_failure("claude CLI not found on PATH")
     command, args = _mcp_command()
-    add_argv = ["mcp", "add", _MCP_SERVER_NAME, "--scope", "user", "--", command, *args]
+    add_argv = ["mcp", "add", _MCP_SERVER_NAME, *_SCOPE_USER, "--", command, *args]
     result = _run_claude(claude_path, *add_argv)
     if result.returncode == 0:
         return ok
     if "already exists" not in result.stderr:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message=f"claude mcp add failed: {result.stderr.strip()}",
-            required=False,
-        )
+        return _claude_code_failure(f"claude mcp add failed: {result.stderr.strip()}")
     # An entry already exists and blocks the direct add. Remove it and re-add;
     # only now — with the entry confirmed present — do we risk a removal.
-    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
     if remove.returncode != 0:
         # The remove failed: the stale entry is likely still present, so do NOT
         # re-add blindly or claim a removal that did not happen.
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message=(
-                "a stale quarry MCP entry blocks the add but could not be "
-                f"removed: {remove.stderr.strip()}. Inspect with "
-                "'claude mcp list' and re-run 'quarry install'."
-            ),
-            required=False,
+        return _claude_code_failure(
+            "a stale quarry MCP entry blocks the add but could not be removed: "
+            f"{remove.stderr.strip()}. Inspect with 'claude mcp list' and "
+            "re-run 'quarry install'."
         )
     retry = _run_claude(claude_path, *add_argv)
     if retry.returncode == 0:
         return ok
-    return CheckResult(
-        name="Claude Code MCP",
-        passed=False,
-        message=(
-            "removed the stale quarry MCP entry but the re-add failed: "
-            f"{retry.stderr.strip()}. Re-run 'quarry install' or "
-            "'claude mcp add quarry -- quarry mcp'."
-        ),
-        required=False,
+    return _claude_code_failure(
+        "removed the stale quarry MCP entry but the re-add failed: "
+        f"{retry.stderr.strip()}. Re-run 'quarry install' or "
+        "'claude mcp add quarry --scope user -- quarry mcp'."
     )
 
 
