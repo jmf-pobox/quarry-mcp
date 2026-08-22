@@ -24,7 +24,6 @@ from quarry.doctor import (
     _check_python_version,
     _configure_claude_code,
     _configure_claude_desktop,
-    _configure_ethos_ext,
     _human_size,
     _mcp_command,
     _quiet_logging,
@@ -32,6 +31,7 @@ from quarry.doctor import (
     run_install,
 )
 from quarry.doctor_captures import CaptureDiagnostics
+from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.gpu_status import GpuStatus
@@ -539,7 +539,7 @@ class TestConfigureEthosExt:
             yaml.dump({"memory_collection": "claude-memories"}), encoding="utf-8"
         )
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         assert result.passed is True
         data = yaml.safe_load(quarry_yaml.read_text(encoding="utf-8"))
@@ -561,7 +561,7 @@ class TestConfigureEthosExt:
         }
         quarry_yaml.write_text(yaml.dump(original), encoding="utf-8")
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         data = yaml.safe_load(quarry_yaml.read_text(encoding="utf-8"))
         assert data["session_context"] == "existing content, do not overwrite"
@@ -571,13 +571,13 @@ class TestConfigureEthosExt:
         identities_dir = tmp_path / "identities"
         self._make_ext(identities_dir, "nomemory")
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         assert result.passed is True
         assert "no identities" in result.message
 
     def test_ethos_not_installed(self, tmp_path: Path):
-        result = _configure_ethos_ext(identities_dir=tmp_path / "nonexistent")
+        result = EthosExtDiagnostics.configure(identities_dir=tmp_path / "nonexistent")
 
         assert result.passed is True
         assert result.required is False
@@ -606,7 +606,7 @@ class TestConfigureEthosExt:
             encoding="utf-8",
         )
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         assert result.passed is True
         assert "updated 1 identity: claude" in result.message
@@ -626,7 +626,7 @@ class TestConfigureEthosExt:
         ext_dir = self._make_ext(identities_dir, "ghost")
         (ext_dir / "quarry.yaml").write_text("other_key: value\n", encoding="utf-8")
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         assert result.passed is True
         assert "no memory_collection" in result.message
@@ -648,7 +648,7 @@ class TestConfigureEthosExt:
             yaml.dump({"memory_collection": "z-col"}), encoding="utf-8"
         )
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         # zebra should be updated despite aardvark failing
         assert "zebra" in result.message
@@ -670,7 +670,7 @@ class TestConfigureEthosExt:
         original_text = "# important comment\nmemory_collection: tester-col\n"
         (ext_dir / "quarry.yaml").write_text(original_text, encoding="utf-8")
 
-        _configure_ethos_ext(identities_dir=identities_dir)
+        EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         updated_text = (ext_dir / "quarry.yaml").read_text(encoding="utf-8")
         assert "# important comment" in updated_text
@@ -697,7 +697,7 @@ class TestConfigureEthosExt:
             yaml.dump({"memory_collection": "zvalid-col"}), encoding="utf-8"
         )
 
-        result = _configure_ethos_ext(identities_dir=identities_dir)
+        result = EthosExtDiagnostics.configure(identities_dir=identities_dir)
 
         # listident should be in no_collection, not in errors
         assert "no memory_collection" in result.message
@@ -1195,6 +1195,20 @@ class TestConfigureClaudeCode:
         assert result.passed is True
         assert "configured" in result.message
         assert ["remove", "quarry"] not in claude.verbs
+
+    def test_fresh_add_uses_user_scope(self, monkeypatch: MP):
+        """The add registers at ``--scope user``, not the ``local`` default.
+
+        Quarry install is a once-per-machine operation; a ``local``-scope
+        entry is pinned to whatever cwd install happened to run from.
+        """
+        claude = self._install(monkeypatch, [(0, "")])
+        result = _configure_claude_code()
+        assert result.passed is True
+        assert "scope: user" in result.message
+        add_argv = claude.calls[-1]
+        assert "--scope" in add_argv
+        assert add_argv[add_argv.index("--scope") + 1] == "user"
 
     def test_replaces_stale_entry(self, monkeypatch: MP):
         """A stale ``quarry`` entry blocks the add → remove → re-add wins (djb).

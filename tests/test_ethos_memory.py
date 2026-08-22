@@ -69,7 +69,9 @@ def test_bad_yaml_is_recorded_and_bootstrap_continues(
 
     from yaml import YAMLError
 
-    from quarry.doctor import _write_ethos_ext_session_context as original_write
+    from quarry.doctor_ethos import EthosExtDiagnostics
+
+    original_write = EthosExtDiagnostics.write_session_context
 
     def selective_raise(quarry_yaml: Path, handle: str) -> str:
         if handle == "bad":
@@ -78,7 +80,8 @@ def test_bad_yaml_is_recorded_and_bootstrap_continues(
         return original_write(quarry_yaml, handle)
 
     monkeypatch.setattr(
-        "quarry.doctor._write_ethos_ext_session_context", selective_raise
+        "quarry.doctor_ethos.EthosExtDiagnostics.write_session_context",
+        selective_raise,
     )
 
     result = EthosMemoryBootstrap(identities).run()

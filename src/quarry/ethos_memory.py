@@ -99,12 +99,10 @@ class EthosMemoryBootstrap:
         failed: list[str],
     ) -> None:
         """Write session_context, sorting the handle into the right bucket."""
-        from quarry.doctor import (  # noqa: PLC0415
-            _write_ethos_ext_session_context,  # pyright: ignore[reportPrivateUsage]
-        )
+        from quarry.doctor_ethos import EthosExtDiagnostics  # noqa: PLC0415
 
         try:
-            result = _write_ethos_ext_session_context(quarry_yaml, handle)
+            result = EthosExtDiagnostics.write_session_context(quarry_yaml, handle)
         except (OSError, YAMLError, UnicodeDecodeError):
             # UnicodeDecodeError (a ValueError, not an OSError) fires on a
             # non-UTF8/corrupt identity file — record the handle and continue
