@@ -26,6 +26,26 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # quarry-0u2t: this check used to run only in release.yml's tag-triggered
+      # mcpb job, where it is structurally unsatisfiable — install.sh's VERSION
+      # line changes on punt-kit's release-bump commit (phase 2, branch
+      # release/vX.Y.Z), but the README's pinned SHA only catches up in a LATER,
+      # separate post-release PR (phase 9) that lands after the tag. Running it
+      # here, on every regular PR, is where install.sh and the README pin are
+      # actually expected to agree.
+      #
+      # The lone, deliberate exception is the release-bump PR itself (head
+      # branch release/vX.Y.Z): that PR's only change to install.sh IS the
+      # version bump, and the corresponding README pin update is a separate,
+      # later PR by design (punt-kit phase 9, branch post-release/vX.Y.Z) — so
+      # this check would always and correctly fail there, for a reason that
+      # is not a bug. This is NOT a general "skip on release branches" rule:
+      # post-release/vX.Y.Z PRs (phase 9) restore README/install.sh sync and
+      # MUST still run this check — that pass is the actual proof the
+      # propagation step worked, and a regression there is a real bug.
+      - name: Verify README install URL is not stale
+        if: "!(github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v'))"
+        run: ./scripts/check-readme-install-sha.sh
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
