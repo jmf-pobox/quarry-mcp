@@ -8,6 +8,8 @@ from typing import Self, final
 
 from yaml import YAMLError
 
+from quarry.doctor_ethos import EthosExtDiagnostics
+
 __all__ = ["EthosMemoryBootstrap", "EthosMemoryResult"]
 
 _GLOBAL_IDENTITIES = Path.home() / ".punt-labs" / "ethos" / "identities"
@@ -99,8 +101,6 @@ class EthosMemoryBootstrap:
         failed: list[str],
     ) -> None:
         """Write session_context, sorting the handle into the right bucket."""
-        from quarry.doctor_ethos import EthosExtDiagnostics  # noqa: PLC0415
-
         try:
             result = EthosExtDiagnostics.write_session_context(quarry_yaml, handle)
         except (OSError, YAMLError, UnicodeDecodeError):

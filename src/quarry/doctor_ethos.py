@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import final
 
+import yaml
+
 from quarry.results import CheckResult
 
 _SESSION_CONTEXT_TEMPLATE = """\
@@ -40,9 +42,7 @@ class EthosExtDiagnostics:
 
     Idempotent: leaves an existing ``session_context`` key unchanged. Skips
     identity directories that have no ``quarry.yaml`` (quarry not configured
-    for that identity). Moved out of ``doctor.py`` so the diagnostics god
-    module no longer owns the ethos ext write path directly; ``ethos_memory``
-    reuses :meth:`write_session_context` for the ``quarry enable`` path.
+    for that identity).
     """
 
     __slots__ = ()
@@ -91,8 +91,6 @@ class EthosExtDiagnostics:
             "already_set"  — session_context key already present, file unchanged
             "no_collection"— memory_collection absent, nothing to do
         """
-        import yaml  # noqa: PLC0415
-
         raw = quarry_yaml.read_text(encoding="utf-8")
 
         data = yaml.safe_load(raw) or {}

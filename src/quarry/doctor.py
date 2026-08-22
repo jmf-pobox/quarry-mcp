@@ -14,6 +14,7 @@ from pathlib import Path
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.results import CheckResult
@@ -659,8 +660,6 @@ def run_install() -> int:
     # Step 8: ethos ext session_context (best-effort)
     print("[8/8] Configuring ethos identity extension...")  # noqa: T201
     try:
-        from quarry.doctor_ethos import EthosExtDiagnostics  # noqa: PLC0415
-
         check = EthosExtDiagnostics.configure()
         _print_check(check)
     except Exception as exc:  # noqa: BLE001
