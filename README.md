@@ -107,10 +107,13 @@ sh install.sh
 Ingest a document:
 
 ```text
-> /ingest report.pdf
+> /ingest https://example.com/report
 
-▶ Ingesting report.pdf (background)
+▶ Ingesting https://example.com/report (background)
 ```
+
+For local files, register their containing directory instead — see
+[Commands](#commands).
 
 Search by meaning:
 
@@ -129,7 +132,7 @@ Search by meaning:
 
 | Command | What it does |
 |---------|-------------|
-| `/ingest <source>` | Ingest a URL, directory, or file |
+| `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
@@ -144,7 +147,7 @@ Search by meaning:
 | `show` | Document metadata or page text |
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
-| `ingest` / `remember` | Index a file/URL, or inline text |
+| `ingest` / `remember` | Index a URL, or inline text |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
@@ -155,7 +158,7 @@ Search by meaning:
 | Command | What it does |
 |---------|-------------|
 | `quarry find "<query>"` | Hybrid search (vector + full-text) |
-| `quarry ingest <file\|url>` | Index a file or webpage |
+| `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
 | `quarry remember --name <name>` | Index inline text from stdin |
 | `quarry list documents` | List indexed documents |
 | `quarry register <dir>` | Watch a directory for changes |
