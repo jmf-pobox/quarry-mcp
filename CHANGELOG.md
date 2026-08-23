@@ -76,6 +76,14 @@ across `transform`, `index`, and `connector`).
   one-line pointer, per the required-section rule that it stay present but
   the "no narrative Contributing content in README" rule that its detail
   belongs in `CONTRIBUTING.md`.
+- `tool`: moved the HTTP API subsection out from under Commands to live
+  with Managing the Daemon instead — both describe the same running
+  `quarryd` process, so grouping them reads better than filing HTTP
+  alongside the Slash Commands/MCP Tools/CLI surfaces it isn't one of.
+  Also named the HTTP API in the opening description, where it was
+  previously undescribed — as the interface the thin clients (CLI, MCP
+  server, Claude Code hooks) talk over and that's reachable directly too,
+  not as a fourth thin client itself.
 
 ## [3.0.3] - 2026-08-22
 
