@@ -26,6 +26,40 @@ across `transform`, `index`, and `connector`).
   file or directory
   through `register_directory` + `sync_all_registrations` instead of calling
   `ingest`, which always failed for that case.
+- `tool`: README documented `quarryd`'s versioned REST API only as an
+  internal implementation detail ("the CLI, MCP server, and hooks... over a
+  versioned REST API"), never as a directly usable surface, despite a real
+  generated OpenAPI spec (`docs/openapi.json`, 18 endpoints) existing. Added
+  an HTTP API section under Commands with a worked `curl` example and the
+  loopback/auth contract.
+- `tool`: README's "What It Looks Like" ingest example used a bare URL,
+  which is accurate but not representative — `register`+`sync` a directory
+  is the common path. Swapped the example.
+- `tool`: README's Knowledge Capture section named the three capture hooks
+  in a sentence rather than explaining what each does, called the
+  pattern-based secret scrub a guarantee rather than best-effort, and gave
+  the opt-in shadow-repo push equal billing with core capture rather than
+  framing it as an extension. Rewrote as a hook table, softened the scrub
+  claim, and moved the shadow repo to its own "Extension" callout.
+- `tool`: README's Managing the Daemon section didn't mention that
+  re-running the Quick Start installer already restarts the service on
+  upgrade (`install.sh` calls `quarry install` then force-restarts as a
+  belt-and-suspenders step) — the manual `launchctl`/`systemctl` commands
+  read as always-required when they're only needed after upgrading the
+  package some other way.
+- `tool`: split the environment-variable reference and Remote Server
+  deployment content out of README.md into a new `ADVANCED-SETUP.md` — the
+  main audience (a Claude Code developer using the zero-config default)
+  doesn't need GPU-host/TLS/TOFU deployment detail in the primary doc.
+  README's Setup section is now a one-line pointer; Features, HTTP API, and
+  Documentation cross-references updated to the new file.
+- `tool`: README's HTTP API `curl` example used plain `http://`, but
+  `quarry install` unconditionally generates TLS certs for the managed
+  daemon (`quarry.service.install` calls `write_tls_files` before
+  registering the service, local or `--network`), so the default installed
+  daemon serves `https://`, not `http://` — the example as written would
+  fail against a typical install. Fixed to `https://` with `--cacert`
+  against the generated local CA.
 
 ## [3.0.3] - 2026-08-22
 
