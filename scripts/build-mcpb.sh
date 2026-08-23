@@ -2,10 +2,11 @@
 # Build the .mcpb Desktop Extension bundle for Claude Desktop.
 #
 # The bundle manifest is GENERATED at build time into a staging directory and
-# packed from there. It is never written to the repo root: a root manifest.json
-# is preferred by the plugin marketplace over .claude-plugin/plugin.json and
-# strips the installed plugin's slash commands (removed in b2c9ffb for exactly
-# that reason). Keeping the manifest out of the tree is load-bearing.
+# packed from there. It is never written into the tree: a manifest.json beside
+# the plugin manifest is preferred by the plugin marketplace over
+# plugin/.claude-plugin/plugin.json and strips the installed plugin's slash
+# commands (removed in b2c9ffb for exactly that reason). Keeping the manifest out
+# of the tree is load-bearing.
 #
 # The manifest's version is the single source of truth from pyproject.toml; all
 # other fields come from scripts/mcpb-manifest.template.json. The mcp_config
