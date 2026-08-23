@@ -16,7 +16,10 @@ Determine the ingestion method:
    accepts URLs, so a local file is reached by registering the directory that
    contains it — this indexes the whole directory, not just the one file)
 
-Expand `~` to the user's home directory before calling any tool.
+Expand `~` to the user's home directory, and resolve any relative path to an
+absolute one against the current working directory, before calling any tool
+(the tool sends the path as given, and a relative path resolved on the wrong
+side registers the wrong directory).
 
 ## Task
 
@@ -24,8 +27,10 @@ Call the appropriate tool(s):
 
 - **URL**: `mcp__plugin_quarry_quarry__ingest` with `source` set to the argument
 - **Local path**: Call `mcp__plugin_quarry_quarry__register_directory` with
-  `directory` set to the absolute path. If it errors because the path is a
-  file, retry with the path's parent directory instead. Then call
+  `directory` set to the absolute path. The daemon rejects both a
+  nonexistent path and an existing file with the same "directory not found"
+  error, so there's no way to tell them apart from the error alone — on any
+  error, retry once with the path's parent directory. Then call
   `mcp__plugin_quarry_quarry__sync_all_registrations`
 
 The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.

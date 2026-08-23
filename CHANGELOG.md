@@ -21,8 +21,9 @@ across `transform`, `index`, and `connector`).
   URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the
   URL-only contract correctly — the bug was in the surrounding docs, not
   there) — `quarry-wz6f` tracks restoring one-shot local file ingest as a
-  real feature. A local path was silently rejected with an error. Docs
-  corrected; the `/ingest` slash commands now route a local file or directory
+  real feature. A local path was rejected with an explicit error, not
+  ingested. Docs corrected; the `/ingest` slash commands now route a local
+  file or directory
   through `register_directory` + `sync_all_registrations` instead of calling
   `ingest`, which always failed for that case.
 
