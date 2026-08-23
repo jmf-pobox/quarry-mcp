@@ -47,6 +47,12 @@ across `transform`, `index`, and `connector`).
   belt-and-suspenders step) — the manual `launchctl`/`systemctl` commands
   read as always-required when they're only needed after upgrading the
   package some other way.
+- `tool`: split the environment-variable reference and Remote Server
+  deployment content out of README.md into a new `ADVANCED-SETUP.md` — the
+  main audience (a Claude Code developer using the zero-config default)
+  doesn't need GPU-host/TLS/TOFU deployment detail in the primary doc.
+  README's Setup section is now a one-line pointer; Features, HTTP API, and
+  Documentation cross-references updated to the new file.
 
 ## [3.0.3] - 2026-08-22
 
