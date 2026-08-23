@@ -234,6 +234,14 @@ tests/harness/.stage/
 # Plugin runtime state (tts, biff)
 .tts/
 
+# Legacy plugin state at repo root — biff/lux/ethos config now lives under
+# .punt-labs/<tool>/ (see .punt-labs/biff/, .punt-labs/lux.md,
+# .punt-labs/ethos.yaml) or resolves from the global ~/.punt-labs/. These
+# root-level paths predate that convention and should not be recreated.
+/.biff
+/.lux/
+/.ethos/
+
 # Dev scratch files
 *.tmp
 prfaq*.bbl
