@@ -12,11 +12,12 @@
 # fails. (Equality against a not-yet-created release commit would be circular;
 # content equality is the property that actually protects users.)
 #
-# Requires the pinned commit to be present in the local object DB. The release
-# workflow checks out with fetch-depth: 0, so full history — and therefore the
-# pinned commit — is always available there. Under a shallow clone the pinned
-# commit is absent and this fails with a clear, actionable message (deepen the
-# clone), rather than silently passing.
+# Requires the pinned commit to be present in the local object DB. The lint
+# workflow (.github/workflows/lint.yml, which runs this check) checks out with
+# fetch-depth: 0, so full history — and therefore the pinned commit — is always
+# available there. Under a shallow clone the pinned commit is absent and this
+# fails with a clear, actionable message (deepen the clone), rather than
+# silently passing.
 #
 # Usage: ./scripts/check-readme-install-sha.sh
 #
@@ -76,7 +77,7 @@ readme_sha="$first_sha"
 if ! git rev-parse --verify --quiet "${readme_sha}^{commit}" >/dev/null; then
     echo "ERROR: README install SHA $readme_sha is not present in the local git" >&2
     echo "       object DB. This usually means a shallow clone (actions/checkout" >&2
-    echo "       without fetch-depth: 0). The release workflow fetches full history" >&2
+    echo "       without fetch-depth: 0). The lint workflow fetches full history" >&2
     echo "       (fetch-depth: 0), so the pinned commit is always present there;" >&2
     echo "       deepen the clone (git fetch --unshallow) to run this check locally." >&2
     exit 1

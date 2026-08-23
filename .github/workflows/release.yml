@@ -102,10 +102,18 @@ jobs:
 
   # Claude Desktop .mcpb bundle. Self-contained and decoupled from punt-kit's
   # release.py: this job builds the bundle and attaches it to the GitHub release
-  # for the tag, then verifies the asset is downloadable and the README install
-  # URL is not stale. quarry-521g: the README linked to
-  # releases/latest/download/punt-quarry.mcpb but no release ever attached it, so
-  # the link 404'd.
+  # for the tag, then verifies the asset is downloadable. quarry-521g: the
+  # README linked to releases/latest/download/punt-quarry.mcpb but no release
+  # ever attached it, so the link 404'd.
+  #
+  # The README-install-SHA staleness check used to run here too, but this is a
+  # tag push — install.sh's VERSION line changed on this release's bump commit
+  # (punt-kit phase 2) and the README's pin only catches up in a LATER,
+  # separate post-release PR (phase 9), which lands after this tag. The check
+  # was therefore structurally unsatisfiable on every release (quarry-0u2t:
+  # confirmed live on v3.0.3's tag run). It now runs in lint.yml on regular PR
+  # CI instead, where install.sh and the README pin are actually expected to
+  # agree.
   mcpb:
     # Gate on pypi: the .mcpb is a thin client of the punt-quarry package, so it
     # is only useful once that package is actually published. Without this gate a
@@ -124,12 +132,7 @@ jobs:
             echo "::error::Release must be triggered by a v* tag push. For manual dispatch, use: gh workflow run release.yml --ref v1.2.3"
             exit 1
           fi
-      # fetch-depth: 0 is load-bearing: check-readme-install-sha.sh resolves the
-      # README-pinned SHA and diffs its install.sh against the tree — a shallow
-      # clone lacks that history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -182,5 +185,3 @@ jobs:
             exit 1
           fi
           echo "OK: $url returns HTTP 200"
-      - name: Verify README install URL is not stale
-        run: ./scripts/check-readme-install-sha.sh

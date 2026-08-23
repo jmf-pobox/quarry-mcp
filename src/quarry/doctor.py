@@ -14,6 +14,7 @@ from pathlib import Path
 
 from quarry.doctor_captures import CaptureDiagnostics
 from quarry.doctor_daemon import DaemonDiagnostics
+from quarry.doctor_ethos import EthosExtDiagnostics
 from quarry.doctor_inference import InferenceDiagnostics
 from quarry.doctor_sync import SyncDiagnostics
 from quarry.results import CheckResult
@@ -208,6 +209,7 @@ def _check_fts_health(db_path: Path) -> CheckResult:
 
 
 _MCP_SERVER_NAME = "quarry"
+_SCOPE_USER = ("--scope", "user")
 
 
 def _mcp_command(*, resolve_paths: bool = False) -> tuple[str, list[str]]:
@@ -241,8 +243,24 @@ def _run_claude(claude_path: str, *argv: str) -> subprocess.CompletedProcess[str
     )
 
 
+def _claude_code_failure(message: str) -> CheckResult:
+    """Return a non-required, failed ``Claude Code MCP`` CheckResult."""
+    return CheckResult(
+        name="Claude Code MCP", passed=False, message=message, required=False
+    )
+
+
 def _configure_claude_code() -> CheckResult:
     """Register the quarry MCP server with Claude Code, replacing any stale entry.
+
+    Registers at ``--scope user`` (Claude Code's machine-wide scope) rather
+    than the ``local`` default, which is scoped to whatever directory
+    ``quarry install``/``doctor`` happened to run from. Quarry is a
+    once-per-machine install, so its MCP entry must not depend on cwd. Note:
+    a `local`-scope entry from an older install (or a per-project
+    `.mcp.json`) shadows the user-scope entry for that one project — Claude
+    Code resolves local before user. Remove any stray local-scope entry with
+    ``claude mcp remove quarry --scope local`` from inside that project.
 
     Add-first, remove-only-if-blocked: try ``claude mcp add`` and act on the
     result. A fresh slot succeeds outright. Only when the add reports the entry
@@ -252,56 +270,38 @@ def _configure_claude_code() -> CheckResult:
     is surfaced loudly (the user must re-run), never reported as configured.
     """
     ok = CheckResult(
-        name="Claude Code MCP", passed=True, message="configured (scope: local)"
+        name="Claude Code MCP", passed=True, message="configured (scope: user)"
     )
     claude_path = shutil.which("claude")
     if claude_path is None:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message="claude CLI not found on PATH",
-            required=False,
-        )
+        return _claude_code_failure("claude CLI not found on PATH")
     command, args = _mcp_command()
-    add_argv = ["mcp", "add", _MCP_SERVER_NAME, "--", command, *args]
+    add_argv = ["mcp", "add", _MCP_SERVER_NAME, *_SCOPE_USER, "--", command, *args]
     result = _run_claude(claude_path, *add_argv)
     if result.returncode == 0:
         return ok
     if "already exists" not in result.stderr:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message=f"claude mcp add failed: {result.stderr.strip()}",
-            required=False,
-        )
+        return _claude_code_failure(f"claude mcp add failed: {result.stderr.strip()}")
     # An entry already exists and blocks the direct add. Remove it and re-add;
     # only now — with the entry confirmed present — do we risk a removal.
-    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME)
+    remove = _run_claude(claude_path, "mcp", "remove", _MCP_SERVER_NAME, *_SCOPE_USER)
     if remove.returncode != 0:
         # The remove failed: the stale entry is likely still present, so do NOT
         # re-add blindly or claim a removal that did not happen.
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message=(
-                "a stale quarry MCP entry blocks the add but could not be "
-                f"removed: {remove.stderr.strip()}. Inspect with "
-                "'claude mcp list' and re-run 'quarry install'."
-            ),
-            required=False,
+        return _claude_code_failure(
+            "a stale quarry MCP entry blocks the add but could not be removed: "
+            f"{remove.stderr.strip()}. Inspect with 'claude mcp list' — a stale "
+            "'local'-scope entry can shadow the 'user'-scope one and cause this "
+            "exact failure; try 'claude mcp remove quarry --scope local' first, "
+            "then re-run 'quarry install'."
         )
     retry = _run_claude(claude_path, *add_argv)
     if retry.returncode == 0:
         return ok
-    return CheckResult(
-        name="Claude Code MCP",
-        passed=False,
-        message=(
-            "removed the stale quarry MCP entry but the re-add failed: "
-            f"{retry.stderr.strip()}. Re-run 'quarry install' or "
-            "'claude mcp add quarry -- quarry mcp'."
-        ),
-        required=False,
+    return _claude_code_failure(
+        "removed the stale quarry MCP entry but the re-add failed: "
+        f"{retry.stderr.strip()}. Re-run 'quarry install' or "
+        "'claude mcp add quarry --scope user -- quarry mcp'."
     )
 
 
@@ -380,57 +380,29 @@ def _check_claude_code_mcp() -> CheckResult:
     """
     plugins_path = _CLAUDE_CODE_PLUGINS_PATH
     if not plugins_path.exists():
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message="no plugin registry found",
-            required=False,
-        )
+        return _claude_code_failure("no plugin registry found")
     try:
         data = json.loads(plugins_path.read_text(encoding="utf-8"))
         plugins = data.get("plugins", {})
         if _QUARRY_PLUGIN_KEY not in plugins:
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=False,
-                message="not configured (run 'quarry install')",
-                required=False,
-            )
+            return _claude_code_failure("not configured (run 'quarry install')")
         # Verify the install path contains a valid plugin manifest with
         # an mcpServers entry for quarry.  This catches stale registry
         # entries where the plugin directory was deleted or corrupted.
         entries = plugins[_QUARRY_PLUGIN_KEY]
         if not entries:
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=False,
-                message="not configured (run 'quarry install')",
-                required=False,
-            )
+            return _claude_code_failure("not configured (run 'quarry install')")
         raw_path = entries[0].get("installPath", "")
         if not raw_path:
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=False,
-                message="plugin registry has empty installPath",
-                required=False,
-            )
+            return _claude_code_failure("plugin registry has empty installPath")
         install_path = Path(raw_path)
         plugin_json = install_path / ".claude-plugin" / "plugin.json"
         if not plugin_json.exists():
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=False,
-                message=f"plugin files missing at {install_path}",
-                required=False,
-            )
+            return _claude_code_failure(f"plugin files missing at {install_path}")
         manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
         if _MCP_SERVER_NAME not in manifest.get("mcpServers", {}):
-            return CheckResult(
-                name="Claude Code MCP",
-                passed=False,
-                message="plugin manifest missing quarry MCP server entry",
-                required=False,
+            return _claude_code_failure(
+                "plugin manifest missing quarry MCP server entry"
             )
         return CheckResult(
             name="Claude Code MCP",
@@ -438,12 +410,7 @@ def _check_claude_code_mcp() -> CheckResult:
             message="configured",
         )
     except (json.JSONDecodeError, OSError, KeyError, TypeError, AttributeError) as exc:
-        return CheckResult(
-            name="Claude Code MCP",
-            passed=False,
-            message=f"config error: {exc}",
-            required=False,
-        )
+        return _claude_code_failure(f"config error: {exc}")
 
 
 def _check_claude_desktop_mcp() -> CheckResult:
@@ -496,175 +463,6 @@ def _print_check(check: CheckResult) -> None:
     else:
         symbol = "\u25cb"
     print(f"  {symbol} {check.name}: {check.message}")  # noqa: T201
-
-
-_SESSION_CONTEXT_TEMPLATE = """\
-## Memory
-
-You have persistent memory stored in quarry, a local semantic
-search engine. Your memories survive across sessions and machines.
-
-### Working Memory
-
-Collection: "{memory_collection}"
-
-To recall prior knowledge:
-  /find <query> — or use the quarry find tool with
-  collection="{memory_collection}", agent_handle="{handle}"
-
-To persist something you learned:
-  /remember <content> — or use the quarry remember tool with
-  collection="{memory_collection}", agent_handle="{handle}",
-  memory_type=fact|observation|procedure|opinion
-
-Memory types:
-- fact: objective, verifiable information ("the API rate limit is 100 req/s")
-- observation: neutral summary of an entity or system
-- procedure: how-to knowledge ("when deploying, run migrations first")
-- opinion: subjective assessment with confidence
-"""
-
-
-def _session_context_literal_block(handle: str, memory_collection: str) -> str:
-    """Return a YAML literal block scalar fragment for session_context.
-
-    The fragment starts with a newline so it appends cleanly to an existing
-    file that may or may not end with a newline.  Each body line is indented
-    two spaces as required for a YAML literal block scalar.
-    """
-    body = _SESSION_CONTEXT_TEMPLATE.format(
-        handle=handle,
-        memory_collection=memory_collection,
-    )
-    indented = "\n".join(f"  {line}" for line in body.splitlines())
-    return f"\nsession_context: |\n{indented}\n"
-
-
-def _write_ethos_ext_session_context(
-    quarry_yaml: Path,
-    handle: str,
-) -> str:
-    """Write session_context into one quarry.yaml if missing.
-
-    Returns:
-        "updated"      — session_context was appended
-        "already_set"  — session_context key already present, file unchanged
-        "no_collection"— memory_collection absent, nothing to do
-    """
-    import yaml  # noqa: PLC0415
-
-    raw = quarry_yaml.read_text(encoding="utf-8")
-
-    data = yaml.safe_load(raw) or {}
-    if not isinstance(data, dict):
-        return "no_collection"
-    if "session_context" in data:
-        return "already_set"
-
-    memory_collection = data.get("memory_collection")
-    if not memory_collection:
-        return "no_collection"
-
-    fragment = _session_context_literal_block(handle, str(memory_collection))
-    with quarry_yaml.open("a", encoding="utf-8") as fh:
-        fh.write(fragment)
-    return "updated"
-
-
-def _ethos_ext_message(
-    updated: list[str],
-    already_set: list[str],
-    no_collection: list[str],
-    failed: list[str],
-) -> str:
-    """Build the result message for _configure_ethos_ext."""
-
-    def _plural(lst: list[str]) -> str:
-        return "identity" if len(lst) == 1 else "identities"
-
-    parts: list[str] = []
-    if updated:
-        parts.append(f"updated {len(updated)} {_plural(updated)}: {', '.join(updated)}")
-    if already_set:
-        if not updated:
-            parts.append(f"session_context already set: {', '.join(already_set)}")
-        else:
-            parts.append(f"already set: {', '.join(already_set)}")
-    if no_collection:
-        parts.append(f"no memory_collection (check config): {', '.join(no_collection)}")
-    if failed:
-        parts.append(f"errors: {'; '.join(failed)}")
-    return "; ".join(parts)
-
-
-def _scan_identities_dir(
-    identities_dir: Path,
-) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Iterate identity ext dirs and classify each quarry.yaml.
-
-    Returns (updated, already_set, no_collection, failed).
-    """
-    updated: list[str] = []
-    already_set: list[str] = []
-    no_collection: list[str] = []
-    failed: list[str] = []
-
-    for ext_dir in sorted(identities_dir.iterdir()):
-        if not ext_dir.is_dir() or not ext_dir.name.endswith(".ext"):
-            continue
-        handle = ext_dir.name[: -len(".ext")]
-        quarry_yaml = ext_dir / "quarry.yaml"
-        if not quarry_yaml.exists():
-            continue
-        try:
-            result = _write_ethos_ext_session_context(quarry_yaml, handle)
-            if result == "updated":
-                updated.append(handle)
-            elif result == "already_set":
-                already_set.append(handle)
-            elif result == "no_collection":
-                no_collection.append(handle)
-        except Exception as exc:  # noqa: BLE001
-            failed.append(f"{handle}: {exc}")
-
-    return updated, already_set, no_collection, failed
-
-
-def _configure_ethos_ext(
-    identities_dir: Path | None = None,
-) -> CheckResult:
-    """Write session_context into ethos ext quarry.yaml for each configured identity.
-
-    Idempotent: leaves existing session_context keys unchanged. Skips identity
-    directories that have no quarry.yaml (quarry not configured for that identity).
-    """
-    if identities_dir is None:
-        identities_dir = Path.home() / ".punt-labs" / "ethos" / "identities"
-
-    if not identities_dir.exists():
-        return CheckResult(
-            name="Ethos ext session_context",
-            passed=True,
-            message="ethos not installed, skipping",
-            required=False,
-        )
-
-    updated, already_set, no_collection, failed = _scan_identities_dir(identities_dir)
-
-    if not updated and not already_set and not no_collection and not failed:
-        return CheckResult(
-            name="Ethos ext session_context",
-            passed=True,
-            message="no identities with quarry configured",
-            required=False,
-        )
-
-    return CheckResult(
-        name="Ethos ext session_context",
-        passed=not failed,
-        message=_ethos_ext_message(updated, already_set, no_collection, failed),
-        required=False,
-    )
 
 
 def _install_gpu_runtime() -> bool:
@@ -831,7 +629,7 @@ def run_install() -> int:
     # Step 8: ethos ext session_context (best-effort)
     print("[8/8] Configuring ethos identity extension...")  # noqa: T201
     try:
-        check = _configure_ethos_ext()
+        check = EthosExtDiagnostics.configure()
         _print_check(check)
     except Exception as exc:  # noqa: BLE001
         print(f"  \u2022 Skipped: {exc}")  # noqa: T201

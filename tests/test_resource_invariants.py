@@ -158,8 +158,9 @@ def _raised_fd_limit() -> Generator[None]:
 
 # `_ITERATIONS` optimize cycles brush the 30s default timeout; this tier is
 # legitimately long, so give it explicit headroom rather than shrinking it into
-# flakiness.
-@pytest.mark.timeout(120)
+# flakiness. 240s is ~4x the measured uncontended runtime (~58s), so a
+# moderately loaded machine (other processes competing for CPU) doesn't false-fail.
+@pytest.mark.timeout(240)
 @pytest.mark.usefixtures("_raised_fd_limit")
 def test_optimize_loop_does_not_leak_descriptors(tmp_path: Path) -> None:
     """A single connection optimized repeatedly must not leak file descriptors.
