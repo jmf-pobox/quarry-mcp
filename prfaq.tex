@@ -227,9 +227,10 @@ Quarry works at two levels: as a search engine for your files, and as a plugin
 that captures knowledge automatically.
 
 \textbf{Search engine.} Install with \texttt{uv tool install punt-quarry} and
-\texttt{quarry install}. Point it at your
-files---\texttt{quarry ingest report.pdf}, or register an entire directory with
-\texttt{quarry register \texttildelow/Documents/research}. From that moment,
+\texttt{quarry install}. Point it at your files---register a directory with
+\texttt{quarry register \texttildelow/Documents/research \&\& quarry sync}, or
+ingest a web page with \texttt{quarry ingest https://example.com/report}. From
+that moment,
 Claude can search your indexed knowledge by meaning rather than keywords. Every
 format is handled automatically: text PDFs are extracted, scanned documents and
 images are OCR'd locally, spreadsheets are serialized to preserve tabular
@@ -272,8 +273,8 @@ No accounts. No API keys. Under five minutes:
         downloads the embedding model, installs the daemon, and configures
         Claude Code and Claude Desktop automatically.
   \item \textbf{Ingest:} \texttt{quarry register \texttildelow/Documents/work
-        \&\& quarry sync} indexes an entire directory. Or ingest individual files
-        with \texttt{quarry ingest report.pdf}.
+        \&\& quarry sync} indexes an entire directory. Or ingest a web page
+        directly with \texttt{quarry ingest https://example.com/report}.
   \item \textbf{Work normally.} Open Claude Code or Claude Desktop and ask a
         question. Claude calls Quarry's search tool automatically. The plugin
         hooks capture web research and session transcripts in the background.
