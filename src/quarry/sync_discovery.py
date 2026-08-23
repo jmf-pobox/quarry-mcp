@@ -195,13 +195,7 @@ class FileDiscovery:
         """
         if self._root_resolved is None or self._excluded:
             return False
-        try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
-            return False
-        try:
-            resolved.relative_to(self._root_resolved)  # symlink-escape guard
-        except ValueError:
+        if not self._resolves_inside_root(path):
             return False
         if path.suffix.lower() not in extensions:
             return False
@@ -217,6 +211,20 @@ class FileDiscovery:
         if self.load_ignore_spec().match_file(str(rel)):
             return False
         return not self._nested_ignored(parts)
+
+    def _resolves_inside_root(self, path: Path) -> bool:
+        """Whether *path* resolves inside the root (symlink-escape guard)."""
+        if self._root_resolved is None:
+            return False
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return False
+        try:
+            resolved.relative_to(self._root_resolved)
+        except ValueError:
+            return False
+        return True
 
     def _nested_ignored(self, parts: tuple[str, ...]) -> bool:
         """Whether a per-directory ``.gitignore`` along *parts* excludes the file.
