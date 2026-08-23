@@ -195,7 +195,7 @@ class FileDiscovery:
         """
         if self._root_resolved is None or self._excluded:
             return False
-        if not self._resolves_inside_root(path):
+        if not self._resolves_inside(path, self._root_resolved):
             return False
         if path.suffix.lower() not in extensions:
             return False
@@ -212,16 +212,15 @@ class FileDiscovery:
             return False
         return not self._nested_ignored(parts)
 
-    def _resolves_inside_root(self, path: Path) -> bool:
-        """Whether *path* resolves inside the root (symlink-escape guard)."""
-        if self._root_resolved is None:
-            return False
+    @staticmethod
+    def _resolves_inside(path: Path, root: Path) -> bool:
+        """Whether *path* resolves inside *root* (symlink-escape guard)."""
         try:
             resolved = path.resolve(strict=True)
         except (OSError, RuntimeError):
             return False
         try:
-            resolved.relative_to(self._root_resolved)
+            resolved.relative_to(root)
         except ValueError:
             return False
         return True
