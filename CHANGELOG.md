@@ -63,10 +63,10 @@ across `transform`, `index`, and `connector`).
 - `tool`: README's CLI table said `quarry register <dir>` "watches" a
   directory but never said how — an operator asked directly whether sync
   runs on a cron. It doesn't: `quarryd` runs a live, debounced filesystem
-  watch (`src/quarry/daemon/watch_loop.py`, ~2s debounce) plus a 5-minute
-  periodic safety sweep as a backstop
-  (`src/quarry/daemon/watch_reconcile.py`, `watch_safety_scan_s` in
-  `config.py`, default 300s). Added a sentence after the CLI table.
+  watch (`src/quarry/daemon/watch_loop.py`, `watch_debounce_s` in
+  `config.py`, default 1.0s) plus a 5-minute periodic safety sweep as a
+  backstop (`src/quarry/daemon/watch_reconcile.py`, `watch_safety_scan_s`,
+  default 300s). Added a sentence after the CLI table.
 - `tool`: moved README's Development section (the `make check`/`test`/
   `format`/`docs`/`eval` command table) into `CONTRIBUTING.md`'s existing
   Quality Gates section, which now also lists every `check-*` ratchet
