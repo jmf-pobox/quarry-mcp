@@ -53,6 +53,13 @@ across `transform`, `index`, and `connector`).
   doesn't need GPU-host/TLS/TOFU deployment detail in the primary doc.
   README's Setup section is now a one-line pointer; Features, HTTP API, and
   Documentation cross-references updated to the new file.
+- `tool`: README's HTTP API `curl` example used plain `http://`, but
+  `quarry install` unconditionally generates TLS certs for the managed
+  daemon (`quarry.service.install` calls `write_tls_files` before
+  registering the service, local or `--network`), so the default installed
+  daemon serves `https://`, not `http://` — the example as written would
+  fail against a typical install. Fixed to `https://` with `--cacert`
+  against the generated local CA.
 
 ## [3.0.3] - 2026-08-22
 

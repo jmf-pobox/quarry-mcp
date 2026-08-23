@@ -174,18 +174,19 @@ Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-han
 
 ### HTTP API
 
-`quarryd` also exposes a plain REST API — every CLI/MCP operation is a thin
-client over it. The CLI is the primary, documented way to drive quarry; the
-HTTP API is there for scripting or a non-Claude integration that wants to
-talk to the daemon directly.
+`quarryd` also exposes a REST API — every CLI/MCP operation is a thin client
+over it. The CLI is the primary, documented way to drive quarry; the HTTP API
+is there for scripting or a non-Claude integration that wants to talk to the
+daemon directly. `quarry install` generates a self-signed CA for the managed
+daemon, local or remote, so it's TLS even on loopback:
 
 ```bash
-curl "http://127.0.0.1:8420/v1/search?q=Q3+revenue"
+curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
 ```
 
 Local installs bind loopback-only with no auth required; a `--network`
-install requires a Bearer token (`QUARRY_API_KEY`) and TLS (see
-[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server)). The full endpoint list
+install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
+[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
 is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
 regenerates it).
 
