@@ -523,11 +523,13 @@ call the push/receive legs already share, per
 process. It must call the same service layer the \texttt{/v1/search} and
 \texttt{/v1/show} route handlers call --- \texttt{SearchService} in
 \texttt{src/quarry/daemon/routes/search.py} and its counterpart in
-\texttt{routes/show.py} (\texttt{route\_table.py} only wires route specs
+\texttt{src/quarry/daemon/routes/show.py}
+(\texttt{src/quarry/daemon/route\_table.py} only wires route specs
 to these handler methods; the handler bodies, and the service calls
-worth reusing, live in \texttt{routes/}) --- in-process, never looping
-back through its own HTTP API over loopback TLS to reach code already
-running in the same process. This is a decision, not an oversight worth
+worth reusing, live in \texttt{src/quarry/daemon/routes/}) --- in-process,
+never looping back through its own HTTP API over loopback TLS to reach
+code already running in the same process. This is a decision, not an
+oversight worth
 flagging as an open question: the HTTP layer's job is authenticating and
 shaping requests for external clients; a subsystem composed into the
 daemon itself is not an external client and gains nothing from paying
