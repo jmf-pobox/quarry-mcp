@@ -35,6 +35,18 @@ across `transform`, `index`, and `connector`).
 - `tool`: README's "What It Looks Like" ingest example used a bare URL,
   which is accurate but not representative — `register`+`sync` a directory
   is the common path. Swapped the example.
+- `tool`: README's Knowledge Capture section named the three capture hooks
+  in a sentence rather than explaining what each does, called the
+  pattern-based secret scrub a guarantee rather than best-effort, and gave
+  the opt-in shadow-repo push equal billing with core capture rather than
+  framing it as an extension. Rewrote as a hook table, softened the scrub
+  claim, and moved the shadow repo to its own "Extension" callout.
+- `tool`: README's Managing the Daemon section didn't mention that
+  re-running the Quick Start installer already restarts the service on
+  upgrade (`install.sh` calls `quarry install` then force-restarts as a
+  belt-and-suspenders step) — the manual `launchctl`/`systemctl` commands
+  read as always-required when they're only needed after upgrading the
+  package some other way.
 
 ## [3.0.3] - 2026-08-22
 

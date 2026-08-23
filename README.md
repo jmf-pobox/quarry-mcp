@@ -230,13 +230,37 @@ Uploaded files in Claude Desktop live in a sandbox quarry cannot read — use `r
 
 ## Knowledge Capture
 
-As a Claude Code plugin, quarry captures knowledge automatically: it auto-indexes your project at session start, ingests URLs you fetch during research, and captures session transcripts before context compaction. All hooks fail open (a failure never blocks Claude Code) and are individually toggleable in `.punt-labs/quarry/config.md`.
+As a Claude Code plugin, quarry hooks into three points in the session
+lifecycle and captures knowledge automatically, with no action from you:
 
-Captures are PII/secret-scrubbed at write time (secrets, paths, emails, hostnames) through a single choke point, fail-closed. Deliberate `ingest`/`remember` content is not scrubbed. An opt-in per-project shadow repo (`<repo>` → private `<repo>-quarry`) can push the redacted captures off the public repo. See [DES-036 and DES-039 in DESIGN.md](DESIGN.md) and [AGENTS.md](AGENTS.md).
+| Hook | What it captures |
+|------|-------------------|
+| `SessionStart` | Auto-registers and syncs the current project, so it's searchable from the first prompt |
+| `PostToolUse` (WebFetch) | Ingests URLs Claude fetches during research |
+| `PreCompact` | Captures the session transcript before context compaction discards it |
+
+Every hook fails open — a hook failure never blocks Claude Code — and each is
+independently toggleable in `.punt-labs/quarry/config.md`.
+
+Captures are scrubbed at write time (secrets, paths, emails, hostnames)
+through a single choke point before they ever reach disk. The scrub is
+pattern-based and best-effort, not a formal guarantee of catching every
+possible secret; a failure in the scrubber itself is fail-closed (the write
+is blocked, not written unscrubbed). Deliberate `ingest`/`remember` content
+is not scrubbed — that's content you chose to add. See [DES-036 in
+DESIGN.md](DESIGN.md).
+
+**Extension: private capture shadow.** An opt-in per-project shadow repo
+(`<repo>` → private `<repo>-quarry`) can push the scrubbed captures off the
+public repo entirely, for projects where even scrubbed transcripts shouldn't
+live in a public history. See [DES-039 in DESIGN.md](DESIGN.md) and
+[AGENTS.md](AGENTS.md).
 
 ## Managing the Daemon
 
-`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). **After upgrading the package, restart the service** so the new engine loads — a running daemon holds the old code in memory.
+`quarry install` registers `quarryd` as a per-user service that starts at login and restarts on crash (launchd on macOS, systemd on Linux). Re-running the [Quick Start](#quick-start) installer does this for you on every upgrade — it calls `quarry install` and then force-restarts the service as a belt-and-suspenders step, so a plain `curl | sh` re-run is enough.
+
+**After upgrading the package some other way** (`uv tool install --force`, a local wheel), restart the service yourself — a running daemon holds the old engine in memory until restarted.
 
 macOS:
 
