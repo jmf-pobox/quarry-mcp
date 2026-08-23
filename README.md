@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/punt-quarry)](https://pypi.org/project/punt-quarry/)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5), stores the vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the command line. Everything runs locally — no API keys, no cloud accounts. One `quarryd` daemon per machine loads the model once; the CLI, the MCP server, and the Claude Code hooks are thin clients over it.
+Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5), stores the vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the command line. Everything runs locally — no API keys, no cloud accounts. One `quarryd` daemon per machine loads the model once; the CLI, the MCP server, the Claude Code hooks, and an HTTP API are all thin clients over it.
 
 **Platforms:** macOS, Linux
 
@@ -178,24 +178,6 @@ watch (debounced, ~1s) that reacts to changes as they happen, backed by a
 the search index). `quarry sync` triggers an immediate
 one-shot pass on top of that; you don't need to run it after every edit.
 
-### HTTP API
-
-`quarryd` also exposes a REST API — every CLI/MCP operation is a thin client
-over it. The CLI is the primary, documented way to drive quarry; the HTTP API
-is there for scripting or a non-Claude integration that wants to talk to the
-daemon directly. `quarry install` generates a self-signed CA for the managed
-daemon, local or remote, so it's TLS even on loopback:
-
-```bash
-curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
-```
-
-Local installs bind loopback-only with no auth required; a `--network`
-install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
-[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
-is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
-regenerates it).
-
 ## Setup
 
 Quarry works with zero configuration. For environment variables and running
@@ -256,6 +238,24 @@ systemctl --user restart quarry
 ```
 
 `quarry doctor` confirms the daemon is running and ready.
+
+### HTTP API
+
+`quarryd` also exposes a REST API — every CLI/MCP operation is a thin client
+over it. The CLI is the primary, documented way to drive quarry; the HTTP API
+is there for scripting or a non-Claude integration that wants to talk to the
+daemon directly. `quarry install` generates a self-signed CA for the managed
+daemon, local or remote, so it's TLS even on loopback:
+
+```bash
+curl --cacert ~/.punt-labs/quarry/tls/ca.crt "https://127.0.0.1:8420/v1/search?q=Q3+revenue"
+```
+
+Local installs bind loopback-only with no auth required; a `--network`
+install additionally requires a Bearer token (`QUARRY_API_KEY`) — see
+[ADVANCED-SETUP.md](ADVANCED-SETUP.md#remote-server). The full endpoint list
+is generated at [`docs/openapi.json`](docs/openapi.json) (`make openapi`
+regenerates it).
 
 ## Documentation
 
