@@ -10,7 +10,10 @@ set -euo pipefail
 # commit and restores from its parent.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLUGIN_JSON="${REPO_ROOT}/.claude-plugin/plugin.json"
+# The shippable plugin surface lives under plugin/ so a git-subdir marketplace
+# install fetches only that subtree; the plugin root is ${REPO_ROOT}/plugin.
+PLUGIN_JSON="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
+COMMANDS_PATHSPEC="plugin/commands/"
 
 # Preflight: abort if repo has uncommitted changes
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -uno)" ]]; then
@@ -31,13 +34,16 @@ fi
 echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
 git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
 
-# Restore dev commands if the parent commit had a commands/ directory
-if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- commands/ | grep -q .; then
-  git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- commands/
-fi
-
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
-git -C "$REPO_ROOT" add commands/ 2>/dev/null || true
+
+# Restore dev commands only if the parent commit carried that directory. The add
+# is inside the guard because outside it there is nothing to stage: an
+# unconditional `git add … || true` would swallow a real failure (a checkout that
+# silently restored nothing) and report success.
+if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- "$COMMANDS_PATHSPEC" | grep -q .; then
+  git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$COMMANDS_PATHSPEC"
+  git -C "$REPO_ROOT" add "$COMMANDS_PATHSPEC"
+fi
 
 # Skip commit if nothing changed (already in dev state)
 if git -C "$REPO_ROOT" diff --cached --quiet; then

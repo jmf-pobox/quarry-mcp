@@ -200,6 +200,8 @@ Ten review cycles on the TLS remote-access feature revealed five classes of bugs
 
 Identity: `agent: claude` per `.punt-labs/ethos.yaml`. Sub-agent calls (`Agent(subagent_type=…)`) match ethos identity handles.
 
+**Do not add the `punt-labs/team` submodule here.** The org convention of mounting the identity registry at `.punt-labs/ethos/` does not apply to a repo that ships as a marketplace plugin: Claude Code clones plugin repos with `--recurse-submodules`, so the gitlink delivered ~1 MB of the org roster to every consumer. The registry resolves from the global `~/.punt-labs/ethos/`. The mount path is gitignored, which makes a re-add fail loudly rather than silently — `git submodule add` refuses an ignored path outright — but `-f` overrides that, so this instruction is what binds.
+
 All code delegation uses ethos missions. Every non-trivial delegation has two phases: (1) **design mission** — describes the problem, constraints, and invariants but does NOT prescribe a write set; (2) **implementation mission** — uses the write set produced by the design phase. The design mission's output IS the write set — the specialist decides what to create, split, or extract. This is critical: prescribing a write set before design prevents refactoring and forces code into existing modules (which is how `__main__.py` reached 2,008 lines).
 
 **Every implementation mission MUST direct the worker to make a real OO improvement on the files it touches** — sized to the opportunity (extract a class, split a god module, internalize public attributes, cut complexity), not minimal ratchet-clearing. The ratchet is debt amortization; every mission pays some down (see the "debt amortization" note in Code Quality). A worker that offsets a small addition with a micro-simplification, or hunts for `module_size` headroom to dodge an extraction, has missed the point. Purity is not a goal: an adjacent improvement riding along the mission's diff is welcome.
@@ -270,7 +272,7 @@ coherence is the one structural split criterion; "the diff is large" and
 
 ## Release
 
-Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir .` loads `quarry-dev` alongside the installed prod plugin.
+Use `/punt:auto release [version=X.Y.Z]`. Quarry is a CLI + Plugin Hybrid — releases publish to both PyPI (`punt-quarry`) and the Claude Code plugin marketplace. Dev plugin testing: `claude --plugin-dir plugin` loads `quarry-dev` alongside the installed prod plugin — the argument is the plugin root, which is `plugin/`, not the repo root (DES-050).
 
 ## Key Documents
 

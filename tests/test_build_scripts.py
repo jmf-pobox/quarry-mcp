@@ -25,6 +25,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+# The shippable plugin surface — what a marketplace install materializes. It is
+# also the plugin root ``${CLAUDE_PLUGIN_ROOT}`` names at runtime.
+PLUGIN_ROOT = REPO_ROOT / "plugin"
 BUILD_MCPB = SCRIPTS_DIR / "build-mcpb.sh"
 MANIFEST_TEMPLATE = SCRIPTS_DIR / "mcpb-manifest.template.json"
 README_SHA_CHECK = SCRIPTS_DIR / "check-readme-install-sha.sh"
@@ -44,7 +47,17 @@ EXPECTED_MCP_ARGS = ["mcp"]
 
 
 def _shell_scripts() -> list[Path]:
-    return [*sorted(SCRIPTS_DIR.glob("*.sh")), REPO_ROOT / "install.sh"]
+    """Every shell script this repo owns: build/release, installer, and hooks.
+
+    The hook scripts are included because they are the only shell that runs on a
+    *user's* machine on every session — the highest-consequence scripts here and
+    the last ones to gain coverage.
+    """
+    return [
+        *sorted(SCRIPTS_DIR.glob("*.sh")),
+        REPO_ROOT / "install.sh",
+        *sorted((PLUGIN_ROOT / "hooks").glob("*.sh")),
+    ]
 
 
 def _registered_tool_names() -> set[str]:
@@ -63,7 +76,7 @@ def _registered_tool_names() -> set[str]:
 
 @pytest.mark.parametrize("script", _shell_scripts(), ids=lambda p: p.name)
 def test_shell_script_passes_shellcheck(script: Path) -> None:
-    """Every shell script under ``scripts/`` (and install.sh) passes shellcheck.
+    """Every shell script this repo ships or runs passes shellcheck.
 
     Per CLAUDE.md Class 5 / testing rule 6: shell scripts must pass
     ``shellcheck -x``. Extending this beyond install.sh closes the gap that let
@@ -90,10 +103,11 @@ def test_shell_script_passes_shellcheck(script: Path) -> None:
 def test_build_mcpb_does_not_read_root_manifest() -> None:
     """build-mcpb.sh must not depend on a repo-root manifest.json.
 
-    b2c9ffb removed the root manifest.json because the marketplace preferred it
-    over .claude-plugin/plugin.json and stripped the plugin's slash commands.
-    The manifest is generated into a staging dir instead; a reference to a root
-    manifest would resurrect the broken build.
+    b2c9ffb removed the manifest.json that sat beside the plugin manifest,
+    because the marketplace preferred it over .claude-plugin/plugin.json and
+    stripped the plugin's slash commands. The manifest is generated into a
+    staging dir instead; a reference to a repo-root manifest would resurrect the
+    broken build.
     """
     script = BUILD_MCPB.read_text()
     assert "open('manifest.json')" not in script
@@ -108,10 +122,16 @@ def test_build_mcpb_stages_and_sources_version_from_pyproject() -> None:
     assert "dist/punt-quarry.mcpb" in script, "stable-named copy must be produced"
 
 
-def test_no_root_manifest_json_tracked() -> None:
-    """A manifest.json at the repo root re-breaks plugin slash commands."""
-    assert not (REPO_ROOT / "manifest.json").exists(), (
-        "manifest.json must not exist at the repo root (b2c9ffb): the plugin "
+def test_no_manifest_json_in_plugin_root() -> None:
+    """A manifest.json in the plugin root re-breaks plugin slash commands.
+
+    The guard follows the plugin root, which is ``plugin/`` — the only directory
+    a git-subdir install materializes and therefore the only one the marketplace
+    reads a manifest from. A stray manifest.json at the repo root no longer
+    reaches a user; one inside ``plugin/`` would.
+    """
+    assert not (PLUGIN_ROOT / "manifest.json").exists(), (
+        "manifest.json must not exist in the plugin root (b2c9ffb): the plugin "
         "marketplace would prefer it over .claude-plugin/plugin.json and drop "
         "the plugin's slash commands. Generate it into dist/mcpb-staging."
     )

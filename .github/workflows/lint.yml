@@ -26,6 +26,65 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      # quarry-0u2t: this check used to run only in release.yml's tag-triggered
+      # mcpb job, where it is structurally unsatisfiable — install.sh's VERSION
+      # line changes on punt-kit's release-bump commit (phase 2, branch
+      # release/vX.Y.Z), but the README's pinned SHA only catches up in a LATER,
+      # separate post-release PR (phase 9) that lands after the tag. Running it
+      # here, on every regular PR, is where install.sh and the README pin are
+      # actually expected to agree.
+      #
+      # The lone, deliberate exception is the release-bump PR itself (head
+      # branch release/vX.Y.Z): that PR's only change to install.sh IS the
+      # version bump, and the corresponding README pin update is a separate,
+      # later PR by design (punt-kit phase 9, branch post-release/vX.Y.Z) — so
+      # this check would always and correctly fail there, for a reason that
+      # is not a bug. This is NOT a general "skip on release branches" rule:
+      # post-release/vX.Y.Z PRs (phase 9) restore README/install.sh sync and
+      # MUST still run this check — that pass is the actual proof the
+      # propagation step worked, and a regression there is a real bug.
+      #
+      # The skip match is exact (release/vX.Y.Z, e.g. release/v3.0.4), not a
+      # prefix match — GHA's `if:` expression syntax has no native regex, so
+      # the exact-match gate runs shell-side. A loose prefix match (e.g.
+      # startsWith(head_ref, "release/v")) would also skip this
+      # supply-chain-relevant check for any contributor branch merely named
+      # "release/v*" (e.g. release/vnext-experiment), which is not punt-kit's
+      # automated release flow and is not the narrow exception this skip
+      # exists for.
+      #
+      # This step never runs on a push event — only pull_request. Bugbot
+      # (PR #465) caught the gap: this workflow also fires on push:[main]
+      # (line 4-5), and the shell-side skip above only tests
+      # github.event_name == 'pull_request', so a push-triggered run's first
+      # clause is always false and the check ran unconditionally there. That
+      # reintroduced the exact unsatisfiable-check bug quarry-0u2t fixes, just
+      # relocated: the push-triggered run immediately after the release-bump
+      # PR (branch release/vX.Y.Z) squash-merges to main sees install.sh
+      # already bumped but the README pin still stale — the post-release PR
+      # that fixes the pin (phase 9) hasn't landed yet.
+      #
+      # Restricting to pull_request, not just adding push to the shell skip,
+      # is deliberate: this repo enforces branch protection with no
+      # bypass actors, so every commit that reaches main already passed this
+      # check once as a pull_request event — either normally, or through the
+      # narrow release/v* exemption above. Re-running it again on push adds
+      # no real safety for that specific narrow window and is exactly what
+      # caused the false failure. Trade-off: if branch protection is ever
+      # disabled or bypassed (a direct push to main), this step will not
+      # catch a stale README pin introduced that way — the pull_request gate
+      # covering every PR is otherwise the check's only line of defense
+      # against that class of drift.
+      - name: Verify README install URL is not stale
+        if: github.event_name == 'pull_request'
+        env:
+          GH_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$GH_HEAD_REF" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping: $GH_HEAD_REF is punt-kit's release-bump branch — install.sh legitimately changes here before the README pin catches up in the later post-release PR."
+            exit 0
+          fi
+          ./scripts/check-readme-install-sha.sh
       - run: uv sync --frozen --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .

@@ -17,7 +17,7 @@ Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (sn
 Install the CLI, the daemon, the MCP server, and the Claude Code plugin:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/21dc421/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh | sh
 ```
 
 Restart Claude Code. Your current project is auto-indexed at session start, so you can search it by meaning right away — see [What It Looks Like](#what-it-looks-like).
@@ -51,13 +51,13 @@ quarry doctor
 For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/21dc421/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh | sh -s -- --no-plugin
 ```
 
 Where a flag cannot be passed (CI templating a bare `curl … | sh`), set `QUARRY_NO_PLUGIN=1` — honored only when exactly `1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/21dc421/install.sh | QUARRY_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh | QUARRY_NO_PLUGIN=1 sh
 ```
 
 Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server directly; both talk to the resident `quarryd`. Re-run the installer without `--no-plugin` to add the plugin later.
@@ -70,7 +70,7 @@ Everything else runs unchanged. Use the CLI and the stdio `quarry mcp` server di
 Download the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/21dc421/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh -o install.sh
 ```
 
 Check its digest (`shasum -a 256 install.sh` on macOS):
@@ -107,10 +107,13 @@ sh install.sh
 Ingest a document:
 
 ```text
-> /ingest report.pdf
+> /ingest https://example.com/report
 
-▶ Ingesting report.pdf (background)
+▶ Ingesting https://example.com/report (background)
 ```
+
+For local files, register their containing directory instead — see
+[Commands](#commands).
 
 Search by meaning:
 
@@ -129,7 +132,7 @@ Search by meaning:
 
 | Command | What it does |
 |---------|-------------|
-| `/ingest <source>` | Ingest a URL, directory, or file |
+| `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |
@@ -144,7 +147,7 @@ Search by meaning:
 | `show` | Document metadata or page text |
 | `list` | Documents, collections, databases, registrations |
 | `status` | Database statistics |
-| `ingest` / `remember` | Index a file/URL, or inline text |
+| `ingest` / `remember` | Index a URL, or inline text |
 | `register_directory` / `deregister_directory` | Manage a synced directory |
 | `sync_all_registrations` | Re-index all registered directories |
 | `delete` | Remove a document or collection |
@@ -155,7 +158,7 @@ Search by meaning:
 | Command | What it does |
 |---------|-------------|
 | `quarry find "<query>"` | Hybrid search (vector + full-text) |
-| `quarry ingest <file\|url>` | Index a file or webpage |
+| `quarry ingest <url>` | Index a webpage (local files/directories: `quarry register`) |
 | `quarry remember --name <name>` | Index inline text from stdin |
 | `quarry list documents` | List indexed documents |
 | `quarry register <dir>` | Watch a directory for changes |
@@ -194,7 +197,7 @@ export QUARRY_API_KEY=$(openssl rand -hex 32)
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/21dc421/install.sh | sh -s -- --network
+curl -fsSL https://raw.githubusercontent.com/punt-labs/quarry/fd274d3/install.sh | sh -s -- --network
 ```
 
 On the client, install normally, then log in — queries redirect to the server over `wss://` with TOFU certificate pinning:
