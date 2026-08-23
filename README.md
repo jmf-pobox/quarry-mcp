@@ -112,7 +112,7 @@ Ingest a document:
 ▶ Ingesting https://example.com/report (background)
 ```
 
-For local files and directories, register the directory instead — see
+For local files, register their containing directory instead — see
 [Commands](#commands).
 
 Search by meaning:
@@ -132,7 +132,7 @@ Search by meaning:
 
 | Command | What it does |
 |---------|-------------|
-| `/ingest <source>` | Ingest a URL, or register+sync a local directory |
+| `/ingest <source>` | Ingest a URL, or register+sync a local file or directory |
 | `/remember <name>` | Ingest inline text under a document name |
 | `/find <query>` | Semantic search; questions get synthesized answers, keywords get raw results |
 | `/explain <topic>` | Search and synthesize an explanation |

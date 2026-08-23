@@ -16,13 +16,15 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
-- `tool`: README, `/ingest` (and `/ingest-dev`), and the MCP tool docstring
-  described `ingest`/`quarry ingest` as accepting a local file path. It only
-  ever accepts an `http(s)` URL (`quarry-wz6f` tracks restoring one-shot local
-  file ingest as a real feature) — a local path was silently rejected with an
-  error. Docs corrected; the `/ingest` slash commands now route a local file
-  or directory through `register_directory` + `sync_all_registrations`
-  instead of calling `ingest`, which always failed for that case.
+- `tool`: README and `/ingest` (and `/ingest-dev`) described `ingest`/`quarry
+  ingest` as accepting a local file path. It only ever accepts an `http(s)`
+  URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the
+  URL-only contract correctly — the bug was in the surrounding docs, not
+  there) — `quarry-wz6f` tracks restoring one-shot local file ingest as a
+  real feature. A local path was silently rejected with an error. Docs
+  corrected; the `/ingest` slash commands now route a local file or directory
+  through `register_directory` + `sync_all_registrations` instead of calling
+  `ingest`, which always failed for that case.
 
 ## [3.0.3] - 2026-08-22
 
