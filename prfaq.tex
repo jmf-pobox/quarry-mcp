@@ -227,9 +227,10 @@ Quarry works at two levels: as a search engine for your files, and as a plugin
 that captures knowledge automatically.
 
 \textbf{Search engine.} Install with \texttt{uv tool install punt-quarry} and
-\texttt{quarry install}. Point it at your
-files---\texttt{quarry ingest report.pdf}, or register an entire directory with
-\texttt{quarry register \texttildelow/Documents/research}. From that moment,
+\texttt{quarry install}. Point it at your files---register a directory with
+\texttt{quarry register \texttildelow/Documents/research \&\& quarry sync}, or
+ingest a web page with \texttt{quarry ingest https://example.com/report}. From
+that moment,
 Claude can search your indexed knowledge by meaning rather than keywords. Every
 format is handled automatically: text PDFs are extracted, scanned documents and
 images are OCR'd locally, spreadsheets are serialized to preserve tabular
@@ -272,8 +273,8 @@ No accounts. No API keys. Under five minutes:
         downloads the embedding model, installs the daemon, and configures
         Claude Code and Claude Desktop automatically.
   \item \textbf{Ingest:} \texttt{quarry register \texttildelow/Documents/work
-        \&\& quarry sync} indexes an entire directory. Or ingest individual files
-        with \texttt{quarry ingest report.pdf}.
+        \&\& quarry sync} indexes an entire directory. Or ingest a web page
+        directly with \texttt{quarry ingest https://example.com/report}.
   \item \textbf{Work normally.} Open Claude Code or Claude Desktop and ask a
         question. Claude calls Quarry's search tool automatically. The plugin
         hooks capture web research and session transcripts in the background.
@@ -543,9 +544,10 @@ run \texttt{quarry install}, and start searching.
   discovery surface for Claude Code users. Quarry is listed and installable
   with one command.
 
-  \textbf{GitHub and community:} Engineering quality (1{,}100+ tests, strict
-  typing, clean architecture) attracts contributors. Presence in Claude community
-  forums and word-of-mouth among power users.
+  \textbf{GitHub and community:} Engineering quality (a comprehensive
+  automated test suite, strict typing, clean architecture) attracts
+  contributors. Presence in Claude community forums and word-of-mouth among
+  power users.
 
   The risk is obscurity (see \faqref{faq:failure}). No channel has proven
   traction yet.
@@ -625,11 +627,11 @@ run \texttt{quarry install}, and start searching.
 \begin{faqpair}{What is the development timeline and current status?}\label{faq:timeline}
   The press release above is written Working-Backwards---an aspirational future
   framing of what adoption looks like. The code, by contrast, is real and
-  shipping today: Quarry is live on PyPI at v1.18.2. The gap this document
+  shipping today: Quarry is live on PyPI. The gap this document
   tracks is adoption, not availability (see \faqref{faq:next-validation}).
   Current capabilities:
 
-  \textbf{Shipped (through v1.18.2):} PDF ingestion (text + local OCR), image
+  \textbf{Shipped:} PDF ingestion (text + local OCR), image
   OCR, spreadsheet ingestion (XLSX/CSV), presentation ingestion (PPTX), HTML
   parsing, URL and sitemap crawling, text file parsing, DOCX, source code
   parsing (30+ languages via Tree-sitter), semantic search with metadata
@@ -646,22 +648,20 @@ run \texttt{quarry install}, and start searching.
   auto-detection with CUDA/GPU acceleration (curl|sh installer auto-installs
   \texttt{onnxruntime-gpu} on NVIDIA machines; uses FP16 model), researcher
   subagent for combined local + web search, CLAUDE.md injection for agent
-  discovery, ethos extension for per-identity session context. Subsystems added
-  since v1.10.1: remote server support with TLS everywhere and TOFU certificate
-  pinning (shipped v1.11.0, hardened through v1.17.0; DES-020, DES-021, DES-022);
-  \texttt{quarry enable}/\texttt{disable} unified project activation with scoped
-  \texttt{<name>-captures} collections (v1.16.0; DES-029); the SessionStart
-  knowledge-base briefing (v1.7.0; DES-013); and bounded progressive sync with
-  mid-flush visibility and within-file crash-resume (DES-034). Over 1{,}100
-  automated tests, strict type checking (mypy + pyright).
-
-  \textbf{Landed on main since v1.18.2 (pending the next release):} the
-  retrieval-quality eval harness---\texttt{make eval}, an internal dev/CI tool
-  reporting per-bucket MRR/success@k plus a metadata-pollution diagnostic, built
-  on a parameterizable retrieval seam (\texttt{src/quarry/retrieval/}) shared by
-  production and eval (Phase~0/1); and capture-path write-time PII redaction that
-  scrubs secrets, PII, and profanity from session transcripts and WebFetch
-  captures before they are written (DES-036).
+  discovery, ethos extension for per-identity session context; remote server
+  support with TLS everywhere and TOFU certificate pinning (DES-020, DES-021,
+  DES-022); \texttt{quarry enable}/\texttt{disable} unified project activation
+  with scoped \texttt{<name>-captures} collections (DES-029); the SessionStart
+  knowledge-base briefing (DES-013); bounded progressive sync with mid-flush
+  visibility and within-file crash-resume (DES-034); the retrieval-quality eval
+  harness---\texttt{make eval}, an internal dev/CI tool reporting per-bucket
+  MRR/success@k plus a metadata-pollution diagnostic, built on a
+  parameterizable retrieval seam (\texttt{src/quarry/retrieval/}) shared by
+  production and eval (Phase~0/1); and capture-path write-time PII redaction
+  that scrubs secrets, PII, and profanity from session transcripts and
+  WebFetch captures before they are written (DES-036). A comprehensive
+  automated test suite backs all of it, with strict type checking
+  (mypy + pyright).
 
   \textbf{Roadmap:} \texttt{quarry sync --watch} for live filesystem monitoring,
   index-wide PII detection over arbitrary ingested files, a Google Drive
@@ -833,7 +833,7 @@ run \texttt{quarry install}, and start searching.
 \midrule
 Value      & \textcolor{RiskAmber}{Medium} & Multiple startups and survey data validate the problem~\cite{qodo2025aicodequality,techcrunch2026entirefunding}. Discovery and activation are the primary risks---demand is proven but users must find Quarry and index enough content to experience the value. \\
 Usability  & \textcolor{RiskAmber}{Medium} & For CLI-native users, three commands to value. Auto-configures MCP. No accounts, no API keys. The SessionStart knowledge-base briefing ships and surfaces the index to Claude automatically. The residual risk is the first-value moment: a user must index enough of their own material before Claude can surface something they had forgotten, and that activation step is unproven with external users. \\
-Feasibility & \textcolor{RiskGreen}{Low} & The product is live on PyPI (v1.18.2) with 1{,}100+ passing tests and strict type checking. Core pipeline, daemon architecture, plugin hooks, MCP server, hybrid search, agent memory, CUDA acceleration, TLS remote server support, \texttt{quarry enable}/\texttt{disable} project activation, and bounded progressive sync are all shipped. The one open technical question is retrieval ranking quality (see \faqref{faq:tech-risks}); remaining roadmap items are additive features, not architectural risks. \\
+Feasibility & \textcolor{RiskGreen}{Low} & The product is live on PyPI with a comprehensive automated test suite and strict type checking. Core pipeline, daemon architecture, plugin hooks, MCP server, hybrid search, agent memory, CUDA acceleration, TLS remote server support, \texttt{quarry enable}/\texttt{disable} project activation, and bounded progressive sync are all shipped. The one open technical question is retrieval ranking quality (see \faqref{faq:tech-risks}); remaining roadmap items are additive features, not architectural risks. \\
 Viability  & \textcolor{RiskGreen}{Low} & No revenue model to validate. Zero marginal cost (runs on user hardware). MIT license. \\
 \bottomrule
 \end{tabularx}
@@ -878,9 +878,9 @@ Defines scope. Features are categorized to prevent scope creep.
   \featureitem{CUDA/GPU acceleration}{Auto-detects NVIDIA hardware and uses FP16 model via CUDAExecutionProvider. Installer swaps \texttt{onnxruntime} for \texttt{onnxruntime-gpu} with rollback on failure.}\label{feat:cuda}
   \featureitem{HTTP API with authentication}{Bearer token on all endpoints except \texttt{/health}. Server refuses non-loopback binding without an API key. Enables secure LAN access to a GPU daemon.}\label{feat:http-auth}
   \featureitem{Ethos integration}{Injects per-identity agent personality, memory instructions, and team context into sessions automatically.}\label{feat:ethos}
-  \featureitem{Remote server support}{\texttt{quarry login/logout/remote} connects to a remote daemon (e.g.\ a LAN GPU machine): credentials in the OS keyring, transparent MCP reconfiguration, sharing a single GPU-accelerated instance. TLS everywhere with TOFU certificate pinning secures every connection including localhost; all data commands route to the daemon with no split horizon; a single \texttt{--network} installer path sets it up. Shipped v1.11.0, hardened through v1.17.0 (DES-020, DES-021, DES-022).}\label{feat:remote}
-  \featureitem{Knowledge recall briefing}{SessionStart injects a knowledge-base summary into Claude's context and nudges it to check local knowledge before searching the web, so the model knows what it already has. Shipped v1.7.0 (DES-013).}\label{feat:knowledge-recall}
-  \featureitem{Project activation}{\texttt{quarry enable}/\texttt{disable} sets up file sync, passive captures, and agent memory for a project in one command, routing web research and transcripts to a scoped \texttt{<name>-captures} collection so they never pollute the file-sync collection. Shipped v1.16.0 (DES-029).}\label{feat:enable}
+  \featureitem{Remote server support}{\texttt{quarry login/logout/remote} connects to a remote daemon (e.g.\ a LAN GPU machine): credentials in the OS keyring, transparent MCP reconfiguration, sharing a single GPU-accelerated instance. TLS everywhere with TOFU certificate pinning secures every connection including localhost; all data commands route to the daemon with no split horizon; a single \texttt{--network} installer path sets it up (DES-020, DES-021, DES-022).}\label{feat:remote}
+  \featureitem{Knowledge recall briefing}{SessionStart injects a knowledge-base summary into Claude's context and nudges it to check local knowledge before searching the web, so the model knows what it already has (DES-013).}\label{feat:knowledge-recall}
+  \featureitem{Project activation}{\texttt{quarry enable}/\texttt{disable} sets up file sync, passive captures, and agent memory for a project in one command, routing web research and transcripts to a scoped \texttt{<name>-captures} collection so they never pollute the file-sync collection (DES-029).}\label{feat:enable}
 \end{enumerate}
 
 \subsection*{Should Do}

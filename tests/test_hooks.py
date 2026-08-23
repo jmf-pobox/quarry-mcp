@@ -1310,7 +1310,9 @@ class TestHookCLI:
 # Wiring tests — hooks.json references scripts that exist and are executable
 # ---------------------------------------------------------------------------
 
-_HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
+# The shippable plugin surface lives under ``plugin/``, so the plugin root that
+# ``${CLAUDE_PLUGIN_ROOT}`` names at runtime is ``plugin/``, not the repo root.
+_HOOKS_DIR = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 
 
 class TestHookWiring:
