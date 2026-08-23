@@ -146,8 +146,8 @@ class FileDiscovery:
         self,
         dirpath: Path,
         dirnames: list[str],
-        root_spec: pathspec.PathSpec,
-        local_spec: pathspec.PathSpec | None,
+        root_spec: pathspec.PathSpec[pathspec.pattern.Pattern],
+        local_spec: pathspec.PathSpec[pathspec.pattern.Pattern] | None,
     ) -> list[str]:
         """Return the child dirs to descend: not hidden, scratch, or ignored."""
         rel_dir = dirpath.relative_to(self._directory)
@@ -165,8 +165,8 @@ class FileDiscovery:
         dirpath: Path,
         filenames: list[str],
         extensions: frozenset[str],
-        root_spec: pathspec.PathSpec,
-        local_spec: pathspec.PathSpec | None,
+        root_spec: pathspec.PathSpec[pathspec.pattern.Pattern],
+        local_spec: pathspec.PathSpec[pathspec.pattern.Pattern] | None,
     ) -> Iterator[Path]:
         """Yield the absolute path of each indexable file directly in *dirpath*."""
         for filename in sorted(filenames):
@@ -195,13 +195,7 @@ class FileDiscovery:
         """
         if self._root_resolved is None or self._excluded:
             return False
-        try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
-            return False
-        try:
-            resolved.relative_to(self._root_resolved)  # symlink-escape guard
-        except ValueError:
+        if not self._resolves_inside(path, self._root_resolved):
             return False
         if path.suffix.lower() not in extensions:
             return False
@@ -217,6 +211,19 @@ class FileDiscovery:
         if self.load_ignore_spec().match_file(str(rel)):
             return False
         return not self._nested_ignored(parts)
+
+    @staticmethod
+    def _resolves_inside(path: Path, root: Path) -> bool:
+        """Whether *path* resolves inside *root* (symlink-escape guard)."""
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return False
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            return False
+        return True
 
     def _nested_ignored(self, parts: tuple[str, ...]) -> bool:
         """Whether a per-directory ``.gitignore`` along *parts* excludes the file.
@@ -271,7 +278,7 @@ class FileDiscovery:
                 h.update(chunk)
         return h.hexdigest()
 
-    def load_ignore_spec(self) -> pathspec.PathSpec:
+    def load_ignore_spec(self) -> pathspec.PathSpec[pathspec.pattern.Pattern]:
         """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
         lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
         for name in (".gitignore", ".quarryignore"):
@@ -299,7 +306,9 @@ class FileDiscovery:
             return []
 
     @staticmethod
-    def _read_local_ignore(dirpath: Path) -> pathspec.PathSpec | None:
+    def _read_local_ignore(
+        dirpath: Path,
+    ) -> pathspec.PathSpec[pathspec.pattern.Pattern] | None:
         """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
         lines = FileDiscovery._read_ignore_lines(dirpath / ".gitignore")
         if not lines:
