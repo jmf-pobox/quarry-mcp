@@ -26,6 +26,15 @@ across `transform`, `index`, and `connector`).
   file or directory
   through `register_directory` + `sync_all_registrations` instead of calling
   `ingest`, which always failed for that case.
+- `tool`: README documented `quarryd`'s versioned REST API only as an
+  internal implementation detail ("the CLI, MCP server, and hooks... over a
+  versioned REST API"), never as a directly usable surface, despite a real
+  generated OpenAPI spec (`docs/openapi.json`, 18 endpoints) existing. Added
+  an HTTP API section under Commands with a worked `curl` example and the
+  loopback/auth contract.
+- `tool`: README's "What It Looks Like" ingest example used a bare URL,
+  which is accurate but not representative — `register`+`sync` a directory
+  is the common path. Swapped the example.
 
 ## [3.0.3] - 2026-08-22
 

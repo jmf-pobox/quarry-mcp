@@ -104,16 +104,14 @@ sh install.sh
 
 ## What It Looks Like
 
-Ingest a document:
+Sync a folder:
 
 ```text
-> /ingest https://example.com/report
+> /ingest ~/Documents/research
 
-▶ Ingesting https://example.com/report (background)
+▶  Registering /Users/you/Documents/research as 'research' (task a1b2c3)
+▶  Syncing all registrations (task d4e5f6)
 ```
-
-For local files, register their containing directory instead — see
-[Commands](#commands).
 
 Search by meaning:
 
@@ -173,6 +171,22 @@ Search by meaning:
 | `quarry logout` | Disconnect, revert to the local daemon |
 
 Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
+
+### HTTP API
+
+`quarryd` also exposes a plain REST API — every CLI/MCP operation is a thin
+client over it. The CLI is the primary, documented way to drive quarry; the
+HTTP API is there for scripting or a non-Claude integration that wants to
+talk to the daemon directly.
+
+```bash
+curl "http://127.0.0.1:8420/v1/search?q=Q3+revenue"
+```
+
+Local installs bind loopback-only with no auth required; a `--network`
+install requires a Bearer token (`QUARRY_API_KEY`) and TLS (see
+[Remote Server](#remote-server)). The full endpoint list is generated at
+[`docs/openapi.json`](docs/openapi.json) (`make openapi` regenerates it).
 
 ## Setup
 
