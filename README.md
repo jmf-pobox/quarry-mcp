@@ -172,6 +172,12 @@ Search by meaning:
 
 Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
 
+A registered directory isn't polled on a schedule — `quarryd` runs a live
+filesystem watch (debounced, ~2s) that reacts to changes as they happen, plus
+a 5-minute periodic safety sweep as a backstop (catches anything the watch
+missed, self-heals the search index). `quarry sync` triggers an immediate
+one-shot pass on top of that; you don't need to run it after every edit.
+
 ### HTTP API
 
 `quarryd` also exposes a REST API — every CLI/MCP operation is a thin client
