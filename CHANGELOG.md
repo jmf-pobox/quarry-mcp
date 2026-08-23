@@ -80,9 +80,10 @@ across `transform`, `index`, and `connector`).
   with Managing the Daemon instead — both describe the same running
   `quarryd` process, so grouping them reads better than filing HTTP
   alongside the Slash Commands/MCP Tools/CLI surfaces it isn't one of.
-  Also named the HTTP API as a fourth thin-client surface (alongside the
-  CLI, MCP server, and Claude Code hooks) in the opening description,
-  where it was previously undescribed.
+  Also named the HTTP API in the opening description, where it was
+  previously undescribed — as the interface the thin clients (CLI, MCP
+  server, Claude Code hooks) talk over and that's reachable directly too,
+  not as a fourth thin client itself.
 
 ## [3.0.3] - 2026-08-22
 
