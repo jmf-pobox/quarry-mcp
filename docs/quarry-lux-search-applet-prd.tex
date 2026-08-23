@@ -1,0 +1,616 @@
+%
+% quarry-lux-search-applet-prd.tex
+%
+% Product requirements for a quarry lux applet: search across every
+% registered collection, and a read-only view of daemon status, reachable
+% from the lux menu bar whenever quarryd is running -- with no dependency on
+% any particular Claude Code session being open. Written from the
+% product-manager altitude -- what the feature must do and for whom, not
+% how it is implemented. Use cases and functional requirements are traced
+% to each other so a reviewer can check coverage in both directions.
+% Architecture (the QuarrySearchSubsystem composition, the lux board/scene
+% wire shapes) is deliberately out of this document; it follows, once this
+% is ratified, per docs/WORKFLOW.md's design-before-implementation gate.
+%
+% Companion document: quarry-lux-control-panel-prd.tex, a separate,
+% session-bound applet controlling this repo's own capture configuration.
+% The two are deliberately different applet species (DES-063, lux repo)
+% and are scoped as two independent epics, not one.
+%
+
+\documentclass[a4paper,11pt]{report}
+\usepackage[margin=1in]{geometry}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{parskip}
+
+\newcommand{\uc}[1]{\textbf{UC-#1}}
+\newcommand{\fr}[1]{\textbf{FR-#1}}
+\newcommand{\nfr}[1]{\textbf{NFR-#1}}
+\newcommand{\pone}{\textsc{[p1]}}
+\newcommand{\ptwo}{\textsc{[p2]}}
+
+\begin{document}
+
+\title{Quarry Lux Search Applet: Product Requirements}
+\author{Punt Labs}
+\date{August 2026}
+\hypersetup{
+  pdftitle={Quarry Lux Search Applet: Product Requirements},
+  pdfauthor={Punt Labs},
+  pdfsubject={Product Requirements Document}
+}
+\maketitle
+\tableofcontents
+
+\chapter{Product Requirements}
+
+\section{Overview}
+\label{sec:overview}
+
+Quarry today has one graphical entry point: \texttt{quarry-menubar}, a
+native macOS \texttt{MenuBarExtra} app that connects to \texttt{quarryd}
+over its resolved connection (local TLS or a configured remote server) and
+lets a user search and read indexed content. This document specifies a
+second entry point: a lux applet, reachable from the shared lux menu bar
+whenever \texttt{quarryd} and \texttt{luxd} are both running, offering the
+same core search-and-read experience to any lux user regardless of
+platform or whether \texttt{quarry-menubar} is installed.
+
+This is not a replacement for \texttt{quarry-menubar} and does not reduce
+its scope. It is an additional surface for the same backend, matching how
+\texttt{voxd}'s music player already gives vox a lux-native control surface
+alongside vox's own CLI and MCP tools.
+
+The applet is machine-global, not session-scoped: it is composed directly
+into \texttt{quarryd}'s own process at daemon startup (the same shape as
+\texttt{voxd}'s \texttt{MusicPlayerSubsystem}), not spawned per Claude Code
+session. This is a product decision, not an implementation detail --- a
+search across every registered collection, and the health of the daemon
+serving them, are both facts about the machine, not about any one editor
+session, and the applet's availability should track the daemon's uptime,
+not a session's.
+
+\subsection{Priorities and phasing}
+
+\pone{} is a working search-and-read applet, at feature parity with
+\texttt{quarry-menubar}'s core loop (query, browse results, read full
+content) reachable from the lux menu bar, plus a read-only status view.
+\ptwo{} is polish and parity items that improve the experience without
+being required to call the feature done: richer status detail, performance
+tuning for large result sets, and any lux-side affordance
+\texttt{quarry-menubar} has that this document's \pone{} scope omits.
+
+\subsection{Goals}
+
+\begin{itemize}
+  \item Let any lux user search every collection quarry has indexed,
+    from the lux menu bar, without installing or running
+    \texttt{quarry-menubar}.
+  \item Make reading a matched document's full content --- not just the
+    search snippet --- the primary experience, matching what
+    \texttt{quarry-menubar} already proved is the right shape (\uc{2},
+    \uc{3}).
+  \item Surface enough daemon health at a glance that a user can tell
+    whether a failed or empty search is quarry's fault or their query's
+    fault, without leaving lux to run \texttt{quarry doctor}.
+  \item Reuse the \emph{contract} quarry's existing HTTP API already
+    defines (\texttt{/v1/search}, \texttt{/v1/show},
+    \texttt{/v1/collections}, \texttt{/v1/status}) --- the same request
+    shapes, the same response fields --- as-is where it already serves the
+    need; extending the contract is in scope only where a requirement
+    below cannot be met without it. \textbf{Revised (Chapter 2,
+    \S2.4):} this applet reaches that contract's underlying service
+    layer \emph{in-process}, not over HTTP loopback, since it runs
+    inside \texttt{quarryd} itself rather than as an external client ---
+    the goal is contract parity with the HTTP API, not literally issuing
+    HTTP requests to reach it.
+\end{itemize}
+
+\subsection{Non-Goals}
+
+\begin{itemize}
+  \item Writing to quarry: no ingest, no \texttt{remember}, no delete, no
+    collection management. This applet reads; it does not mutate quarry's
+    index. (Distinguish from the companion control-panel applet, which
+    does mutate --- but only this repo's own capture configuration, never
+    the index.)
+  \item Any daemon lifecycle control (restart, service management) or
+    connection/remote-config management (API keys, TLS trust). That stays
+    \texttt{quarry-menubar}'s job; see \S~\ref{sec:noncontrol} below.
+  \item Replicating \texttt{quarry-menubar}'s keyboard-first, hotkey-summoned
+    UX exactly. Lux's own menu-bar interaction model (a click raises a
+    frame) is the entry point here; matching \texttt{quarry-menubar}'s
+    specific hotkey behavior is out of scope.
+  \item Any table/filter/type-combo chrome in the style of the beads
+    board (\texttt{apps/beads\_board.py}'s live-chrome \texttt{RenderTableRequest}).
+    Considered and explicitly deferred to a later iteration once the
+    content-first \pone{} scope ships and is validated.
+\end{itemize}
+
+\label{sec:noncontrol}
+\textbf{Why daemon control stays out.} A prior draft of this feature
+combined search, status, \emph{and} daemon control (restart, database
+switching, sync-now, remote-serving toggles) into one applet. That was
+corrected: \texttt{quarry-menubar} already owns daemon-level status and
+control in its native surface, and duplicating that control surface in lux
+would create two places a user could issue conflicting daemon commands
+from, with no obvious source of truth. This applet's status section is
+read-only by design.
+
+\subsection{Personas}
+
+\begin{description}
+  \item[The lux-first user] Runs \texttt{luxd} as their primary always-on
+    surface across several Punt Labs tools (vox's music player, biff's
+    presence) and wants quarry search available the same way, without a
+    second app to install or a dock icon to manage. Primary persona for
+    \pone{}.
+  \item[The cross-platform user] Uses lux on a platform
+    \texttt{quarry-menubar} does not target (\texttt{quarry-menubar} is
+    macOS-only \texttt{MenuBarExtra}; lux's Display renderer is not
+    platform-restricted the same way). This applet is their only
+    graphical way to search quarry.
+  \item[The quarry-menubar user, occasionally] Has \texttt{quarry-menubar}
+    installed and generally prefers it, but is at a machine or in a
+    context where lux is already open and quarry-menubar is not running;
+    reaches for the lux applet as a fallback rather than launching a
+    second app for one query.
+\end{description}
+
+\textbf{Evidence status.} No usage data or interviews back the
+cross-platform and occasional-user personas above --- \texttt{quarry-menubar}
+already exists and plausibly serves the primary user base today, so this
+document ships on an assertion, not a validated need. This is treated
+explicitly as a validation bet, not a settled fact: \S~\ref{sec:metric}
+defines what would confirm or falsify it, and \pone{} is scoped to be
+cheap enough to ship and observe before committing to \ptwo{}.
+
+\section{Use Cases}
+
+Each use case names the actor, the trigger, the expected flow, and what
+``done well'' looks like. Functional requirements in \S\ref{sec:fr} cite
+the use cases they satisfy.
+
+\begin{description}
+
+\item[\uc{1} Open the applet from the lux menu. \pone{}] \emph{Actor: any
+  lux user.} \texttt{quarryd} is running; the user clicks the ``Quarry''
+  entry in the lux menu bar. \emph{Done well:} the applet's frame raises
+  immediately (DES-063's raise-first principle) --- the user sees a search
+  field within roughly the same latency lux-beads already demonstrates for
+  its own click-to-visible-response, not a spinner while the daemon is
+  contacted for the first time.
+
+\item[\uc{2} Search and scan results. \pone{}] \emph{Actor: any lux user.}
+  The user types a query into the search field. \emph{Done well:} results
+  appear grouped in a way that lets the user scan quickly (matching
+  \texttt{quarry-menubar}'s grouping by source format), each row compact
+  enough to be a picker, not a destination --- the user should feel like
+  they are choosing which document to read, not already reading it.
+
+\item[\uc{3} Read a result's full content. \pone{}] \emph{Actor: any lux
+  user.} The user selects a result row. \emph{Done well:} the applet shows
+  the \emph{full page} the result came from (via the same backing call as
+  \texttt{quarry-menubar}'s \texttt{/v1/show}), not merely the search
+  snippet already visible in the list --- reading the content is the
+  point of the feature, and the list exists only to get the user here
+  quickly. Code content is legible (a monospaced or otherwise
+  code-appropriate rendering), matching the intent of
+  \texttt{quarry-menubar}'s syntax highlighting even if lux's rendering
+  primitives cannot reproduce it exactly.
+
+\item[\uc{4} Return to the list from a result. \pone{}] \emph{Actor: any
+  lux user.} The user is reading a result's content and wants to see the
+  results list again --- to pick a different result, or refine the
+  query. \emph{Done well:} one action returns to the list without losing
+  the search query or re-running the search.
+
+\item[\uc{5} Copy content out of the applet. \pone{}] \emph{Actor: any lux
+  user.} The user is reading a result and wants to paste its content
+  elsewhere. \emph{Done well:} the full content just read is copyable in
+  one action, matching \texttt{quarry-menubar}'s ``Copy'' affordance.
+
+\item[\uc{6} Search returns nothing. \pone{}] \emph{Actor: any lux user.}
+  The query matches no indexed content. \emph{Done well:} the applet says
+  so plainly (no results for this query) rather than showing an empty list
+  indistinguishable from ``still loading'' or a silent failure.
+
+\item[\uc{7} Search while the daemon is unreachable. \pone{}] \emph{Actor:
+  any lux user.} \texttt{quarryd} is down, unreachable, or the applet's
+  own connection to it has faulted. \emph{Done well:} the applet says the
+  daemon is unreachable, distinctly from ``no results,'' so the user knows
+  to check quarry's own health rather than assume their query was bad.
+  (See also \uc{9}.)
+
+\item[\uc{8} Reconnect after a lux restart. \pone{}] \emph{Actor: any lux
+  user.} \texttt{luxd} restarts (or the applet's own connection drops and
+  recovers) while \texttt{quarryd} keeps running. \emph{Done well:} the
+  applet's menu entry and any held content reappear automatically once the
+  connection is back, matching the register-fresh behavior
+  \texttt{voxd}'s music player already demonstrates on Hub reconnect ---
+  the user does not have to notice the outage or take any recovery action.
+
+\item[\uc{9} Check daemon status without searching. \pone{}] \emph{Actor:
+  any lux user.} The user opens the applet specifically to check whether
+  quarry is healthy --- daemon up, index healthy, collections in sync ---
+  without intending to search anything. \emph{Done well:} a status view is
+  reachable from the same applet without a separate program or menu
+  entry, and it is read-only: nothing in this view lets the user change
+  daemon state (see \S~\ref{sec:noncontrol}).
+
+\item[\uc{10} Filter to one collection. \ptwo{}] \emph{Actor: any lux
+  user.} The user wants results from only one indexed collection, not
+  every collection quarry knows about --- matching
+  \texttt{quarry-menubar}'s collection picker. \emph{Done well:} the
+  filter is visible and changeable from the search view itself, not a
+  separate settings screen, and persists for the remainder of the applet
+  session (until lux or quarryd restarts).
+
+\item[\uc{11} Scroll or page through many results. \ptwo{}] \emph{Actor:
+  any lux user.} A query matches more results than fit on screen at once.
+  \emph{Done well:} the user can reach every result, not just the first
+  page's worth, without the applet becoming sluggish as the result count
+  grows.
+
+\end{description}
+
+\section{Functional Requirements}
+\label{sec:fr}
+
+Requirements are grouped by capability area. Each cites the use case(s) it
+exists to satisfy and carries the same \pone{}/\ptwo{} phase tag.
+
+\subsection{Applet lifecycle}
+
+\begin{description}
+  \item[\fr{1} \pone{}] The applet shall be available as a single menu
+    entry in the lux menu bar whenever \texttt{quarryd} is running, with
+    no dependency on any Claude Code session being open. (\uc{1})
+  \item[\fr{2} \pone{}] Clicking the applet's menu entry shall raise its
+    frame if it is already open, and open it with a visible search field
+    if it is not, before any query has been issued. (\uc{1})
+  \item[\fr{3} \pone{}] The applet shall re-register its menu entry and
+    restore whatever it was last showing automatically on every fresh
+    connection to \texttt{luxd} (including after a \texttt{luxd} restart),
+    with no user action required. (\uc{8})
+\end{description}
+
+\subsection{Search}
+
+\begin{description}
+  \item[\fr{4} \pone{}] The applet shall let the user enter a free-text
+    query and issue a search against quarry's indexed content. (\uc{2})
+  \item[\fr{5} \pone{}] Search results shall be grouped in a way that
+    supports quick scanning (at minimum, by source format, matching
+    \texttt{quarry-menubar}'s existing grouping), with each row compact
+    enough to show document identity and a short excerpt, not full
+    content. (\uc{2})
+  \item[\fr{6} \pone{}] A query that matches nothing shall produce an
+    explicit ``no results'' state, distinguishable from a loading state
+    and from a daemon-unreachable state. (\uc{6})
+  \item[\fr{7} \ptwo{}] The user shall be able to restrict search to one
+    collection, selectable from the search view. (\uc{10})
+  \item[\fr{8} \ptwo{}] The applet shall remain responsive as the result
+    count grows past what fits on one screen (pagination, virtualized
+    scrolling, or an equivalent), without a hard cap that silently drops
+    results below the fold. (\uc{11})
+\end{description}
+
+\subsection{Reading content}
+
+\begin{description}
+  \item[\fr{9} \pone{}] Selecting a result shall fetch and display the
+    \emph{full page} that result came from, not only the excerpt already
+    visible in the results list. (\uc{3})
+  \item[\fr{10} \pone{}] The content view shall render code-format
+    results legibly (at minimum, a monospaced presentation that preserves
+    whitespace and line breaks). (\uc{3})
+  \item[\fr{11} \pone{}] One action shall return from the content view to
+    the results list without re-issuing the search or losing the query
+    text. (\uc{4})
+  \item[\fr{12} \pone{}] One action shall copy the full content currently
+    displayed. (\uc{5})
+\end{description}
+
+\subsection{Daemon status (read-only)}
+
+\begin{description}
+  \item[\fr{13} \pone{}] The applet shall offer a status view, reachable
+    from the same applet, showing at minimum: daemon reachability, and
+    whether the last search attempt succeeded or failed for a
+    daemon-side reason. (\uc{9})
+  \item[\fr{14} \pone{}] When the daemon is unreachable, the applet shall
+    say so explicitly and distinctly from a genuine zero-result search,
+    both in the search view and the status view. (\uc{7})
+  \item[\fr{15} \pone{}] The status view shall contain no control that
+    changes daemon state (no restart, no database switch, no
+    configuration write). (\uc{9}; see \S~\ref{sec:noncontrol})
+  \item[\fr{16} \ptwo{}] The status view shall list the daemon's known
+    collections by name and document/chunk counts, the data
+    \texttt{/v1/status} already exposes today
+    (\texttt{QuarryModels.swift}'s \texttt{StatusResponse}: aggregate
+    \texttt{document\_count}, \texttt{collection\_count},
+    \texttt{chunk\_count} --- no per-collection breakdown). A
+    per-collection last-synced indication, if wanted, is a genuinely new
+    field this requirement does not assume exists; scoping it is an open
+    question (\S~\ref{sec:openq-lastsync}), not something
+    \texttt{quarry-menubar} already provides. (\uc{9})
+\end{description}
+
+\section{Non-Functional Requirements}
+
+\begin{description}
+  \item[\nfr{1} \pone{}] Menu-click to first visible content (a search
+    field, or a held prior result) shall not be materially worse than
+    lux-beads' own demonstrated click-to-visible-response latency
+    (DES-063 measured lux-beads at roughly 55\,ms median for a raise, with
+    the slow \texttt{bd} read moving behind that raise, not blocking it).
+    The equivalent principle applies here: raise first, fill behind it.
+  \item[\nfr{2} \pone{}] A daemon fault (crash, restart, or a fatal fault
+    in either lux leg) shall not require the applet's host process
+    (\texttt{quarryd}) to be restarted by a human --- the subsystem shall
+    self-heal, matching \texttt{MusicPlayerSubsystem}'s guarded
+    restart-with-backoff loop.
+  \item[\nfr{3} \ptwo{}] The applet shall not measurably degrade
+    \texttt{quarryd}'s own search latency for other clients (the HTTP API,
+    \texttt{quarry-menubar}, the MCP server) merely by being connected and
+    idle.
+\end{description}
+
+\section{Success Metric}
+\label{sec:metric}
+
+This applet exists on an unvalidated persona bet (\S~\ref{sec:overview}
+personas). The falsifiable claim: within the first month after \pone{}
+ships, at least some non-trivial share of searches happen through this
+applet from users who also have \texttt{quarry-menubar} available ---
+evidence that the applet is reaching a real, distinct moment of use
+(lux already open, quarry-menubar not running) rather than sitting
+unused beside an app that already does the job. If usage never
+materializes among users who could have used \texttt{quarry-menubar}
+instead, \ptwo{} (collection filtering, pagination, richer status) is
+not justified and this applet's further investment should be
+reconsidered before, not after, building it.
+
+\section{Open Questions}
+
+\begin{enumerate}
+  \item \textbf{Resolved in Chapter 2.} Whether lux's board/scene
+    primitive supports replacing a board's content in place is settled:
+    yes, by pushing a fresh \texttt{RenderRequest} to the same
+    \texttt{frame\_id} the results table already used --- no new board
+    plumbing needed. See Chapter 2, \S\ 2.2 for the three-part proof.
+  \item What quarry HTTP API surface, if any, is missing for this applet
+    versus what \texttt{quarry-menubar} already calls
+    (\texttt{/v1/search}, \texttt{/v1/documents}, \texttt{/v1/collections},
+    \texttt{/v1/show}, \texttt{/v1/status})?
+  \item Does \texttt{quarryd} taking a direct dependency on
+    \texttt{punt\_lux} (as \texttt{voxd} does) have any packaging
+    consequence for quarry, which ships as a CLI+MCP hybrid plugin today?
+  \item \textbf{Still open; carried forward as Chapter 2, \S2.5 Decision
+    4.} What, precisely, should \fr{13}'s status view show beyond
+    reachability --- is FD headroom, FTS index health, and sync recency
+    (all already in \texttt{quarry doctor}'s output) the right read-only
+    subset, or is that too much detail for a glance-and-close use case?
+  \item \label{sec:openq-lastsync} \fr{16} originally assumed
+    \texttt{quarry-menubar}'s status surface already exposes a
+    per-collection last-synced timestamp; peer review found it does not
+    --- \texttt{/v1/status} returns only aggregate counts
+    (\texttt{StatusResponse} in \texttt{QuarryModels.swift}). Is a
+    per-collection last-synced field worth adding to quarry's HTTP API
+    for this applet, and if so is \texttt{quarry doctor}'s existing sync
+    machinery (\texttt{compute\_sync\_plan}) the right source for it, or
+    is aggregate-only status sufficient for \pone{}?
+\end{enumerate}
+
+\chapter{Technical Design Solution}
+
+This chapter resolves the open questions raised in Chapter 1 against the
+actual code of the three repositories this feature spans (lux, vox,
+quarry). Nothing here is speculative where the cited source settles the
+question; where it does not, the gap is named as a decision required
+before implementation, not silently assumed.
+
+\section{Component overview}
+
+\textbf{Contingent on Decision 1 (\S2.5).} Everything in this section
+assumes \texttt{quarryd} takes \texttt{punt\_lux} as a direct, mandatory
+dependency, mirroring \texttt{voxd}'s own precedent. That decision is not
+yet ratified (\S2.5, Decision 1) --- if it is ruled the other way, this
+component shape does not apply and needs re-deriving against whatever
+constraint motivated the different ruling.
+
+The applet is a new \texttt{QuarrySearchSubsystem}, living in
+\texttt{src/quarry/daemon/}, composed into \texttt{quarryd} at startup and
+run as a fire-and-forget task for the daemon's lifetime --- the same shape
+as \texttt{MusicPlayerSubsystem} in \texttt{voxd} (\texttt{vox/src/}\allowbreak
+\texttt{punt\_vox/voxd/music\_player/composition.py}), imported directly
+and unconditionally in \texttt{voxd/daemon.py:38}, not behind a feature
+flag or optional import. It owns two self-healing legs under one
+\texttt{asyncio.TaskGroup}, restarting both together on any fatal fault
+with backoff, exactly as \texttt{MusicPlayerSubsystem.run()} does:
+
+\begin{description}
+  \item[The push leg] Owns a \texttt{LuxClient} built for
+    \texttt{quarryd}'s own app identity (\texttt{LuxClient.for\_identity},
+    per \texttt{lux/src/punt\_lux/client/facade.py:76-78}) and pushes
+    scene content --- the search results table, the detail view, and the
+    status view --- to one named scene/frame. Modeled on
+    \texttt{LuxScenePublisher}.
+  \item[The receive leg] Subscribes to the events this applet's UI can
+    raise (a query submission, a result selection, a tab switch between
+    Search and Status) and, on each, does the corresponding work and
+    re-pushes. Modeled on \texttt{LuxSubscription}/\texttt{VoxPanelLeg}'s
+    \texttt{on\_event} dispatch (\texttt{vox/src/punt\_vox/panel/leg.py:}\allowbreak
+    \texttt{128-130}).
+\end{description}
+
+Both legs share one \texttt{on\_connect} hook that registers the menu
+entry and re-pushes whatever the subsystem last held, firing on every
+fresh Hub handshake --- this is what satisfies \fr{3} (re-registration
+after a \texttt{luxd} restart) for free, since it is the same mechanism
+\texttt{MusicPlayerSubsystem} already uses for the identical requirement
+in vox.
+
+\section{Resolved: the list/detail swap (Open Question 1)}
+
+\textbf{Resolved: no new board plumbing is needed.} Reading
+\texttt{lux/src/punt\_lux/applets/board\_load.py} and
+\texttt{board\_glass.py} in full settles this. Three facts, together:
+
+\begin{enumerate}
+  \item \texttt{BeadsBoard.request()}, called from
+    \texttt{BoardLoad.board()} (\texttt{board\_load.py:73-75}), already
+    returns \texttt{RenderTableRequest \textbar{} RenderRequest} for
+    \emph{the same} \texttt{scene\_id}/\texttt{frame\_id} in the existing
+    beads applet --- a table for issues, a plain scene for a failure or
+    empty message. The Hub already composes heterogeneous request shapes
+    pushed to one frame; this is not new behavior this applet would be
+    the first to need.
+  \item \texttt{RenderRequest.elements} (\texttt{lux/src/punt\_lux/}\allowbreak
+    \texttt{operations/models/render.py:58}) is
+    \texttt{list[dict[str, object]]} --- an open, self-validating element
+    tree, not a short-message-only type. A full page's content, scrolled
+    and rendered as text elements, is exactly the kind of thing this type
+    already exists to carry.
+  \item \texttt{BoardGlass.shows()} serializes pushes under one lock and
+    always re-reads the held state \emph{inside} that lock before
+    writing, so two pushes racing (a stale list-refresh landing after a
+    fresh detail-view push, or vice versa) cannot land out of order --- the
+    newer one always wins, by construction, not by a place counter that
+    could itself race.
+\end{enumerate}
+
+The design, therefore: one scene id (e.g.\ \texttt{quarry-search}) serves
+both the results list and the detail view. Selecting a result pushes a
+fresh \texttt{RenderRequest} of the full page's content to that same
+scene id, replacing the table in place; returning to the list (\fr{11})
+pushes the held \texttt{RenderTableRequest} back. \texttt{BoardSlot} and
+\texttt{BoardGlass} are reusable directly --- neither is
+session-applet-specific, and neither's construction depends on the
+\texttt{AppletProgram}/\texttt{SessionClaim} composition this applet does
+not use. \texttt{AppletBoard} is \emph{not} reusable as-is: it is
+transitively bound to the beads domain through its concrete
+\texttt{@final BoardLoad} dependency. See ``Decisions required,'' below
+--- this is a real, currently-unscoped, cross-repo piece of work, not a
+free reuse.
+
+\section{Search and selection events}
+
+Unlike \texttt{lux-beads}, whose click carries no payload (a click just
+means ``reload,'' \texttt{beads.py} takes no arguments beyond session
+identity), this applet's clicks need to carry data: a query string, and a
+selected result's identity (document, page, collection, chunk index)
+sufficient to call \texttt{/v1/show}. \texttt{VoxPanelService}'s
+\texttt{apply\_event(topic, payload)} (\texttt{vox/src/punt\_vox/panel/}\allowbreak
+\texttt{service.py:146-174}) is the precedent: a payload-carrying event on
+a named topic, dispatched to the field it changes, each topic named by an
+enum (\texttt{PanelTopic}) rather than a bare string, so a typo in a topic
+name fails at import time, not at runtime.
+
+Two topics, minimum: \texttt{QUERY} (payload: the query string) and
+\texttt{SELECT\_RESULT} (payload: enough of a result's identity to
+re-fetch it). Both ride the same \texttt{listener().subscribe(*topics)}
+call the push/receive legs already share, per
+\texttt{VoxPanelLeg.\_listen\_once} (\texttt{leg.py:96-105}).
+
+\section{Reaching quarry's own search}
+
+\texttt{QuarrySearchSubsystem} runs \emph{inside} \texttt{quarryd}'s own
+process. It must call the same service layer the \texttt{/v1/search} and
+\texttt{/v1/show} route handlers call --- \texttt{SearchService} in
+\texttt{src/quarry/daemon/routes/search.py} and its counterpart in
+\texttt{src/quarry/daemon/routes/show.py}
+(\texttt{src/quarry/daemon/route\_table.py} only wires route specs
+to these handler methods; the handler bodies, and the service calls
+worth reusing, live in \texttt{src/quarry/daemon/routes/}) --- in-process,
+never looping back through its own HTTP API over loopback TLS to reach
+code already running in the same process. This is a decision, not an
+oversight worth
+flagging as an open question: the HTTP layer's job is authenticating and
+shaping requests for external clients; a subsystem composed into the
+daemon itself is not an external client and gains nothing from paying
+that overhead.
+
+\section{Decisions required before implementation}
+
+\begin{enumerate}
+  \item \textbf{Packaging: \texttt{punt-lux} as a direct, mandatory
+    dependency.} \texttt{voxd} imports \texttt{MusicPlayerSubsystem}
+    directly and unconditionally (\texttt{daemon.py:38}), and
+    \texttt{punt-lux>=0.28.0} is a plain dependency in
+    \texttt{vox/pyproject.toml}, not an optional extra. The precedent is
+    a hard dependency, not a feature-flagged one --- \texttt{quarryd}
+    would take the same shape: \texttt{punt\_lux} always importable,
+    the subsystem always composed, tolerating \texttt{luxd} being absent
+    or down \emph{at runtime} (both \texttt{MusicPlayerSubsystem} and
+    \texttt{VoxPanelLeg} retry forever rather than crash their host on a
+    connection failure) but not absent from the dependency graph at
+    install time. This needs a ratified decision before implementation,
+    since it changes quarry's install footprint for every user, not only
+    those who run lux.
+  \item \textbf{\texttt{AppletBoard} is not actually reusable as-is; this
+    needs a lux-side change.} Peer review found \S2.2's ``reuse
+    \texttt{AppletBoard}/\texttt{BoardSlot}/\texttt{BoardGlass} directly''
+    is imprecise. \texttt{AppletBoard.\_\_new\_\_(cls, load: BoardLoad,
+    slot: BoardSlot)} (\texttt{applet\_board.py:43}) requires a concrete
+    \texttt{BoardLoad} instance, and \texttt{BoardLoad} is itself
+    \texttt{@final} (\texttt{board\_load.py:40}), constructed from
+    concrete, beads-domain \texttt{BeadsBoard}/\texttt{BeadsSource}
+    objects (\texttt{punt\_lux.apps.beads\_board}/\texttt{beads\_source}).
+    \texttt{AppletBoard} is transitively bound to the beads domain through
+    \texttt{BoardLoad} today. \texttt{BoardSlot} and \texttt{BoardGlass}
+    genuinely have no such binding and are reusable as claimed; only
+    \texttt{AppletBoard} is not. Reusing it for quarry requires a
+    lux-side change --- genericizing \texttt{BoardLoad} (a Protocol, or a
+    type parameter) so a \texttt{QuarrySearchBoardLoad} can satisfy
+    \texttt{AppletBoard}'s constructor --- which is cross-repo work this
+    document cannot unilaterally scope. Confirm with lux's own
+    maintainers before assuming this reuse path is free.
+  \item \textbf{App-identity client factory.} \texttt{voxd} injects its
+    \texttt{LuxClient} construction behind \texttt{VoxLuxClients}
+    (a factory Protocol, swapped for a fake in tests) rather than calling
+    \texttt{LuxClient.for\_identity} inline. Confirm quarry's daemon
+    testing conventions (\texttt{tests/hermetic\_env.py}'s embedding-fake
+    pattern) extend cleanly to a second client boundary, or whether this
+    needs its own hermeticity mechanism.
+  \item \textbf{Status-view data source.} Per the corrected \fr{16}
+    (Chapter 1), per-collection last-synced data does not exist in
+    quarry's HTTP API today. Deciding whether to add it (and from what
+    source --- \texttt{doctor.py}'s \texttt{compute\_sync\_plan}, or a new
+    field) is a real scoping decision for whoever picks up this design,
+    not resolved here.
+  \item \textbf{Status-view scope beyond reachability, carried forward
+    from Chapter 1.} Chapter 1's open questions ask, and this chapter
+    does not resolve, exactly what \fr{13} should show beyond daemon
+    reachability --- FD headroom, FTS index health, and sync recency are
+    all already in \texttt{quarry doctor}'s output and are candidates,
+    but including all three may be more detail than a glance-and-close
+    status view warrants. Genuinely undecided; needs a ruling before
+    \fr{13} can be implemented as more than a bare up/down indicator.
+  \item \textbf{Success-metric instrumentation.} \S1.6's success metric
+    (search volume through this applet, among users who also have
+    \texttt{quarry-menubar} available) has no instrumentation point
+    designed anywhere in this chapter. As currently specified, nothing
+    in \texttt{QuarrySearchSubsystem} records enough to answer the
+    metric's question after \pone{} ships. Before implementation, either
+    design a minimal usage-logging mechanism (even a simple
+    query-count-with-timestamp is likely sufficient) or explicitly
+    accept the metric will need to be assessed some other way (e.g.\ a
+    direct ask to users), and say so.
+\end{enumerate}
+
+\section{Known unknowns}
+
+Board sizing and layout for a scrollable full-page detail view have not
+been measured against lux's ImGui element set for a large document (a
+multi-thousand-line source file, for instance) --- whether long-content
+rendering performs acceptably, or needs its own pagination/virtualization
+the way \fr{8} already anticipates for the results list, is untested and
+should be spiked before \pone{} is considered feature-complete, not
+assumed from the type system alone.
+
+\end{document}
