@@ -1,0 +1,495 @@
+%
+% quarry-lux-control-panel-prd.tex
+%
+% Product requirements for a quarry lux applet: a live control surface for
+% THIS repository's own quarry capture configuration
+% (.punt-labs/quarry/config.md), session-bound, spawned by the Claude Code
+% session-start hook -- the lux-beads / vox-panel applet species, not the
+% machine-global daemon species. Written from the product-manager altitude
+% -- what the feature must do and for whom, not how it is implemented.
+% Use cases and functional requirements are traced to each other so a
+% reviewer can check coverage in both directions. Architecture (the
+% AppletProgram composition, the config read/write/commit mechanics) is
+% deliberately out of this document; it follows, once this is ratified,
+% per docs/WORKFLOW.md's design-before-implementation gate.
+%
+% Companion document: quarry-lux-search-applet-prd.tex, a separate,
+% machine-global applet embedded directly in quarryd. The two are
+% deliberately different applet species (DES-063, lux repo) and are scoped
+% as two independent epics, not one.
+%
+
+\documentclass[a4paper,11pt]{report}
+\usepackage[margin=1in]{geometry}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{parskip}
+
+\newcommand{\uc}[1]{\textbf{UC-#1}}
+\newcommand{\fr}[1]{\textbf{FR-#1}}
+\newcommand{\nfr}[1]{\textbf{NFR-#1}}
+\newcommand{\pone}{\textsc{[p1]}}
+\newcommand{\ptwo}{\textsc{[p2]}}
+
+\begin{document}
+
+\title{Quarry Lux Control-Panel Applet: Product Requirements}
+\author{Punt Labs}
+\date{August 2026}
+\hypersetup{
+  pdftitle={Quarry Lux Control-Panel Applet: Product Requirements},
+  pdfauthor={Punt Labs},
+  pdfsubject={Product Requirements Document}
+}
+\maketitle
+\tableofcontents
+
+\chapter{Product Requirements}
+
+\section{Overview}
+
+Every Punt Labs tool's configuration is repo-scoped by convention
+(punt-kit's tool-enable-disable standard): quarry's own capture behavior
+for a given repository lives in that repository's
+\texttt{.punt-labs/quarry/config.md}, written once by \texttt{quarry
+enable} and, today, only ever edited by hand or by re-running
+\texttt{enable}. This document specifies a lux applet that makes those
+settings live-editable from the lux menu bar, for the repository the
+user's current Claude Code session is actually working in.
+
+This is a genuinely different kind of applet from the search applet
+(\texttt{quarry-lux-search-applet-prd.tex}): it is session-bound, spawned
+by the session-start hook and tied to the session's own working directory
+via a parent-pid watch, the same species as \texttt{lux-beads} and
+\texttt{vox-panel} (DES-063, lux repo). A machine-global,
+daemon-embedded applet has no single ``current repository'' to resolve
+these settings against; a session does, because it has the session's own
+shell and working directory, exactly why \texttt{lux-beads} reads
+\texttt{bd} from the session's own repo rather than a fixed location.
+
+\subsection{Priorities and phasing}
+
+\pone{} is read-and-toggle for the three settings
+\texttt{config.md} already supports today (\texttt{session\_sync},
+\texttt{web\_fetch}, \texttt{compaction}), for the repository the current
+session is in. \ptwo{} extends to any additional repo-scoped setting that
+proves worth surfacing here once \pone{} ships (see \S~\ref{sec:scope}),
+and to any cross-session consistency concerns that only show up with more
+than one session open on the same repository at once.
+
+\subsection{Goals}
+
+\begin{itemize}
+  \item Let a user see and change this repository's quarry capture
+    settings without opening \texttt{config.md} in an editor or
+    remembering the YAML frontmatter's exact keys.
+  \item Never let a user believe a setting changed when it did not ---
+    what they see on screen after a click is always what is actually
+    true on disk, not an optimistic guess ahead of it. (The atomicity
+    and concurrency-safety this requires of the implementation, modeled
+    on \texttt{VoxPanelService}'s persist-then-reflect commit pattern, is
+    an engineering guarantee in service of this goal, not the goal
+    itself; see \fr{7}--\fr{9}.)
+  \item Surface a write failure as a specific, actionable notice rather
+    than a silently reverted toggle.
+\end{itemize}
+
+\subsection{Non-Goals}
+\label{sec:scope}
+
+\begin{itemize}
+  \item Enabling or disabling quarry for the repository at all. That is
+    \texttt{quarry enable}/\texttt{disable}'s job --- a CLI-driven,
+    git-tracked, per-repo policy decision (tool-enable-disable.md
+    \S2.7), deliberately not a lux toggle. This applet only appears, and
+    only has anything to control, once a repository is already enabled.
+  \item Search, or any view into indexed content. That is the companion
+    search applet's job (\texttt{quarry-lux-search-applet-prd.tex}).
+  \item Daemon-level status or control (health, restart, database
+    switching). That stays \texttt{quarry-menubar}'s job, and is
+    explicitly out of the companion search applet's scope too --- this
+    applet does not duplicate it either.
+  \item The shadow-repo setting \texttt{config.md} already supports
+    (pushing redacted captures to a private shadow repo). It is off by
+    default, more involved to toggle safely (it names a remote,
+    acknowledges an unverified-private state), and is deferred to
+    \ptwo{} pending its own use case, not silently folded into \pone{}'s
+    three simple booleans.
+\end{itemize}
+
+\subsection{Personas}
+
+\begin{description}
+  \item[The working session owner] Has a Claude Code session open in a
+    quarry-enabled repository and wants to quickly quiet or restore one
+    capture behavior --- most plausibly turning off web-fetch capture
+    before researching something sensitive, or off compaction capture
+    before a session they do not want transcribed. Primary persona for
+    \pone{}.
+  \item[The multi-repo user] Has several quarry-enabled repositories and
+    different capture preferences per repository (e.g.\ compaction
+    capture on for a personal project, off for a client repository), and
+    wants each session's panel to reflect \emph{that} repository's
+    settings, never another session's.
+\end{description}
+
+\section{Use Cases}
+
+Each use case names the actor, the trigger, the expected flow, and what
+``done well'' looks like. Functional requirements in \S\ref{sec:fr} cite
+the use cases they satisfy.
+
+\begin{description}
+
+\item[\uc{1} Open the panel for the current session's repository. \pone{}]
+  \emph{Actor: the working session owner.} A Claude Code session is open
+  in a quarry-enabled repository; the user clicks the applet's menu
+  entry. \emph{Done well:} the panel shows \emph{this} repository's
+  current settings, read fresh enough that a change made by hand
+  (editing \texttt{config.md} directly, or via \texttt{quarry enable}
+  re-run) since the panel last loaded is reflected, not stale.
+
+\item[\uc{2} Toggle a capture setting off. \pone{}] \emph{Actor: the
+  working session owner.} The user clicks a setting's toggle (e.g.\
+  \texttt{web\_fetch}) to turn it off. \emph{Done well:} the change is
+  written to \texttt{config.md} and confirmed back to the panel before
+  the toggle visually settles into its new state --- the panel never
+  shows an optimistic state the write has not actually confirmed,
+  matching \texttt{VoxPanelService}'s persist-then-reflect pattern.
+
+\item[\uc{3} Toggle a capture setting back on. \pone{}] \emph{Actor: the
+  working session owner.} Symmetric to \uc{2}. \emph{Done well:} same
+  guarantee in both directions; no setting is easier to turn off than to
+  restore.
+
+\item[\uc{4} A write fails. \pone{}] \emph{Actor: the working session
+  owner.} The toggle click happens but the write to \texttt{config.md}
+  fails (disk full, permissions, the file was deleted out from under the
+  session). \emph{Done well:} the panel shows the setting in its
+  \emph{actual} (unchanged) state and a specific notice naming what
+  failed, matching \texttt{PanelNotice}'s write-failure pattern --- never
+  a toggle that silently reverts with no explanation, and never a toggle
+  that stays visually ``on'' when the write that would have made it true
+  did not happen.
+
+\item[\uc{5} Open the panel with no quarry session context. \pone{}]
+  \emph{Actor: any user.} The applet is run unattended (no
+  \texttt{--session-pid}, matching \texttt{lux-beads}' and
+  \texttt{vox-panel}'s own \texttt{unattended()} path for a developer
+  running it by hand) or the working directory the session started in is
+  not a quarry-enabled repository. \emph{Done well:} the panel says
+  plainly that there is nothing to control here (not enabled, or no
+  repository context) rather than showing three toggles that silently do
+  nothing when clicked.
+
+\item[\uc{6} Two sessions, two repositories, two panels. \pone{}]
+  \emph{Actor: the multi-repo user.} The user has Claude Code sessions
+  open in two different quarry-enabled repositories at once, each with
+  its own panel instance. \emph{Done well:} each panel shows and controls
+  only its own session's repository; a change in one never appears in,
+  or affects, the other's panel.
+
+\item[\uc{7} The session ends. \pone{}] \emph{Actor: any user.} The
+  Claude Code session that spawned the panel closes (cleanly, or the
+  process dies). \emph{Done well:} the panel's process ends with it (the
+  parent-pid watch, matching \texttt{lux-beads}/\texttt{vox-panel}
+  exactly), and the Hub's menu entry for it disappears rather than
+  lingering as a dead click target.
+
+\item[\uc{8} Edit config.md by hand while the panel is open. \ptwo{}]
+  \emph{Actor: the working session owner.} The user (or another process)
+  edits \texttt{config.md} directly while the panel is showing stale
+  values. \emph{Done well:} the panel's next refresh (on its next click,
+  at minimum) picks up the external edit rather than overwriting it with
+  its own stale in-memory state on the next toggle.
+
+\end{description}
+
+\section{Functional Requirements}
+\label{sec:fr}
+
+Requirements are grouped by capability area. Each cites the use case(s) it
+exists to satisfy and carries the same \pone{}/\ptwo{} phase tag.
+
+\subsection{Applet lifecycle}
+
+\begin{description}
+  \item[\fr{1} \pone{}] The applet shall be spawned by the Claude Code
+    session-start hook, bound to that session's process id, and shall
+    terminate when that session's process ends (parent-pid watch),
+    matching \texttt{lux-beads}/\texttt{vox-panel}'s
+    \texttt{SessionClaim}/\texttt{SessionWatch} composition exactly.
+    (\uc{7})
+  \item[\fr{2} \pone{}] The applet shall support an unattended
+    (\texttt{--session-pid}-less) invocation for manual/developer use,
+    claiming nothing and outliving nothing, matching
+    \texttt{lux-beads}/\texttt{vox-panel}'s \texttt{unattended()} path.
+    (\uc{5})
+  \item[\fr{3} \pone{}] Each running instance of the applet shall resolve
+    and control only its own spawning session's repository; no shared
+    state shall leak between two concurrently running instances for
+    different repositories. (\uc{6})
+\end{description}
+
+\subsection{Reading settings}
+
+\begin{description}
+  \item[\fr{4} \pone{}] On open, the applet shall read the current
+    repository's \texttt{.punt-labs/quarry/config.md} and display the
+    live state of \texttt{session\_sync}, \texttt{web\_fetch}, and
+    \texttt{compaction}. (\uc{1})
+  \item[\fr{5} \pone{}] If the current repository has no
+    \texttt{.punt-labs/quarry/config.md} (quarry not enabled there), the
+    applet shall say so explicitly and show no toggles, rather than
+    showing toggles that write to a file that does not exist. (\uc{5})
+  \item[\fr{6} \ptwo{}] The applet shall re-read the config file on
+    demand (at minimum, on the next user-initiated refresh) so an
+    external edit is not silently overwritten by the panel's own next
+    write. (\uc{8})
+\end{description}
+
+\subsection{Changing settings}
+
+\begin{description}
+  \item[\fr{7} \pone{}] Clicking a setting's toggle shall persist the
+    change to \texttt{config.md} and only then update the displayed
+    state to match what was actually persisted --- never an optimistic
+    update ahead of the confirmed write. (\uc{2}, \uc{3})
+  \item[\fr{8} \pone{}] A failed write shall leave the displayed setting
+    at its last-confirmed (unchanged) value and shall show a specific
+    notice naming what failed, distinct from a generic error. (\uc{4})
+  \item[\fr{9} \pone{}] Every write shall be atomic with respect to the
+    in-memory state it updates --- two clicks in quick succession (or a
+    click racing an external edit) shall never leave the panel showing a
+    state that was never actually written, matching
+    \texttt{VoxPanelService}'s lock-serialized commit pattern. (\uc{2},
+    \uc{4}, \uc{8})
+\end{description}
+
+\section{Non-Functional Requirements}
+
+\begin{description}
+  \item[\nfr{1} \pone{}] The applet's own process footprint shall be
+    negligible enough that running one per open Claude Code session (the
+    multi-repo persona routinely has several) is not a practical
+    resource concern, matching \texttt{lux-beads}' and
+    \texttt{vox-panel}'s existing session-bound footprint.
+  \item[\nfr{2} \pone{}] A config write shall complete (success or a
+    reported failure) within a duration a user experiences as immediate
+    --- a toggle click should never leave the UI in an ambiguous
+    ``pending'' state for a perceptible interval under normal
+    conditions.
+\end{description}
+
+\section{Success Metric}
+
+Unlike the companion search-applet document, this feature extends an
+already-used mechanism (\texttt{config.md}, the session-start hook) rather
+than adding a wholly new surface, so the evidence bar is lower --- but a
+falsifiable claim still matters. The metric: once shipped, a non-trivial
+share of \texttt{config.md} auto-capture edits happen through this panel
+rather than by hand-editing the file. If toggles never happen through the
+panel while hand-edits continue, the panel has not actually replaced the
+friction it was built to remove, and \ptwo{} (additional settings beyond
+the three existing flags) is not justified until that is understood.
+
+\section{Open Questions}
+
+\begin{enumerate}
+  \item Exact menu entry shape and label --- a single ``Quarry'' entry
+    per session (mirroring \texttt{vox-panel}'s single ``Vox'' entry), or
+    something that also names the repository, given a user may have
+    several open at once (\uc{6})?
+  \item \textbf{Elevated by peer review; carried forward as Chapter 2,
+    \S2.5 Decision 3.} Is there a case for surfacing \emph{which}
+    setting most recently changed (an audit trail, even a short one), or
+    is the current-state view (\fr{4}) sufficient for \pone{}? This
+    question was originally scoped as a nice-to-have; Chapter 2 found it
+    is not one --- \S1.6's success metric cannot be measured without
+    some form of it.
+  \item \textbf{Still open; carried forward as Chapter 2, \S2.5 Decision
+    4.} Should the shadow-repo setting (deferred, \S~\ref{sec:scope}) be
+    scoped as a \ptwo{} addition to \emph{this} applet, or as its own
+    separate control surface given its extra safety considerations
+    (naming a remote, an unverified-private acknowledgment)?
+  \item \textbf{Resolved.} Packaging follows \texttt{vox-panel}'s own
+    precedent directly: \texttt{vox/pyproject.toml:55} registers
+    \texttt{vox-panel = "punt\_vox.panel.applet:app"} as a console-script
+    entry point inside vox's own existing package --- not a separate
+    repository, not a separate distribution. Quarry's control-panel
+    applet ships the same way: a new console script
+    (\texttt{quarry-panel}, naming TBD) inside quarry's existing package,
+    pointing at its own \texttt{applet:app}. See Chapter 2 for the full
+    packaging decision.
+\end{enumerate}
+
+\chapter{Technical Design Solution}
+
+This chapter resolves the open questions raised in Chapter 1 against the
+actual code of \texttt{lux-beads} and \texttt{vox-panel}, the two
+existing session-bound applets this one is modeled on directly. Nothing
+here is speculative where the cited source settles the question.
+
+\section{Component overview}
+
+A new \texttt{QuarryPanelApplet} (naming TBD), packaged as a console
+script inside quarry's existing distribution
+(\texttt{quarry-panel = "quarry.panel.applet:app"}, following
+\texttt{vox-panel}'s exact precedent, \texttt{vox/pyproject.toml:55}),
+spawned by the Claude Code session-start hook with
+\texttt{--session-pid}. Structurally identical to
+\texttt{VoxPanelApplet}/\texttt{BeadsApplet}
+(\texttt{vox/src/punt\_vox/panel/applet.py},
+\texttt{lux/src/punt\_lux/applets/beads.py}): a \texttt{typer} app, a
+\texttt{main()} command taking \texttt{--session-pid} (0 meaning
+unattended), and a class composing an \texttt{AppletProgram} from a
+\texttt{SessionClaim}/\texttt{NoClaim}, a leg, and a
+\texttt{SessionWatch}/\texttt{NoSession} via
+\texttt{for\_session()}/\texttt{unattended()} classmethods. Model this
+file directly on \texttt{vox-panel}'s \texttt{applet.py}, including its
+identity-naming caveat (\texttt{vox/src/punt\_vox/panel/applet.py:80-91}):
+the program token must ride in front of the session pid when deriving
+the applet's identity, or a second session-bound applet in the same
+repository (this one, alongside a future or coexisting \texttt{lux-beads}
+instance) would seed an identical connection hash and the second to
+connect would silently steal the first's Hub connection.
+
+\section{Settings service: the VoxPanelService precedent}
+
+\texttt{VoxPanelService} (\texttt{vox/src/punt\_vox/panel/service.py}) is
+the direct model for this applet's own settings service, not a loose
+inspiration --- read it in full before implementing. Three mechanisms to
+reuse exactly:
+
+\begin{description}
+  \item[Persist-then-reflect, under one lock] \texttt{\_commit(field,
+    value, update)} (\texttt{service.py:176-183}) writes to the config
+    store first, then updates the held in-memory state, both inside one
+    \texttt{threading.Lock} --- satisfying \fr{7} and \fr{9} directly. A
+    quarry equivalent commits one of the three \texttt{auto\_capture}
+    flags to \texttt{config.md} the same way.
+  \item[Write-failure notice, not silent revert] \texttt{PanelNotice}
+    (referenced throughout \texttt{service.py}, e.g.\
+    \texttt{recover\_from\_write\_failure} at line 125) carries a
+    specific, composed reason for a failed write, read back into the
+    pushed scene rather than silently reverting the toggle. Satisfies
+    \fr{8} directly.
+  \item[Re-check under the lock after any out-of-lock I/O]
+    \texttt{\_commit\_provider}'s pattern (\texttt{service.py:243-304}) of
+    fetching outside the lock, then re-checking state under the lock
+    before committing, applies even though quarry's config write is
+    local-disk I/O rather than a daemon round trip: a second click
+    racing the first's write must not clobber it with stale
+    pre-fetch state. Satisfies \fr{9}'s atomicity requirement precisely,
+    not just in spirit.
+\end{description}
+
+\section{What the quarry version does \emph{not} need}
+
+\texttt{VoxPanelService} carries real complexity
+(\texttt{\_commit\_provider}/\texttt{\_commit\_model}'s cascade logic,
+roster fetches over the network, a six-topic
+\texttt{PanelTopic} enum --- \texttt{NOTIFY}, \texttt{MIC\_MODE},
+\texttt{VOICE}, \texttt{VOICE\_PREVIEW}, \texttt{PROVIDER},
+\texttt{MODEL}, \texttt{vox/src/punt\_vox/panel/topics.py:28-33}) that
+this applet's three independent boolean
+flags do not require --- \texttt{session\_sync}, \texttt{web\_fetch}, and
+\texttt{compaction} (per \texttt{src/quarry/enable.py}'s
+\texttt{\_CONFIG\_TEMPLATE}) have no cascading defaults between them and
+no roster to fetch. The quarry service is simpler: one topic per flag,
+or one topic carrying a field name, is sufficient --- do not import
+\texttt{VoxPanelService}'s cascade machinery wholesale where the simpler
+three-independent-flags shape does not need it.
+
+\section{Reading and writing config.md}
+
+Reuse \texttt{src/quarry/enable.py}'s \texttt{\_CONFIG\_TEMPLATE} field
+names and YAML frontmatter shape directly --- this applet reads and
+writes the same file \texttt{quarry enable} already creates, never a
+second config surface. \textbf{Correction, peer review:} the existing
+frontmatter \emph{reader} is not in \texttt{enable.py} (which only holds
+the static template string and an exclusive-create writer,
+\texttt{\_write\_project\_config}, that refuses to touch an existing
+file) --- it is \texttt{load\_hook\_config()}/\texttt{HookConfig} in
+\texttt{src/quarry/\_stdlib.py}, built on the hand-rolled, stdlib-only
+parser \texttt{Frontmatter} in \texttt{src/quarry/\_frontmatter.py}.
+Reuse \emph{that} reader, not anything in \texttt{enable.py}.
+
+\textbf{No write-back mechanism exists anywhere in quarry today, and
+this is a real gap, not a citation nit.} \texttt{Frontmatter} and
+\texttt{HookConfig} are read-only --- neither has a \texttt{dump},
+\texttt{write}, or \texttt{serialize} method (confirmed: no such method
+exists in either module). \fr{7}--\fr{9} require a genuine
+read-modify-write that changes exactly one field and preserves
+everything else in the file --- comments, and in particular a user's
+hand-edited \texttt{shadow:} block, which \S~\ref{sec:scope} explicitly
+keeps out of this applet's own writes but which a naive
+whole-file-regenerate-from-\texttt{\_CONFIG\_TEMPLATE} write would
+silently destroy. This is a real design gap with real user-facing risk
+and is named explicitly in ``Decisions required,'' below --- it is new
+code this applet needs, not reuse of something that already exists.
+
+\section{Decisions required before implementation}
+
+\begin{enumerate}
+  \item \textbf{Session-repo resolution.} \texttt{vox-panel} resolves its
+    repo-scoped config directory via \texttt{find\_config\_dir()}
+    (\texttt{vox/src/punt\_vox/panel/applet.py:93}). Quarry's equivalent
+    --- resolving \emph{which} repository's
+    \texttt{.punt-labs/quarry/config.md} to read --- needs its own
+    lookup, presumably from the session's working directory the
+    session-start hook already knows. Confirm quarry has (or needs) an
+    equivalent to \texttt{find\_config\_dir()} before implementation
+    starts.
+  \item \textbf{Menu entry naming.} Chapter 1's open question (a single
+    ``Quarry'' entry per session, vs.\ one naming the repository) is not
+    resolved here --- it is a product decision (\uc{6}), not a technical
+    one, and stays open pending the operator's call.
+  \item \textbf{Write provenance, required by the Success Metric.} Peer
+    review found that \S1.6's success metric --- a non-trivial share of
+    \texttt{config.md} edits happening through this panel rather than by
+    hand --- cannot be measured by the design in \S2.2 as written: a
+    \texttt{VoxPanelService}-style persist-then-reflect write does not,
+    by itself, distinguish a panel-driven write from a hand edit that
+    happened to touch the same field. This needs the (previously
+    optional-seeming) audit-trail question above resolved as a real
+    decision, not deferred: at minimum, the write path needs to record
+    \emph{something} attributable to this applet --- a comment line in
+    the YAML frontmatter, a sibling marker file, or an event logged
+    elsewhere --- before the metric is observable at all. Design this
+    alongside whatever the audit-trail decision above settles on, not
+    separately.
+  \item \textbf{Shadow-repo setting scope.} Chapter 1's open question (a
+    \ptwo{} addition to this applet, or its own surface) is not resolved
+    here; it needs its own use case and functional requirements if it is
+    folded into this applet's scope, given its extra safety
+    considerations (\S~\ref{sec:scope}).
+  \item \textbf{Config.md write-back mechanism, required before
+    \fr{7}--\fr{9} can be implemented at all.} No component in quarry
+    today can rewrite one field of \texttt{config.md} while preserving
+    the rest of the file. \texttt{Frontmatter}/\texttt{HookConfig}
+    (\texttt{src/quarry/\_frontmatter.py}, \texttt{\_stdlib.py}) are
+    read-only; \texttt{enable.py}'s writer only creates a fresh file and
+    refuses to touch an existing one. This applet needs a genuine
+    round-trip-preserving write path built new --- specifically one that
+    does not silently discard a user's hand-edited \texttt{shadow:}
+    block or comments when toggling one of the three
+    \texttt{auto\_capture} flags. Whether this write path lives in
+    \texttt{\_frontmatter.py} (extending the existing parser with a
+    matching serializer) or is new, applet-local code is an open
+    implementation decision; that it must exist and must be
+    round-trip-preserving is not optional.
+\end{enumerate}
+
+\section{Known unknowns}
+
+Whether \fr{6}'s re-read-on-refresh (\ptwo{}) can reuse
+\texttt{VoxPanelService.refresh()}'s resync pattern unchanged, or needs a
+different trigger given quarry's config file has no daemon to poll
+against (vox's resync re-reads \emph{and} calls \texttt{voxd}; quarry's
+would only ever re-read a local file), is untested and should be
+confirmed once \pone{} implementation starts, not assumed identical.
+
+\end{document}

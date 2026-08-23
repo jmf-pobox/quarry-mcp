@@ -8,6 +8,29 @@ tools:
   - Bash
   - Grep
   - Glob
+  - mcp__plugin_quarry_quarry__find
+  - mcp__plugin_quarry_quarry__remember
+  - mcp__plugin_quarry_quarry__show
+  - mcp__plugin_quarry_quarry__ingest
+  - mcp__plugin_quarry_quarry__use
+  - mcp__plugin_quarry_quarry__status
+  - mcp__plugin_quarry_quarry__list
+  - mcp__plugin_biff_tty__plan
+  - mcp__plugin_biff_tty__read_messages
+  - mcp__plugin_ethos_self__identity
+  - mcp__plugin_ethos_self__session
+  - mcp__plugin_quarry-dev_quarry__find
+  - mcp__plugin_quarry-dev_quarry__remember
+  - mcp__plugin_quarry-dev_quarry__show
+  - mcp__plugin_quarry-dev_quarry__ingest
+  - mcp__plugin_quarry-dev_quarry__use
+  - mcp__plugin_quarry-dev_quarry__status
+  - mcp__plugin_quarry-dev_quarry__list
+  - mcp__plugin_biff-dev_tty__plan
+  - mcp__plugin_biff-dev_tty__read_messages
+  - mcp__plugin_ethos-dev_self__identity
+  - mcp__plugin_ethos-dev_self__session
+model: "sonnet"
 skills:
   - baseline-ops
 hooks:
