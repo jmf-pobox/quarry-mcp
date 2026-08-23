@@ -267,14 +267,8 @@ systemctl --user restart quarry
 
 ## Development
 
-| Command | Purpose |
-|---------|---------|
-| `uv sync` | Install dependencies |
-| `make check` | All quality gates (lint, type, test, ratchets) |
-| `make test` | Test suite only |
-| `make format` | Auto-format |
-| `make docs` | Build the LaTeX documents |
-| `make eval` | Retrieval-quality eval harness (MRR/success@k) |
+Quality gates, architecture notes, and the PR process are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
