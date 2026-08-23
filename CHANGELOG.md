@@ -60,6 +60,22 @@ across `transform`, `index`, and `connector`).
   daemon serves `https://`, not `http://` — the example as written would
   fail against a typical install. Fixed to `https://` with `--cacert`
   against the generated local CA.
+- `tool`: README's CLI table said `quarry register <dir>` "watches" a
+  directory but never said how — an operator asked directly whether sync
+  runs on a cron. It doesn't: `quarryd` runs a live, debounced filesystem
+  watch (`src/quarry/daemon/watch_loop.py`, `watch_debounce_s` in
+  `config.py`, default 1.0s) plus a 5-minute periodic safety sweep as a
+  backstop (`src/quarry/daemon/watch_reconcile.py`, `watch_safety_scan_s`,
+  default 300s). Added a sentence after the CLI table.
+- `tool`: moved README's Development section (the `make check`/`test`/
+  `format`/`docs`/`eval` command table) into `CONTRIBUTING.md`'s existing
+  Quality Gates section, which now also lists every `check-*` ratchet
+  `make check` actually runs (`check-oo`, `check-coupling`,
+  `check-suppressions`, `check-imports`, `check-openapi` — the old text
+  only named lint/type/test). README's Development section is now a
+  one-line pointer, per the required-section rule that it stay present but
+  the "no narrative Contributing content in README" rule that its detail
+  belongs in `CONTRIBUTING.md`.
 
 ## [3.0.3] - 2026-08-22
 

@@ -16,7 +16,19 @@ Every commit must pass:
 make check
 ```
 
-This runs lint, type checking, and tests in one command (`make lint` + `make type` + `make test`).
+This runs lint, type checking, tests, and the OO/coupling/suppression ratchets
+in one command (`make lint` + `make type` + `make test` + `make check-oo` +
+`make check-coupling` + `make check-suppressions` + `make check-imports` +
+`make check-openapi`).
+
+| Command | Purpose |
+|---------|---------|
+| `uv sync --extra dev` | Install dependencies |
+| `make check` | All quality gates |
+| `make test` | Test suite only |
+| `make format` | Auto-format |
+| `make docs` | Build the LaTeX documents |
+| `make eval` | Retrieval-quality eval harness (MRR/success@k) |
 
 ## Branch Discipline
 

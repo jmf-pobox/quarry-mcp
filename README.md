@@ -172,6 +172,12 @@ Search by meaning:
 
 Agent-memory tagging is available on `ingest`/`remember`/`find` via `--agent-handle`, `--memory-type`, and `--summary`.
 
+A registered directory isn't cron-driven — `quarryd` runs a live filesystem
+watch (debounced, ~1s) that reacts to changes as they happen, backed by a
+5-minute periodic safety sweep (catches anything the watch missed, self-heals
+the search index). `quarry sync` triggers an immediate
+one-shot pass on top of that; you don't need to run it after every edit.
+
 ### HTTP API
 
 `quarryd` also exposes a REST API — every CLI/MCP operation is a thin client
@@ -261,14 +267,8 @@ systemctl --user restart quarry
 
 ## Development
 
-| Command | Purpose |
-|---------|---------|
-| `uv sync` | Install dependencies |
-| `make check` | All quality gates (lint, type, test, ratchets) |
-| `make test` | Test suite only |
-| `make format` | Auto-format |
-| `make docs` | Build the LaTeX documents |
-| `make eval` | Retrieval-quality eval harness (MRR/success@k) |
+Quality gates, architecture notes, and the PR process are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
