@@ -46,7 +46,9 @@ quarry doctor
 </details>
 
 <details>
-<summary>Homebrew (macOS, Linux)</summary>
+<summary>Homebrew (Apple Silicon macOS, Linux)</summary>
+
+The formula supports Apple Silicon macOS and Linux — no Intel macOS wheel is available for two of quarry's dependencies. Intel Mac users should use the [Quick Start](#quick-start) installer or `uv tool install punt-quarry` instead.
 
 `brew install` puts the `quarry`, `quarryd`, and `quarry-hook` binaries on `PATH`. Run `quarry install` afterward for the model download, TLS certificates, and daemon service:
 
@@ -62,7 +64,7 @@ claude plugin marketplace add punt-labs/claude-plugins
 claude plugin install quarry@punt-labs
 ```
 
-Use one distribution channel per machine — mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH` in different locations, and whichever comes first wins. `quarry doctor` reports the shadowing if it happens.
+Use one distribution channel per machine — mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH` in different locations, and whichever comes first wins. Run `which quarry` (or `command -v quarry`) to see which one that is.
 
 </details>
 
