@@ -2580,7 +2580,11 @@ explicitly pinned.
 `lancedb` and `onnxruntime` — quarry's vector-index and embedding-inference
 engines — publish **no sdist at all** on PyPI; they ship prebuilt wheels only,
 and at the versions quarry pins, neither publishes a **macOS x86_64 (Intel)**
-wheel. `pymupdf` does publish an sdist, but building it means compiling a
+wheel. This is not a Homebrew-specific gap — `uv tool install`/`pip install`
+hits the identical missing-wheel failure on Intel macOS, since pip has no
+sdist to fall back to either. Homebrew's build-from-source model is simply
+what surfaced it first. `pymupdf` does publish an sdist, but building it
+means compiling a
 full MuPDF + Tesseract + a dozen vendored C libraries from source — one of
 the heaviest builds in the Python ecosystem, and not a path PyMuPDF's own
 release process exercises. Two tree-sitter grammar packages
