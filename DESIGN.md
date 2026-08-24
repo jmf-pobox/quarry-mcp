@@ -2563,3 +2563,92 @@ time.** There is no marketplace mechanism for it. `git-subdir` *is* the
 mechanism, and it requires the content to be in a subdirectory. It also raises
 the client floor to Claude Code ≥ v2.1.69, which is accepted as the punt-labs
 baseline.
+
+---
+
+## DES-051: Homebrew distribution — Apple Silicon + Linux only, hand-pinned wheels for the sdist-hostile dependencies
+
+**Context.** `Formula/quarry.rb` in `punt-labs/homebrew-tap` was an
+unfinished scaffold (placeholder sha256, no resource blocks). Finishing it —
+the second real-world test of `punt-kit/patterns/homebrew-pypi-formula.md`'s
+recipe, after `punt-biff` — surfaced two problems the recipe didn't
+anticipate, both stemming from Homebrew's `Language::Python::Virtualenv`
+model: every dependency is built from its PyPI **sdist** inside the formula's
+own sandboxed venv, with no `pip install <wheel>` fallback for anything not
+explicitly pinned.
+
+`lancedb` and `onnxruntime` — quarry's vector-index and embedding-inference
+engines — publish **no sdist at all** on PyPI; they ship prebuilt wheels only,
+and at the versions quarry pins, neither publishes a **macOS x86_64 (Intel)**
+wheel. This is not a Homebrew-specific gap — `uv tool install`/`pip install`
+hits the identical missing-wheel failure on Intel macOS, since pip has no
+sdist to fall back to either. Homebrew's build-from-source model is simply
+what surfaced it first. `pymupdf` does publish an sdist, but building it
+means compiling a
+full MuPDF + Tesseract + a dozen vendored C libraries from source — one of
+the heaviest builds in the Python ecosystem, and not a path PyMuPDF's own
+release process exercises. Two tree-sitter grammar packages
+(`tree-sitter-c-sharp`, `tree-sitter-yaml`) build from sdist without error but
+produce broken extensions: the build compiles `parser.c` but not the
+grammar's external `scanner.c`, so the `.so` dlopens fine and crashes on the
+first real parse — a defect only `quarry doctor` driven against the installed
+binary caught, not `brew test` or the build step itself.
+
+**Decision.** Two decisions, made together because the first caused the
+second:
+
+1. **Platform scope is Apple Silicon + Linux (both arches), not universal
+   macOS.** `on_macos { depends_on arch: :arm64 }` refuses Intel outright
+   rather than silently shipping a formula that fails to resolve
+   `lancedb`/`onnxruntime` on that one platform. Operator-ruled 2026-08-23
+   after presenting the fork (arm64-only / pin older deps / hand-roll wheel
+   install / drop Homebrew for quarry).
+2. **Five dependencies are hand-pinned `resource` blocks with per-platform
+   (`on_macos` / `on_linux { on_arm / on_intel }`) wheel URLs and shas**,
+   pip-installed directly against the wheel file rather than run through
+   `virtualenv_install_with_resources`'s automatic sdist path: `lancedb`,
+   `onnxruntime`, `pymupdf`, `tree-sitter-c-sharp`, `tree-sitter-yaml`. The
+   other ~85 dependencies still regenerate mechanically via
+   `brew update-python-resources --ignore-main-package-cooldown
+   --ignore-errors` on every release bump; only these five need
+   hand-maintenance, and only because their upstream distribution or sdist
+   build is broken in a way no `depends_on` line can fix.
+
+**`--ignore-errors`, not `--exclude-packages`, for the mechanical pass.** The
+first attempt used `--exclude-packages=lancedb,onnxruntime,...` to let the
+generator skip the five broken packages and still auto-generate the rest.
+It silently cascade-dropped unrelated dependencies (`pyarrow`, `numpy`,
+`pydantic`, `protobuf`, `typing-extensions`) whose *first* discovery path in
+the resolver's graph traversal happened to run through an excluded package,
+even though they're independently required. `--ignore-errors` instead
+records every package it *can* resolve and only flags the genuinely
+unresolvable ones with a `RESOURCE-ERROR` comment — the five above, and
+nothing else. Silent scope-narrowing from a flag with a plausible-sounding
+name is the failure mode to watch for here if this formula is touched again.
+
+**Also fixed, not a design decision but recorded so it isn't rediscovered:**
+the formula's `service do` block invoked `quarry serve --port 8420`, a
+subcommand quarry has never had — the daemon is the separate `quarryd`
+console-script entry point declared in `pyproject.toml`. And `tokenizers`
+(pyo3 + tokio) didn't pick up the `-undefined,dynamic_lookup` linker flag
+other pyo3 crates in the same build got automatically, requiring an explicit
+`RUSTFLAGS` override on macOS only.
+
+**Rejected: pin `lancedb`/`onnxruntime` to older releases with broader wheel
+coverage.** Would diverge the Homebrew install from the version quarry
+actually ships and tests against, and only defers the problem to the next
+release bump.
+
+**Rejected: hand-roll wheel installation for the whole formula**, abandoning
+`virtualenv_install_with_resources` entirely. Throws away the mechanical
+85-package regeneration path for a problem that only affects five packages.
+
+**Rejected: drop Homebrew distribution for quarry.** Considered and rejected
+by the operator — ML/Rust-heavy dependency trees don't fit
+`Language::Python::Virtualenv` as cleanly as a pure-Python CLI like `biff`,
+but the formula does build and pass its own tests plus a live `quarry doctor`
+run against the installed binary; the extra hand-pinned resources are a
+maintenance cost, not a blocker.
+
+See `punt-labs/homebrew-tap` PR #34 and `punt-kit/patterns/homebrew-pypi-
+formula.md`'s "Known failure mode" section for the full technical detail.

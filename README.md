@@ -10,7 +10,7 @@
 
 Quarry indexes documents in 20+ formats, embeds them with a local ONNX model (snowflake-arctic-embed-m-v1.5), stores the vectors in LanceDB, and serves semantic search to Claude Code, Claude Desktop, and the command line. Everything runs locally — no API keys, no cloud accounts. One `quarryd` daemon per machine loads the model once; the CLI, the MCP server, and the Claude Code hooks are thin clients over it, reachable directly too via an HTTP API.
 
-**Platforms:** macOS, Linux
+**Platforms:** macOS (Apple Silicon), Linux
 
 ## Quick Start
 
@@ -42,6 +42,29 @@ Check health:
 ```bash
 quarry doctor
 ```
+
+</details>
+
+<details>
+<summary>Homebrew (Apple Silicon macOS, Linux)</summary>
+
+Intel macOS is not currently supported by any install path — two of quarry's dependencies (`lancedb`, `onnxruntime`) publish no Intel macOS wheel, so `uv tool install`/`pip install` fails there the same way `brew install` does.
+
+`brew install` puts the `quarry`, `quarryd`, and `quarry-hook` binaries on `PATH`. Run `quarry install` afterward for the model download, TLS certificates, and daemon service:
+
+```bash
+brew install punt-labs/tap/quarry
+quarry install
+```
+
+To add the Claude Code plugin too:
+
+```bash
+claude plugin marketplace add punt-labs/claude-plugins
+claude plugin install quarry@punt-labs
+```
+
+Use one distribution channel per machine — mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH` in different locations, and whichever comes first wins. Run `which quarry` (or `command -v quarry`) to see which one that is.
 
 </details>
 
