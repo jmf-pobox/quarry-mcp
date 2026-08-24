@@ -46,6 +46,27 @@ quarry doctor
 </details>
 
 <details>
+<summary>Homebrew (macOS, Linux)</summary>
+
+`brew install` puts the `quarry`, `quarryd`, and `quarry-hook` binaries on `PATH`. Run `quarry install` afterward for the model download, TLS certificates, and daemon service:
+
+```bash
+brew install punt-labs/tap/quarry
+quarry install
+```
+
+To add the Claude Code plugin too:
+
+```bash
+claude plugin marketplace add punt-labs/claude-plugins
+claude plugin install quarry@punt-labs
+```
+
+Use one distribution channel per machine — mixing Homebrew with the `curl | sh` installer puts two copies of `quarry` on `PATH` in different locations, and whichever comes first wins. `quarry doctor` reports the shadowing if it happens.
+
+</details>
+
+<details>
 <summary>CLI only (skip the Claude Code plugin)</summary>
 
 For non-Claude harnesses (Codex, Cursor, a plain terminal) or Claude Code users whose org policy blocks marketplace/plugin installs, `--no-plugin` installs everything except the marketplace-register and plugin-install steps:
