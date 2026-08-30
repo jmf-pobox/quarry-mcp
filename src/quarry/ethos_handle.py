@@ -1,10 +1,9 @@
 """Resolve the agent handle from the ethos sidecar config at a given directory.
 
-Two callers today: ``PreCompact`` tags captures with the resident agent's
-handle, and the ``memory`` doctor check asks whether the current repo has an
-ethos identity active. Both walk the same tree looking for the same file, so
-the walker lives in one place — anything else invites drift between the write
-path and the diagnostic.
+Sole caller today: the ``memory`` doctor check asks whether the current repo
+has an ethos identity active. ``hooks.py`` still carries its own inline walker
+that a follow-up unit migrates onto this helper; keeping the walker in one
+place from the start prevents drift once the write path lands here.
 """
 
 from __future__ import annotations

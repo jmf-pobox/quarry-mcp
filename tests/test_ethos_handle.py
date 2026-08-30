@@ -1,8 +1,8 @@
-"""Behavior of :func:`quarry.ethos_handle.read_agent_handle`.
+"""Behavior of :meth:`quarry.ethos_handle.EthosConfig.agent_handle_at`.
 
-Fresh module without a caller yet — hooks.py still carries its own inline
-walker under a temporary duplication that the follow-up bead resolves. Until
-then this suite is the sole exercise of the shared helper.
+Fresh module with one caller today (``doctor_memory``); ``hooks.py`` still
+carries its own inline walker that a follow-up unit migrates onto this helper.
+Until then this suite is the sole exercise of the shared walker.
 """
 
 from __future__ import annotations
