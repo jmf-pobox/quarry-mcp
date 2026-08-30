@@ -1,4 +1,12 @@
-"""Deposit quarry's vendored repo user-guide under the tool subtree."""
+"""Own quarry's vendored repo user-guide and its ``@``-import contract.
+
+The host ``CLAUDE.md`` is user-owned prose: the only mutation any tool may
+make is to add or remove a single ``@``-import line pointing at a file the
+tool owns entirely. See ``punt-kit/standards/tool-enable-disable.md`` (§ 2.1
+host is user-owned, § 2.3 deposit + import, § 2.4 canonical import string).
+No marker blocks, no fenced sections, no rendered copies of ``_GUIDE`` in
+any host file — the ``@``-import composes at read time.
+"""
 
 from __future__ import annotations
 
