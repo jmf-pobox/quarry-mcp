@@ -374,6 +374,51 @@ class TestRemember:
         assert "note.md" in result
         assert "task" in result
 
+    def test_default_collection_is_empty_on_wire(self, harness: _ToolHarness) -> None:
+        """MCP ``remember`` without ``collection`` sends the empty sentinel.
+
+        The daemon chokepoint owns the routing rule (bug class 3): the surfaces
+        must send ``collection=""`` when the caller does not name one, so the
+        server-side rule is the single source of truth.
+        """
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(str(body.get("collection", "<missing>")))
+            return real_route(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember("body", "note.md", agent_handle="rmh")
+
+        assert captured == [""]
+
+    def test_agent_handle_routes_to_memory_collection(
+        self, harness: _ToolHarness
+    ) -> None:
+        """End-to-end: MCP remember with an agent_handle lands in ``memory-<h>``.
+
+        Bug-class-3 equivalence check: the CLI/MCP/HTTP surfaces must all reach
+        the same server-side rule, so the observable outcome (the job's target
+        collection) must be identical to the CLI path.
+        """
+        captured: list[str] = []
+        real_route = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._remember_job
+
+        def spy(self: object, body: dict[str, object]) -> object:
+            job = real_route(self, body)
+            captured.append(getattr(job, "collection", "<not-a-job>"))
+            return job
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._remember_job", spy):
+            harness.tools.remember("body", "note.md", agent_handle="rmh")
+
+        assert captured == ["memory-rmh"]
+
 
 class TestIngest:
     def test_non_url_points_to_register(self, harness: _ToolHarness) -> None:

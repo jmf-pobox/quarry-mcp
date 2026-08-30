@@ -92,8 +92,16 @@ class IngestCli:
             str, typer.Option("--name", "-n", help="Document name (required)")
         ] = "",
         collection: Annotated[
-            str, typer.Option("--collection", "-c", help="Collection name")
-        ] = "default",
+            str,
+            typer.Option(
+                "--collection",
+                "-c",
+                help=(
+                    "Collection name. Leave empty to route by --agent-handle "
+                    "(memory-<handle>) or fall back to 'default'."
+                ),
+            ),
+        ] = "",
         format_hint: Annotated[
             str,
             typer.Option("--format", help="Format hint: auto, plain, markdown, latex"),
