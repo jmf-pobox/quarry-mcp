@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import multiprocessing
 from pathlib import Path
+from typing import Self, final
 
 import pytest
 
+from quarry.api import (
+    DeleteCollectionRequest,
+    DeregisterAccepted,
+    DeregisterRequest,
+    RegistrationList,
+    TaskAccepted,
+)
 from quarry.claude_import import ClaudeMdImport
 from quarry.enable import disable_project
 from quarry.enabled_marker import EnabledMarker
@@ -279,6 +287,7 @@ def test_concurrent_enable_disable_never_strands_marker(tmp_path: Path) -> None:
 # ── disable_project step ordering: § 2.11 commit point before deregister ────
 
 
+@final
 class _OrderingRecorder:
     """Record the ordinal at which each disable step fires.
 
@@ -288,18 +297,25 @@ class _OrderingRecorder:
     fail if either half of the ordering regresses.
     """
 
-    __slots__ = ("_next", "calls")
+    __slots__ = ("_calls", "_next")
 
-    calls: list[str]
+    _calls: list[str]
     _next: int
 
-    def __init__(self) -> None:
-        self.calls = []
+    def __new__(cls) -> Self:
+        self = super().__new__(cls)
+        self._calls = []
         self._next = 0
+        return self
+
+    @property
+    def calls(self) -> list[str]:
+        """Return the step names recorded so far, in call order."""
+        return self._calls
 
     def record(self, name: str) -> int:
         self._next += 1
-        self.calls.append(name)
+        self._calls.append(name)
         return self._next
 
 
@@ -331,17 +347,21 @@ class TestDisableProjectOrdering:
         real_deregister = FakeRegistryClient.deregister
         real_delete = FakeRegistryClient.delete_collection
 
-        def spy_list(self: FakeRegistryClient) -> object:
+        def spy_list(self: FakeRegistryClient) -> RegistrationList:
             recorder.record("list_registrations")
             return real_list(self)
 
-        def spy_deregister(self: FakeRegistryClient, req: object) -> object:
+        def spy_deregister(
+            self: FakeRegistryClient, req: DeregisterRequest
+        ) -> DeregisterAccepted:
             recorder.record("deregister")
-            return real_deregister(self, req)  # type: ignore[arg-type]
+            return real_deregister(self, req)
 
-        def spy_delete(self: FakeRegistryClient, req: object) -> object:
+        def spy_delete(
+            self: FakeRegistryClient, req: DeleteCollectionRequest
+        ) -> TaskAccepted:
             recorder.record("delete_collection")
-            return real_delete(self, req)  # type: ignore[arg-type]
+            return real_delete(self, req)
 
         monkeypatch.setattr(Enablement, "disable", spy_disable)
         monkeypatch.setattr(FakeRegistryClient, "list_registrations", spy_list)
