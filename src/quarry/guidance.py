@@ -66,4 +66,11 @@ class Guidance:
     @staticmethod
     def _guide_text() -> str:
         package, resource = _GUIDE_RESOURCE
-        return files(package).joinpath(resource).read_text(encoding="utf-8")
+        try:
+            return files(package).joinpath(resource).read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError) as exc:
+            msg = (
+                f"quarry vendored guide not found: expected {package}:{resource}. "
+                "This is a packaging bug — the wheel must ship the data package."
+            )
+            raise RuntimeError(msg) from exc
