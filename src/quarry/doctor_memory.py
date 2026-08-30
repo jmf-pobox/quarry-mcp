@@ -13,8 +13,6 @@ from functools import partial
 from pathlib import Path
 from typing import final
 
-from quarry.db.facade import Database
-from quarry.db.schema import TABLE_NAME
 from quarry.ethos_handle import EthosConfig
 from quarry.results import CheckResult
 
@@ -141,8 +139,13 @@ class MemoryDiagnostics:
 
         The single point that opens the LanceDB facade — both checks funnel
         through here so the "no table yet" signal is a single empty list, not
-        two independent conditionals.
+        two independent conditionals. The import stays lazy so this
+        client-reachable module never pulls the engine onto the hot path
+        (see the `.importlinter` exception for `quarry.doctor_memory`).
         """
+        from quarry.db.facade import Database  # noqa: PLC0415
+        from quarry.db.schema import TABLE_NAME  # noqa: PLC0415
+
         database = Database.connect(db_path)
         if TABLE_NAME not in database.db.list_tables().tables:
             return []
