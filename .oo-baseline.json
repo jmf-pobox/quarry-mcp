@@ -2342,10 +2342,10 @@
   "src/quarry/retrieval/fusion.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 2.4,
+    "avg_params": 2.17,
     "max_complexity": 5.0,
-    "avg_complexity": 3.0,
-    "module_size": 93.0,
+    "avg_complexity": 2.83,
+    "module_size": 105.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

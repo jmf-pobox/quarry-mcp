@@ -193,7 +193,7 @@ class MemoryDiagnostics:
 **`corpus` output.** Non-failing informational check
 (`required=False`). Message is one line per non-empty group:
 
-```
+```text
 memory: rmh=42 claude=18 kpz=7; types: fact=30 observation=25 procedure=12;
 collections: memory-rmh=42 memory-claude=18 quarry-captures=8 …
 ```
@@ -213,7 +213,7 @@ already in `hooks.py:377-408` — extract to
 the hook share it. If the handle is set AND the current registration's
 collection has chunks AND that handle has zero rows in the database:
 
-```
+```text
 identity 'rmh' active in this repo but has zero memory rows; check that
 ethos config resolves and PreCompact fires
 ```
