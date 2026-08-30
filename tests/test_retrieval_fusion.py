@@ -10,7 +10,12 @@ from quarry.retrieval import RrfFusion
 
 
 def _row(
-    name: str, *, chunk: int = 0, memory_type: str = "", ts: object = ""
+    name: str,
+    *,
+    chunk: int = 0,
+    memory_type: str = "",
+    agent_handle: str = "",
+    ts: object = "",
 ) -> dict[str, object]:
     return {
         "document_name": name,
@@ -18,6 +23,7 @@ def _row(
         "page_number": 1,
         "text": name,
         "memory_type": memory_type,
+        "agent_handle": agent_handle,
         "ingestion_timestamp": ts,
         "_distance": 0.1,
     }
@@ -49,14 +55,64 @@ class TestFuse:
     def test_decay_lifts_recent_decayable_row(self) -> None:
         """With decay, a recent fact overtakes an older, higher-ranked fact."""
         now = datetime.now(tz=UTC)
-        old = _row("old", chunk=0, memory_type="fact", ts=now - timedelta(days=30))
-        recent = _row("recent", chunk=1, memory_type="fact", ts=now)
+        old = _row(
+            "old",
+            chunk=0,
+            memory_type="fact",
+            agent_handle="rmh",
+            ts=now - timedelta(days=30),
+        )
+        recent = _row("recent", chunk=1, memory_type="fact", agent_handle="rmh", ts=now)
 
         no_decay = RrfFusion(rrf_k=60, decay_rate=0.0).fuse([old, recent], [], limit=2)
         assert no_decay[0].document_name == "old"  # rank order wins without decay
 
         decayed = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
         assert decayed[0].document_name == "recent"
+
+    def test_empty_agent_handle_never_decays(self) -> None:
+        """A chunk tagged with a decayable ``memory_type`` but no ``agent_handle``
+        must be exempt from decay — knowledge is not memory.
+        """
+        now = datetime.now(tz=UTC)
+        # Both rows carry ``memory_type="fact"``; only agent-owned rows should
+        # decay. A bulk-ingested document may pick up the tag and must not lose
+        # rank to a fresh row on that basis alone.
+        old_knowledge = _row(
+            "old", chunk=0, memory_type="fact", ts=now - timedelta(days=30)
+        )
+        recent_knowledge = _row("recent", chunk=1, memory_type="fact", ts=now)
+
+        fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse(
+            [old_knowledge, recent_knowledge], [], limit=2
+        )
+        assert fused[0].document_name == "old"
+
+    def test_empty_agent_handle_and_no_type_never_decays(self) -> None:
+        """A pure knowledge chunk (no handle, no type) never decays."""
+        now = datetime.now(tz=UTC)
+        old = _row("old", chunk=0, ts=now - timedelta(days=30))
+        recent = _row("recent", chunk=1, ts=now)
+
+        fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
+        assert fused[0].document_name == "old"
+
+    def test_null_agent_handle_never_decays(self) -> None:
+        """``agent_handle=None`` must be treated as absent, not the literal ``"None"``.
+
+        LanceDB returns ``None`` for NULL columns; ``str(None) == "None"`` is
+        truthy, so a naive check would decay knowledge chunks whose handle is
+        NULL rather than empty-string.
+        """
+        now = datetime.now(tz=UTC)
+        old_ts = now - timedelta(days=30)
+        old = dict(_row("old", chunk=0, memory_type="fact", ts=old_ts))
+        old["agent_handle"] = None
+        recent = dict(_row("recent", chunk=1, memory_type="fact", ts=now))
+        recent["agent_handle"] = None
+
+        fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
+        assert fused[0].document_name == "old"
 
 
 class TestTemporalWeight:

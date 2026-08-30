@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
-from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
@@ -173,6 +173,37 @@ class TestIngestUrl:
             result = ingest_url(url, db, settings)
 
         assert result["document_name"] == url
+
+
+class TestRememberCollectionRouting:
+    """Server-side sentinel: empty ``collection`` routes by ``agent_handle``.
+
+    One rule at the daemon chokepoint keeps the CLI/MCP/HTTP surfaces from
+    drifting (bug class 3): explicit collection wins; empty + handle lands in
+    ``memory-<handle>``; empty on both sides falls back to ``default``.
+    """
+
+    @staticmethod
+    def _job(body: dict[str, object]) -> ScrubbedIngestJob:
+        routes = IngestionRoutes(cast("DaemonContext", SimpleNamespace()))
+        payload = {"name": "note.md", "content": "hi", **body}
+        job = routes._remember_job(payload)
+        assert isinstance(job, ScrubbedIngestJob), job
+        return job
+
+    def test_handle_and_empty_collection_route_to_memory_bucket(self) -> None:
+        assert self._job({"agent_handle": "rmh"}).collection == "memory-rmh"
+
+    def test_explicit_collection_wins_over_agent_handle(self) -> None:
+        job = self._job({"agent_handle": "rmh", "collection": "notes"})
+        assert job.collection == "notes"
+
+    def test_empty_handle_and_empty_collection_fall_back_to_default(self) -> None:
+        assert self._job({}).collection == "default"
+
+    def test_empty_handle_with_explicit_collection_uses_that_collection(self) -> None:
+        job = self._job({"collection": "research"})
+        assert job.collection == "research"
 
 
 class TestIngestRouteKeying:

@@ -210,7 +210,7 @@ class McpTools:
         content: str,
         document_name: str,
         overwrite: bool = False,
-        collection: str = "default",
+        collection: str = "",
         format_hint: str = "auto",
         agent_handle: str = "",
         memory_type: str = "",
@@ -228,7 +228,8 @@ class McpTools:
             content: The text content to remember.
             document_name: Name for the document (e.g., 'notes.md').
             overwrite: If true, replace existing data for this document.
-            collection: Collection name (default: 'default').
+            collection: Collection name. Leave empty to route by agent_handle —
+                ``memory-<handle>`` when a handle is given, else ``default``.
             format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
             agent_handle: Agent that owns this memory (e.g. "rmh").
             memory_type: Memory classification: fact, observation, opinion, procedure.

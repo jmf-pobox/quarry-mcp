@@ -258,6 +258,48 @@ class TestDelete:
         assert transport.params_for("DELETE", "/v1/collections")["name"] == "mycol"
 
 
+class TestRememberCollectionSentinel:
+    """CLI ``remember`` sends ``collection=""`` unless the caller overrides.
+
+    Bug-class-3 parity: the daemon's ``_remember_job`` owns the routing rule,
+    so every surface must send the empty sentinel by default. An explicit
+    ``--collection`` still passes through verbatim.
+    """
+
+    def test_default_collection_is_empty_on_wire(
+        self, transport: RecordingTransport
+    ) -> None:
+        result = runner.invoke(
+            app,
+            ["--json", "remember", "--name", "note.md", "--agent-handle", "rmh"],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        body = transport.body_for("POST", "/v1/remember")
+        assert body["collection"] == ""
+        assert body["agent_handle"] == "rmh"
+
+    def test_explicit_collection_forwarded_verbatim(
+        self, transport: RecordingTransport
+    ) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "remember",
+                "--name",
+                "note.md",
+                "--collection",
+                "notes",
+                "--agent-handle",
+                "rmh",
+            ],
+            input="body",
+        )
+        assert result.exit_code == 0, result.output
+        assert transport.body_for("POST", "/v1/remember")["collection"] == "notes"
+
+
 class TestSyncRegisterDeregister:
     def test_register_sends_resolved_dir(
         self, transport: RecordingTransport, tmp_path: Path

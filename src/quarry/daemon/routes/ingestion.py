@@ -75,7 +75,13 @@ class IngestionRoutes(RouteGroup):
     def _remember_job(
         self, body: dict[str, object]
     ) -> ScrubbedIngestJob | JSONResponse:
-        """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400."""
+        """Validate a remember body into a :class:`ScrubbedIngestJob` or a 400.
+
+        Collection routing is a single server-side rule so no surface can
+        drift (bug class 3): an empty collection with an ``agent_handle`` lands
+        in ``memory-<handle>``; empty on both sides falls back to ``default``;
+        an explicit collection always wins.
+        """
         name = self._require_text(body, "name")
         if isinstance(name, JSONResponse):
             return name
@@ -85,17 +91,30 @@ class IngestionRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
+        agent_handle = self._str_field(body, "agent_handle", "")
+        collection = self._resolve_memory_collection(
+            self._str_field(body, "collection", ""), agent_handle
+        )
         return ScrubbedIngestJob(
             name=name,
             content=content,
-            collection=self._str_field(body, "collection", "default"),
+            collection=collection,
             format_hint=self._str_field(body, "format_hint", "auto"),
             overwrite=overwrite,
             scrub_label="remember",
-            agent_handle=self._str_field(body, "agent_handle", ""),
+            agent_handle=agent_handle,
             memory_type=self._str_field(body, "memory_type", ""),
             summary=self._str_field(body, "summary", ""),
         )
+
+    @staticmethod
+    def _resolve_memory_collection(raw_collection: str, agent_handle: str) -> str:
+        """Return the effective collection for a remember write."""
+        if raw_collection:
+            return raw_collection
+        if agent_handle:
+            return f"memory-{agent_handle}"
+        return "default"
 
     async def _ingest_job(
         self, body: dict[str, object], source: str

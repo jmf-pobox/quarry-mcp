@@ -1086,7 +1086,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "description": "Body for indexing inline text content.",
+                "description": "Body for indexing inline text content.\n\n``collection`` is the empty-string sentinel: the daemon decides the effective\ncollection at ``_remember_job``. Explicit values pass through unchanged; an\nempty value with an ``agent_handle`` routes to ``memory-<handle>``, and an\nempty value with no handle falls back to ``default``.",
                 "properties": {
                   "agent_handle": {
                     "default": "",
@@ -1094,7 +1094,7 @@
                     "type": "string"
                   },
                   "collection": {
-                    "default": "default",
+                    "default": "",
                     "title": "Collection",
                     "type": "string"
                   },

@@ -71,9 +71,17 @@ class RrfFusion:
         return results
 
     def _contribution(self, row: dict[str, object], rank: int, now_ts: float) -> float:
-        """RRF term ``1 / (k + rank)`` for one row, scaled by temporal weight."""
-        memory_type = str(row.get("memory_type", ""))
-        if self._decay_rate > 0 and memory_type in _DECAYABLE_TYPES:
+        """RRF term ``1 / (k + rank)`` for one row, scaled by temporal weight.
+
+        Knowledge chunks (empty/NULL ``agent_handle``) never decay -- only
+        agent-owned rows follow the recency curve.
+        """
+        memory_type = str(row.get("memory_type") or "")
+        if (
+            self._decay_rate > 0
+            and memory_type in _DECAYABLE_TYPES
+            and row.get("agent_handle")
+        ):
             ts = row.get("ingestion_timestamp", "")
             weight = self.temporal_weight(ts, now_ts, self._decay_rate)
         else:
