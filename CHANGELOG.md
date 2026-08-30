@@ -22,6 +22,22 @@ across `transform`, `index`, and `connector`).
   agents that never invoke a quarry slash command still reach for `/find`
   before WebSearch/WebFetch, before a why/how/what-did-we-decide answer, and
   when a durable fact is worth persisting past compaction.
+- `query`: agent-memory temporal decay wired through the daemon's search
+  route. A new `QUARRY_RETRIEVAL_DECAY_RATE` setting (default `0.000963`, a
+  30-day half-life) is threaded from `Settings` into `RetrievalConfig` at
+  call time so every daemon-served hybrid query applies the exponential
+  recency curve to agent memories.
+- `tool`: `quarry remember`/MCP `remember`/HTTP `POST /v1/remember` route
+  by `agent_handle` when no collection is named. The three surfaces now
+  send `collection=""` (the empty sentinel) and the daemon owns the single
+  routing rule: an empty collection with a handle lands in
+  `memory-<handle>`; empty on both sides falls back to `default`; an
+  explicit collection always wins.
+- `tool`: `quarry doctor` grows a **Memory corpus** informational line
+  (per-handle, per-type, per-collection counts) and a **Memory identity**
+  warning check that fires when the resident ethos handle has zero rows in
+  a corpus that otherwise contains memory — the "ethos config resolves but
+  PreCompact never fired" gap.
 
 ### Changed
 
@@ -42,6 +58,11 @@ across `transform`, `index`, and `connector`).
   inline text content." The command's own arguments are the memory's name,
   not its content (content is asked separately); reworded to `<name for this
   memory>`.
+- The ethos-config walker (`.punt-labs/ethos/config.yaml` ancestor lookup)
+  extracts into a new `quarry.ethos_handle.EthosConfig` module so the
+  hook, doctor, and future callers share one reader. `hooks.py`'s inline
+  copy migrates in a small follow-up bead (temporary, intentional
+  duplication).
 
 ### Removed
 
@@ -52,6 +73,10 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- `query`: fusion decay guard now requires both a non-empty `agent_handle`
+  AND a decayable `memory_type`. Previously a bulk-ingested document that
+  picked up a `memory_type` tag would decay under RRF; knowledge chunks
+  (empty handle) now hold their rank regardless of the tag.
 - `tool`: the `researcher` sub-agent's `tools:` allowlist granted only `Read,
   Glob, Grep, WebSearch, WebFetch` — every quarry MCP tool the agent's prompt
   directs it to call (`find`, `show`, `remember`, `list`, `ingest`) was
