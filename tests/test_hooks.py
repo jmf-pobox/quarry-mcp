@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 
 from quarry.__main__ import app
 from quarry._stdlib import HookConfig, load_hook_config, read_hook_stdin
+from quarry.enabled_marker import EnabledMarker
 from quarry.hooks import (
     _as_dir,
     handle_post_web_fetch,
@@ -22,6 +23,13 @@ from quarry.hooks import (
     handle_session_start,
 )
 from quarry.sync_registry import SyncRegistry
+
+
+def _opt_in(project: Path) -> Path:
+    """Write the ``.punt-labs/quarry/enabled`` marker so session-start takes Path A."""
+    EnabledMarker(project).write()
+    return project
+
 
 runner = CliRunner()
 
@@ -358,6 +366,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_registers_and_launches_background_sync(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -392,6 +401,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_context_reflects_sync_failure(self, tmp_path: Path) -> None:
         project = tmp_path / "failproject"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -411,6 +421,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_context_reflects_sync_already_running(self, tmp_path: Path) -> None:
         project = tmp_path / "runningproject"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -430,6 +441,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_skips_registration_when_already_registered(self, tmp_path: Path) -> None:
         project = tmp_path / "existing"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -456,6 +468,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_returns_additional_context_with_mcp_guidance(self, tmp_path: Path) -> None:
         project = tmp_path / "repo"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -499,6 +512,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         # Now the hook registers a new directory also named "myproject".
         project = tmp_path / "mine" / "myproject"
         project.mkdir(parents=True)
+        _opt_in(project)
 
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
@@ -524,6 +538,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
     def test_context_includes_recall_hint(self, tmp_path: Path) -> None:
         project = tmp_path / "hintproject"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -551,6 +566,7 @@ class TestSessionStartReadopt:
         # index), NOT mint a fresh disambiguated name.
         project = tmp_path / "backend"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -607,6 +623,7 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
 
         project = tmp_path / "solo"
         project.mkdir()
+        _opt_in(project)
         settings = self._settings(tmp_path)
 
         with (
@@ -643,6 +660,7 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
 
         project = tmp_path / "backend"
         project.mkdir()
+        _opt_in(project)
         settings = self._settings(tmp_path)
 
         conn = SyncRegistry(settings.registry_path)
@@ -676,6 +694,7 @@ class TestSessionStartFailsClosedWhenDaemonUnreachable:
         # answer, not an unreachable one, so the picker proceeds and registers.
         project = tmp_path / "fresh"
         project.mkdir()
+        _opt_in(project)
         settings = self._settings(tmp_path)
 
         client = MagicMock()
@@ -1455,6 +1474,7 @@ class TestT15SessionStartChildUsesParentCollection:
     def test_child_directory_uses_parent_collection(self, tmp_path: Path) -> None:
         parent = tmp_path / "project"
         parent.mkdir()
+        _opt_in(parent)
         child = parent / "src"
         child.mkdir()
 
@@ -1494,6 +1514,7 @@ class TestT16SessionStartAutoRegisters(_ReachableDaemonEmptyCatalog):
     def test_auto_registers_unregistered_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "newproject"
         project.mkdir()
+        _opt_in(project)
 
         settings = MagicMock()
         settings.registry_path = tmp_path / "registry.db"
@@ -1531,6 +1552,7 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
     ) -> None:
         parent = tmp_path / "parent"
         parent.mkdir()
+        _opt_in(parent)
         child_a = parent / "child-a"
         child_a.mkdir()
         child_b = parent / "child-b"
@@ -1578,6 +1600,112 @@ class TestT16bSessionStartParentOfChildrenSkipsAutoRegister:
         assert isinstance(output, dict)
         ctx = str(output.get("additionalContext", ""))
         assert "child registrations exist" in ctx
+
+
+class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
+    """The § 2.11 marker gate keys SessionStart on ``.punt-labs/quarry/enabled``.
+
+    Three paths — Path A active flow when the marker is present; Path B
+    nudge when neither marker nor covering registration exists; Path C
+    drift-surface when a covering registration exists without the marker.
+    Path B and Path C never mutate the registry and never launch a sync.
+    """
+
+    def _settings(self, tmp_path: Path) -> MagicMock:
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        return settings
+
+    def test_path_a_marker_and_registration_runs_active_flow(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _opt_in(project)
+        settings = self._settings(tmp_path)
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "proj")
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background", return_value="launched") as sync,
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert ctx.startswith("Quarry semantic search is active for this project.")
+
+        sync.assert_called_once()
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert len(regs) == 1  # covering row reused, not duplicated
+        assert regs[0].collection == "proj"
+
+    def test_path_b_no_marker_no_registration_nudges_enable(
+        self, tmp_path: Path
+    ) -> None:
+        project = tmp_path / "unopted"
+        project.mkdir()
+        settings = self._settings(tmp_path)
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as sync,
+            patch("quarry.hooks._daemon_chunk_collections") as daemon,
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "not enabled" in ctx
+        assert f"quarry enable {project}" in ctx
+        assert "quarry deregister" not in ctx
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert regs == []  # Path B never touches the registry
+        sync.assert_not_called()
+        daemon.assert_not_called()  # Path B never consults the daemon
+
+    def test_path_c_no_marker_registration_exists_surfaces_drift(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        project = tmp_path / "drifted"
+        project.mkdir()
+        settings = self._settings(tmp_path)
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(project, "drifted")
+        conn.close()
+
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as sync,
+            caplog.at_level(logging.WARNING, logger="quarry.hooks"),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert f"quarry enable {project}" in ctx
+        assert f"quarry deregister {project}" in ctx
+
+        conn = SyncRegistry(settings.registry_path)
+        regs = conn.list_registrations()
+        conn.close()
+        assert len(regs) == 1  # neither auto-register nor auto-deregister
+        assert regs[0].collection == "drifted"
+
+        sync.assert_not_called()
+        assert any("no opt-in marker" in rec.message for rec in caplog.records)
 
 
 class TestPreCompactCaptureRedaction:
