@@ -90,8 +90,14 @@ class Settings(BaseSettings):
     # 0.0167; a 30-day-old memory decays to weight 0.5, roughly the difference
     # between ranks 1 and 60 — a month-old top hit loses to a fresh rank-2.
     # 7 days would decay useful memories before they mature; 90 days ≈ no
-    # decay at typical session cadences.  Set to 0.0 to disable decay.
-    retrieval_decay_rate: float = 0.000963
+    # decay at typical session cadences.  Set to 0.0 to disable decay; a
+    # negative rate would invert the curve (older rows outrank newer), so
+    # ``ge=0`` fails loud at construction.
+    retrieval_decay_rate: float = Field(
+        default=0.000963,
+        ge=0,
+        validation_alias="QUARRY_RETRIEVAL_DECAY_RATE",
+    )
 
     @field_validator("fd_limit", mode="before")
     @classmethod

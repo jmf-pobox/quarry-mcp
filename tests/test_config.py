@@ -116,3 +116,24 @@ class TestSyncBudget:
         settings = Settings(sync_flush_mb=1, embed_window_chunks=1)
         assert settings.sync_flush_mb == 1
         assert settings.embed_window_chunks == 1
+
+
+class TestRetrievalDecayRate:
+    def test_default_is_thirty_day_half_life(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("QUARRY_RETRIEVAL_DECAY_RATE", raising=False)
+        assert Settings().retrieval_decay_rate == pytest.approx(0.000963, rel=1e-3)
+
+    def test_env_alias_reads_quarry_retrieval_decay_rate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "0.5")
+        assert Settings().retrieval_decay_rate == 0.5
+
+    def test_zero_accepted(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "0.0")
+        assert Settings().retrieval_decay_rate == 0.0
+
+    def test_negative_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "-0.1")
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings()
