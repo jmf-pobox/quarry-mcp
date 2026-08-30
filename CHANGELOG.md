@@ -18,7 +18,7 @@ across `transform`, `index`, and `connector`).
 
 - `tool`: `/quarry:help` (and `-dev` twin) lists all seven slash commands with
   one-line descriptions, matching the org's `/help` template.
-- `tool`: `plugin/skills/quarry/SKILL.md` — a Claude Code plugin skill so
+- `tool`: `plugin/skills/recall/SKILL.md` — a Claude Code plugin skill so
   agents that never invoke a quarry slash command still reach for `/find`
   before WebSearch/WebFetch, before a why/how/what-did-we-decide answer, and
   when a durable fact is worth persisting past compaction.

@@ -1,5 +1,5 @@
 ---
-name: quarry
+name: recall
 description: >
   Use this skill before WebSearch or WebFetch for any research question, before
   answering a why/how/what-did-we-decide question, when recalling a prior
