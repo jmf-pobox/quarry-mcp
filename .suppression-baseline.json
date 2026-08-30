@@ -67,6 +67,9 @@
     "src/quarry/doctor_inference.py": {
       "noqa": 1
     },
+    "src/quarry/doctor_memory.py": {
+      "noqa": 2
+    },
     "src/quarry/doctor_sync.py": {
       "noqa": 6
     },
