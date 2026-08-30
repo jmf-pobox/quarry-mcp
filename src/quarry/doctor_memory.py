@@ -52,8 +52,9 @@ class MemoryDiagnostics:
         """Warn when the resident ethos handle exists but owns zero memory rows.
 
         Warning-only (``required=False``). Passes silently when no identity is
-        configured for *cwd* or when the database is empty; warns when the
-        handle is set and the corpus has any rows AND the handle has none.
+        configured for *cwd* or when the corpus holds no memory rows (knowledge
+        chunks with empty ``agent_handle`` do not count); warns when the handle
+        is set and other agents own memory rows but this handle owns none.
         """
         result = partial(CheckResult, name="Memory identity", required=False)
         handle = EthosConfig.agent_handle_at(cwd)
@@ -91,46 +92,62 @@ class MemoryDiagnostics:
         )
         if not rows:
             return "no chunks yet"
+        handles, types, collections = MemoryDiagnostics._tally(rows)
+        parts = (
+            MemoryDiagnostics._render(label, counts)
+            for label, counts in (
+                ("memory", handles),
+                ("types", types),
+                ("collections", collections),
+            )
+        )
+        return "; ".join(part for part in parts if part) or "no agent memory yet"
+
+    @staticmethod
+    def _tally(
+        rows: list[dict[str, object]],
+    ) -> tuple[Counter[str], Counter[str], Counter[str]]:
+        """Return ``(handles, types, collections)`` counters over *rows*.
+
+        Handle and type tallies count agent-owned rows only; a knowledge chunk
+        (empty handle) may carry a ``memory_type`` tag from ingestion but is
+        not a memory row and must not inflate the type count. Collections are
+        tallied for every non-empty value so the operator sees the full split.
+        """
         handles: Counter[str] = Counter()
         types: Counter[str] = Counter()
         collections: Counter[str] = Counter()
         for row in rows:
-            handle = str(row.get("agent_handle", ""))
-            mtype = str(row.get("memory_type", ""))
-            collection = str(row.get("collection", ""))
+            handle = str(row.get("agent_handle") or "")
+            collection = str(row.get("collection") or "")
             if handle:
                 handles[handle] += 1
-            if mtype in _MEMORY_TYPES:
-                types[mtype] += 1
+                mtype = str(row.get("memory_type") or "")
+                if mtype in _MEMORY_TYPES:
+                    types[mtype] += 1
             if collection:
                 collections[collection] += 1
-        return (
-            "; ".join(
-                part
-                for part in (
-                    MemoryDiagnostics._render("memory", handles),
-                    MemoryDiagnostics._render("types", types),
-                    MemoryDiagnostics._render("collections", collections),
-                )
-                if part
-            )
-            or "no agent memory yet"
-        )
+        return handles, types, collections
 
     @staticmethod
     def _render(label: str, counts: Counter[str]) -> str:
         """Render one group as ``label: k1=v1 k2=v2`` in descending count order."""
         if not counts:
             return ""
-        ordered = counts.most_common()
-        return f"{label}: " + " ".join(f"{k}={v}" for k, v in ordered)
+        return f"{label}: " + " ".join(f"{k}={v}" for k, v in counts.most_common())
 
     @staticmethod
     def _handle_counts(db_path: Path, handle: str) -> tuple[int, int]:
-        """Return ``(rows_for_handle, total_rows)`` for the identity_active check."""
+        """Return ``(rows_for_handle, total_memory_rows)`` for identity_active.
+
+        ``total_memory_rows`` counts only rows with a non-empty ``agent_handle``
+        — knowledge chunks are corpus, not memory, and must not falsify the
+        "corpus has memory for someone else" signal.
+        """
         rows = MemoryDiagnostics._scan_columns(db_path, ["agent_handle"])
-        total = len(rows)
-        matches = sum(1 for r in rows if str(r.get("agent_handle", "")) == handle)
+        handles = [str(r.get("agent_handle") or "") for r in rows]
+        total = sum(1 for h in handles if h)
+        matches = sum(1 for h in handles if h == handle)
         return (matches, total)
 
     @staticmethod

@@ -67,6 +67,23 @@ class TestCorpus:
         assert "memory-rmh=2" in result.message
         assert "docs=1" in result.message
 
+    def test_empty_handle_row_never_inflates_type_count(self, tmp_path: Path) -> None:
+        """Knowledge chunks (empty handle) never tally under ``types:``.
+
+        Ingestion may tag a chunk with a decayable ``memory_type`` even when
+        no agent owns it; the corpus check counts memory rows only, so an
+        anonymous ``fact`` chunk must not appear in the type tally.
+        """
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        rows: list[dict[str, object]] = [
+            {"agent_handle": "", "memory_type": "fact", "collection": "docs"},
+            {"agent_handle": None, "memory_type": "procedure", "collection": "docs"},
+        ]
+        with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
+            result = MemoryDiagnostics.corpus(db_path)
+        assert "types:" not in result.message
+
     def test_ignores_non_decayable_memory_types(self, tmp_path: Path) -> None:
         db_path = tmp_path / "lancedb"
         db_path.mkdir()
@@ -125,6 +142,25 @@ class TestIdentityActive:
         assert result.passed is True
         assert "rmh" in result.message
         assert "1 memory rows" in result.message
+
+    def test_corpus_only_has_knowledge_chunks_passes(self, tmp_path: Path) -> None:
+        """Empty-handle rows are corpus, not memory: no rows to compare against.
+
+        A repo with only ingested docs (all handles NULL/empty) must pass
+        cleanly — the "someone else's memory but not mine" warning is not
+        triggered when nobody owns a memory row.
+        """
+        _write_ethos_config(tmp_path, "rmh")
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        rows: list[dict[str, object]] = [
+            {"agent_handle": ""},
+            {"agent_handle": None},
+        ]
+        with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
+            result = MemoryDiagnostics.identity_active(str(tmp_path), db_path)
+        assert result.passed is True
+        assert "PreCompact" not in result.message
 
     def test_handle_active_but_no_matching_rows_warns(self, tmp_path: Path) -> None:
         """The core "PreCompact never fired" warning: rows exist, but not mine."""
