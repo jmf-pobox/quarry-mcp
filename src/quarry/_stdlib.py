@@ -242,15 +242,7 @@ def _allow_mcp_tools(plugin_name: str, settings_path: Path) -> str | None:
         return None
 
     tool_pattern = f"mcp__plugin_{plugin_name}_quarry__*"
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-        settings["permissions"] = permissions
-
-    allow_list = permissions.get("allow")
-    if not isinstance(allow_list, list):
-        allow_list = []
-        permissions["allow"] = allow_list
+    allow_list = _ensure_allow_list(settings)
 
     # Check if any existing entry already covers this plugin's tools.
     tool_prefix = f"mcp__plugin_{plugin_name}_quarry__"
