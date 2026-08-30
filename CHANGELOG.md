@@ -16,6 +16,33 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- `tool`: the `researcher` sub-agent's `tools:` allowlist granted only `Read,
+  Glob, Grep, WebSearch, WebFetch` — every quarry MCP tool the agent's prompt
+  directs it to call (`find`, `show`, `remember`, `list`, `ingest`) was
+  excluded, so "always start with local knowledge" was structurally
+  unexecutable as shipped. Per DES-025, MCP tool names carry a dev/prod
+  prefix (`mcp__plugin_quarry_quarry__find` vs
+  `mcp__plugin_quarry-dev_quarry__find`) that an allowlist cannot enumerate
+  portably. Replaced the `tools:` allowlist with `disallowedTools: [Write,
+  Edit, NotebookEdit, Bash]` — DES-025's denylist pattern extended for
+  research agents that fetch untrusted web content (Cursor Security M1 on
+  PR #481). DES-025's minimum is `[Write, Edit]`; this agent's threat model
+  warrants tightening: `NotebookEdit` and `Bash` bypass the Write/Edit denies
+  as filesystem-mutation surfaces, and prompt-injected content routing to
+  Bash would elevate a confused-deputy risk. Both prod and dev MCP prefixes
+  are still inherited from the parent session; the researcher can call
+  every quarry MCP tool without needing the plugin's install-time prefix at
+  frontmatter-write time.
+- `infra`: the repo's `CLAUDE.md` carried the quarry user-guide twice — once
+  as a `<!-- quarry:begin -->` / `<!-- quarry:end -->` fenced block and once
+  via the canonical `@.punt-labs/quarry/CLAUDE.md` import that ships the
+  same twenty lines. The fence violated
+  `punt-kit/standards/tool-enable-disable.md` § 2.1 (tooling never merges,
+  marks, or fences user-owned `CLAUDE.md` prose) and was a pre-standard
+  legacy artifact — no code in `src/` writes it. Deleted the fence; the
+  canonical `@`-import remains as the single delivery path. Documented the
+  ownership contract in `src/quarry/guidance.py`'s module docstring so a
+  future editor does not fork the string back into a fenced block.
 - `tool`: README and `/ingest` (and `/ingest-dev`) described `ingest`/`quarry
   ingest` as accepting a local file path. It only ever accepts an `http(s)`
   URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the

@@ -1195,6 +1195,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/data/__init__.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.0,
+    "max_complexity": 0.0,
+    "avg_complexity": 0.0,
+    "module_size": 2.0,
+    "classes_per_module": 0.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/db/__init__.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
@@ -1744,10 +1757,10 @@
   "src/quarry/guidance.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.33,
-    "max_complexity": 1.0,
-    "avg_complexity": 1.0,
-    "module_size": 61.0,
+    "avg_params": 0.25,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.25,
+    "module_size": 58.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
