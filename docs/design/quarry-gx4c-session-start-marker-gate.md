@@ -77,7 +77,7 @@ does not count.
 | 2 | present | exists | unreachable | **A — active.** Same as row 1. Sync is fire-and-forget; daemon reachability does not gate the response. The next sync attempt will fail and log locally; the SessionStart contract is unaffected. |
 | 3 | present | none | reachable | **A′ — auto-register.** No coverage but the user has opted in. Check `has_registrations_under` first (subsumption guard, `hooks.py:243`); if children exist, refuse and return the existing subsumption message. Otherwise re-adopt via `archived_collection_for` or mint a fresh unique name from the daemon's chunk catalog, `register_directory`, kick off sync, return active `additionalContext`. |
 | 4 | present | none | unreachable | **A′ — defer.** The daemon-unreachable branch (`hooks.py:265–282`) stands: writing a registration now without the chunk set risks a cross-project merge. Return the existing "quarryd is unreachable, so auto-registration of `{directory}` is deferred…" message. |
-| 5 | absent | exists | reachable | **C — reconcile drift.** Marker was never written or was deleted; the collection persists. Do NOT auto-register (already registered) and do NOT auto-deregister (destructive under a keep-data policy). Log a `logger.warning`. Return the Path C `additionalContext` (§ 3 below) naming both `quarry enable <cwd>` and `quarry deregister <cwd>`. |
+| 5 | absent | exists | reachable | **C — reconcile drift.** Marker was never written or was deleted; the collection persists. Do NOT auto-register (already registered) and do NOT auto-deregister (destructive under a keep-data policy). Log a `logger.warning`. Return the Path C `additionalContext` (§ 3 below) naming both `quarry enable <cwd>` and `quarry deregister <collection>`. |
 | 6 | absent | exists | unreachable | **C — reconcile drift.** Same as row 5. Daemon state is moot; neither surfacing the drift nor naming the two doors touches the daemon. |
 | 7 | absent | none | reachable | **B — nudge.** No opt-in signal. Do NOT auto-register, do NOT touch the registry, do NOT deposit the guide. Return the Path B `additionalContext` (§ 3 below) naming `quarry enable <cwd>`. |
 | 8 | absent | none | unreachable | **B — nudge.** Same as row 7. Daemon state is moot; refusing to touch the registry is the whole action. |
@@ -118,10 +118,10 @@ and registers this directory for background sync.
 
 ```text
 Quarry: this project has an indexed collection but no opt-in marker
-({directory}). Two doors:
-  quarry enable {directory}      re-adopt: restore the marker + guide.
-  quarry deregister {directory}  drop: remove the registration
-                                 (keep-data policy applies to chunks).
+({directory}, collection {collection!r}). Two doors:
+  quarry enable {directory}         re-adopt: restore the marker + guide.
+  quarry deregister {collection}    drop: remove the registration
+                                    (keep-data policy applies).
 Auto-register is refused (already registered); auto-deregister is
 refused (would delete indexed data on marker drift).
 ```

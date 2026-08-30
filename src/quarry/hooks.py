@@ -338,18 +338,16 @@ class _SessionStartContext:
         promise that toggling never destroys committed content).
         """
         logger.warning(
-            "session-start: covering registration for %s has no opt-in marker; "
-            "surfacing drift instead of auto-registering",
+            "session-start: covering registration %r for %s has no opt-in "
+            "marker; surfacing drift instead of auto-registering",
+            collection,
             self._directory,
         )
-        _ = collection
         return _session_start_output(
             "Quarry: this project has an indexed collection but no opt-in marker\n"
-            f"({self._directory}). Two doors:\n"
-            f"  quarry enable {self._directory}      "
-            "re-adopt: restore the marker + guide.\n"
-            f"  quarry deregister {self._directory}  drop: remove the registration\n"
-            "                                 (keep-data policy applies to chunks).\n"
+            f"({self._directory}, collection {collection!r}). Two doors:\n"
+            f"  quarry enable {self._directory}         re-adopt: marker + guide.\n"
+            f"  quarry deregister {collection}    drop the registration (keep-data).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
             "refused (would delete indexed data on marker drift)."
         )

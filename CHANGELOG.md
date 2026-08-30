@@ -32,7 +32,7 @@ across `transform`, `index`, and `connector`).
   registration, the hook returns a message pointing at
   `quarry enable DIR`; if there IS a covering registration (drift — the
   marker was never written or was deleted), the hook surfaces both
-  `quarry enable DIR` (re-adopt) and `quarry deregister DIR` (drop) and
+  `quarry enable DIR` (re-adopt) and `quarry deregister COLLECTION` (drop) and
   refuses to pick automatically. The nudge and drift paths never mutate
   the registry, never launch a sync, and never deposit the guide.
   Standard `punt-kit/standards/tool-enable-disable.md` §§ 2.1, 2.3,

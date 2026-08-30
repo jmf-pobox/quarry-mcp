@@ -1699,7 +1699,7 @@ class TestSessionStartMarkerGate(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert f"quarry enable {project}" in ctx
-        assert f"quarry deregister {project}" in ctx
+        assert "quarry deregister drifted" in ctx
 
         conn = SyncRegistry(settings.registry_path)
         regs = conn.list_registrations()
