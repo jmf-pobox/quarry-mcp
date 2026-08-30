@@ -4,6 +4,8 @@ description: "Deep research agent that combines quarry local knowledge with web 
 disallowedTools:
   - Write
   - Edit
+  - NotebookEdit
+  - Bash
 model: sonnet
 color: green
 ---
