@@ -515,6 +515,65 @@ class TestSearch:
         assert result["agent_handle"] == "rmh"
         assert result["memory_type"] == "episodic"
 
+    def test_search_threads_settings_decay_rate(self, tmp_path: Path) -> None:
+        """The daemon builds RetrievalConfig from ``Settings.retrieval_decay_rate``.
+
+        A search on a daemon with a non-zero configured rate must construct the
+        SearchService with that rate; otherwise the memory-decay knob is
+        silently pinned to the dataclass default (0.0) and never takes effect.
+        """
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.5
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_rates: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            rate = getattr(config, "decay_rate", None)
+            if rate is not None:
+                seen_rates.append(float(rate))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_rates == [0.5]
+
+    def test_search_zero_rate_disables_decay(self, tmp_path: Path) -> None:
+        """A configured rate of 0.0 is passed through — the dataclass default path."""
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.0
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_rates: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            rate = getattr(config, "decay_rate", None)
+            if rate is not None:
+                seen_rates.append(float(rate))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_rates == [0.0]
+
 
 class TestDocuments:
     def test_list_documents(self, client: TestClient) -> None:

@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     # survive, so a typo in the override must not defeat it.
     fd_limit: int = Field(default=DEFAULT_FD_LIMIT, validation_alias="QUARRY_FD_LIMIT")
 
+    # Agent-memory temporal decay rate (1/hour) threaded into RetrievalConfig
+    # at wire time (see daemon/routes/search.py).  The default is a 30-day
+    # half-life: ln(2) / 720h ≈ 0.000963.  RRF rank-1 weight is 1/(60+0) ≈
+    # 0.0167; a 30-day-old memory decays to weight 0.5, roughly the difference
+    # between ranks 1 and 60 — a month-old top hit loses to a fresh rank-2.
+    # 7 days would decay useful memories before they mature; 90 days ≈ no
+    # decay at typical session cadences.  Set to 0.0 to disable decay.
+    retrieval_decay_rate: float = 0.000963
+
     @field_validator("fd_limit", mode="before")
     @classmethod
     def _coerce_fd_limit(cls, value: object) -> int:

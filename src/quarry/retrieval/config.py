@@ -29,8 +29,10 @@ class RetrievalConfig:
     ``exact_search`` carries the determinism contract's flat-vs-ANN choice
     through the seam: the eval runner sets it to force LanceDB's exact scan on a
     small fixture (ANN is seed-dependent) rather than monkeypatching the query.
-    ``decay_rate`` carries the agent-memory temporal-decay knob that
-    ``hybrid_search`` exposed; production leaves it at ``0.0`` (no decay).
+    ``decay_rate`` carries the agent-memory temporal-decay knob. The dataclass
+    default stays ``0.0`` (no decay) so unit tests and the eval runner get the
+    reproducible baseline; the daemon threads the production value from
+    ``Settings.retrieval_decay_rate`` at wire time.
     """
 
     rrf_k: int = _DEFAULT_RRF_K
