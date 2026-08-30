@@ -48,7 +48,8 @@ WebSearch or WebFetch call re-discovering something already found.
 - `/source <claim or text>` — find which document a claim came from.
 - MCP tools (same operations, callable directly): `find`, `remember`,
   `ingest`, `register_directory`, `sync_all_registrations`, `show`, `delete`,
-  `list`, `status`, `use`.
+  `list`, `status`. Database switching goes through `/quarry:quarry use <db>`
+  — not a direct-call MCP tool.
 
 ## Worked examples
 
