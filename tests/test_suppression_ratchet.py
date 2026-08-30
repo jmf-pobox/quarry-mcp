@@ -9,6 +9,7 @@ the merge-base count delta driven end-to-end through a real git tree.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -238,6 +239,65 @@ class TestMergeBaseCheck:
         out = capsys.readouterr().out
         assert code == 1  # NOT "count decreased -> PASS"
         assert "increased" in out
+
+
+class TestRelax:
+    """``--relax`` scoped-rebaselines one file's count, audited and justified."""
+
+    def test_relax_updates_baseline_and_waives_check(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)  # 1 suppression
+        # A legitimate increase: one more noqa on the same file.
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # noqa: E501\n")
+        code = tools.suppression.main(
+            ["src", "--relax", "src/mod.py", "--justify", "reason", "--allow-ci-write"]
+        )
+        assert code == 0
+        data = json.loads((git_sandbox.root / ".suppression-baseline.json").read_text())
+        assert data["by_file"]["src/mod.py"]["noqa"] == 2
+        assert data["total"] == 2
+        git_sandbox.commit("relax")
+        # The base-commit comparison still says 1, but the relax audit waives it.
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "Relaxed by audited --relax" in out
+
+    def test_relax_refuses_without_justify(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # noqa: E501\n")
+        code = tools.suppression.main(
+            ["src", "--relax", "src/mod.py", "--allow-ci-write"]
+        )
+        assert code == 1
+
+    def test_relax_refuses_on_paydown(
+        self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(git_sandbox.root)
+        _seat_and_commit(git_sandbox, _SRC + "y = 2  # noqa: E501\n")  # 2 suppressions
+        git_sandbox.write("src/mod.py", _SRC)  # dropped to 1 -- a paydown, not a relax
+        code = tools.suppression.main(
+            [
+                "src",
+                "--relax",
+                "src/mod.py",
+                "--justify",
+                "not a real relax",
+                "--allow-ci-write",
+            ]
+        )
+        assert code == 1
 
 
 class TestFailClosed:
