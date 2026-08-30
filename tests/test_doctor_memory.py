@@ -56,8 +56,9 @@ class TestCorpus:
                 "collection": "memory-kpz",
             },
             # Knowledge chunk (no handle) — excluded from handle/type tallies but
-            # its collection still shows.
-            {"agent_handle": "", "memory_type": "", "collection": "docs"},
+            # its collection still shows. ``memory_type`` is a decayable value so
+            # a broken exclusion would inflate ``procedure`` to 2, failing below.
+            {"agent_handle": "", "memory_type": "procedure", "collection": "docs"},
         ]
         with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
             result = MemoryDiagnostics.corpus(db_path)
