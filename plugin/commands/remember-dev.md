@@ -1,6 +1,6 @@
 ---
 description: Remember inline text content in your knowledge base
-argument-hint: "<document name>"
+argument-hint: "<name for this memory>"
 ---
 <!-- markdownlint-disable MD041 -->
 
