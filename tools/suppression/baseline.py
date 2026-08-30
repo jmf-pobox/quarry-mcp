@@ -314,11 +314,12 @@ class SuppressionBaseline:
                 sum_of_file_increases += rise
                 lines.append(f"  {fpath}: +{rise} ({base} -> {cur})")
         if sum_of_file_increases != diff:
-            # --relax waived part of the rise; per-file listing sums high.
+            # Gap sources: paydowns on files not in the regression set, shifts in
+            # config-level per_file_ignores, and audited --relax waivers. Stay
+            # neutral about cause; just state the arithmetic.
             lines.append(
-                f"\nNet after --relax waivers: +{diff} "
-                f"(sum of per-file increases above: +{sum_of_file_increases}; "
-                "difference is waived by --relax)"
+                f"\nNet after per-file offsets and any --relax waivers: +{diff} "
+                f"(sum of per-file increases above: +{sum_of_file_increases})"
             )
         return lines
 
