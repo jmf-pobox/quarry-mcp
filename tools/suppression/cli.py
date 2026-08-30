@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from .audit import SuppressionAuditError
 from .baseline import SuppressionBaseline, SuppressionBaselineError
 from .gitio import GitError, GitRepo
 from .outcome import Outcome
@@ -96,14 +97,16 @@ class Cli:
             # Anchor the scan's project root and the baseline path to the repo
             # root (via GitRepo), not cwd, so running from a subdirectory still
             # reads the right pyproject.toml and .suppression-baseline.json.
-            # Scan and construct inside the try: an unreadable .py file (OSError)
-            # or a corrupt in-tree baseline (eager load) must surface as a clean
-            # non-zero, not a traceback.
+            # Scan and construct inside the try: an unreadable .py file (OSError),
+            # a corrupt in-tree baseline (eager load), or a corrupt audit log
+            # (read on --check/--relax) must surface as a clean non-zero, not a
+            # traceback.
             report = Scanner(self._opts.src, self._root).report
             outcome = self._dispatch(SuppressionBaseline(self._root), report)
         except (
             GitError,
             SuppressionBaselineError,
+            SuppressionAuditError,
             PyprojectError,
             OSError,
             UnicodeDecodeError,

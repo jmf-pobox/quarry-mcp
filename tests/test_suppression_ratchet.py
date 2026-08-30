@@ -326,3 +326,26 @@ class TestFailClosed:
         )
         assert code == 1
         assert "FAIL" in capsys.readouterr().out
+
+    def test_check_reports_nonzero_on_corrupt_audit_log(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A hand-broken ``.suppression-audit.jsonl`` line must fail closed.
+
+        ``check()`` reads the worktree audit log via ``relaxations_since`` to
+        find waivers; a malformed line there must return exit code 1, not
+        propagate ``SuppressionAuditError`` as a traceback out of the CLI.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        base = _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write(
+            ".suppression-audit.jsonl", "not-json-at-all\n"
+        )  # worktree-only edit; relaxations_since reads the live file, not HEAD
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        assert code == 1
+        assert "FAIL" in capsys.readouterr().out
