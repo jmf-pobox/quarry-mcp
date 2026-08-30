@@ -327,7 +327,8 @@ class _SessionStartContext:
         return _session_start_output(
             "Quarry: this project has an indexed collection but no opt-in marker\n"
             f"({self._directory}). Two doors:\n"
-            f"  quarry enable {self._directory}      re-adopt: restore the marker + guide.\n"  # noqa: E501
+            f"  quarry enable {self._directory}      "
+            "re-adopt: restore the marker + guide.\n"
             f"  quarry deregister {self._directory}  drop: remove the registration\n"
             "                                 (keep-data policy applies to chunks).\n"
             "Auto-register is refused (already registered); auto-deregister is\n"
