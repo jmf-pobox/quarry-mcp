@@ -24,10 +24,14 @@ across `transform`, `index`, and `connector`).
   prefix (`mcp__plugin_quarry_quarry__find` vs
   `mcp__plugin_quarry-dev_quarry__find`) that an allowlist cannot enumerate
   portably. Replaced the `tools:` allowlist with `disallowedTools: [Write,
-  Edit]` — the DES-025-documented pattern for research agents that need MCP
-  access but must not modify files. Both prod and dev prefixes are now
-  inherited from the parent session; the researcher can call every quarry
-  MCP tool without needing the plugin's install-time prefix at
+  Edit, NotebookEdit, Bash]` — DES-025's denylist pattern extended for
+  research agents that fetch untrusted web content (Cursor Security M1 on
+  PR #481). DES-025's minimum is `[Write, Edit]`; this agent's threat model
+  warrants tightening: `NotebookEdit` and `Bash` bypass the Write/Edit denies
+  as filesystem-mutation surfaces, and prompt-injected content routing to
+  Bash would elevate a confused-deputy risk. Both prod and dev MCP prefixes
+  are still inherited from the parent session; the researcher can call
+  every quarry MCP tool without needing the plugin's install-time prefix at
   frontmatter-write time.
 - `infra`: the repo's `CLAUDE.md` carried the quarry user-guide twice — once
   as a `<!-- quarry:begin -->` / `<!-- quarry:end -->` fenced block and once
