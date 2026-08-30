@@ -24,7 +24,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, final
 
 from quarry._stdlib import load_hook_config
 from quarry.web_capture import WebFetchPayload
@@ -35,7 +35,9 @@ if TYPE_CHECKING:
     from quarry.api import CaptureIngestRequest, IngestRequest
     from quarry.artifacts import SessionArtifacts
     from quarry.client import QuarryClient
+    from quarry.collection_resolver import CollectionResolver
     from quarry.config import Settings
+    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -201,19 +203,26 @@ def _session_start_output(context: str) -> dict[str, object]:
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     """Handle SessionStart hook.
 
-    Auto-registers the current working directory (from the payload ``cwd``
-    field) with quarry and kicks off a background sync.  Returns
-    ``additionalContext`` immediately so Claude knows quarry is available
-    without waiting for the sync to complete.
+    Gates on the ``.punt-labs/quarry/enabled`` marker (§ 2.11): only a repo
+    that opted in through ``quarry enable`` gets the active flow (walk-up
+    coverage → auto-register → background sync → active context). A repo
+    without the marker gets one of two read-only nudges — the state machine
+    is:
 
-    Walk-up matching: if cwd is a child of an existing registration, the
-    parent's collection is reused (no new registration).  Auto-register
-    only fires when no coverage exists.  If cwd is a parent of existing
-    child registrations, auto-register is skipped to prevent subsumption.
+    "Marker present" means at *cwd* itself OR at the root of the registration
+    covering *cwd* — a session opened in a subdirectory of an enabled repo
+    reads the marker the repo's own root carries, not one at the subdirectory.
+
+    * marker present → Path A (active). No coverage becomes auto-register;
+      a child of a parent registration reuses the parent; a subsumption is
+      refused; a down daemon defers.
+    * marker absent, no covering registration → Path B (nudge to
+      ``quarry enable``). The registry is read but never mutated.
+    * marker absent, covering registration exists → Path C (surface the
+      drift). Names both ``quarry enable`` and ``quarry deregister``; the
+      registry is never mutated because neither door is safe to pick
+      automatically.
     """
-    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
     cwd = _as_dir(payload.get("cwd"))
     if not cwd:
         logger.debug("session-start: no cwd in payload, skipping")
@@ -229,78 +238,185 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
         logger.warning("session-start: cwd is not a directory: %s", directory)
         return {}
 
-    settings = _resolve_settings()
-    conn = SyncRegistry(settings.registry_path)
-    resolver = CollectionResolver(conn)
-    try:
-        # Step 1: Walk up from cwd to find covering registration.
-        collection = resolver.covering_collection(str(directory))
+    return _SessionStartContext.open(directory).dispatch()
 
+
+@final
+class _SessionStartContext:
+    """Own the cwd + registry state and route the SessionStart marker gate.
+
+    Instantiated once per session-start invocation; ``dispatch()`` picks the
+    Path A / B / C handler from the marker present/absent by covering
+    registration axes and closes the registry connection on the way out.
+    """
+
+    __slots__ = ("_conn", "_directory", "_resolver")
+
+    _directory: Path
+    _conn: SyncRegistry
+    _resolver: CollectionResolver
+
+    def __new__(
+        cls, directory: Path, conn: SyncRegistry, resolver: CollectionResolver
+    ) -> Self:
+        self = super().__new__(cls)
+        self._directory = directory
+        self._conn = conn
+        self._resolver = resolver
+        return self
+
+    @classmethod
+    def open(cls, directory: Path) -> Self:
+        """Build the context with a fresh registry connection."""
+        from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
+        from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
+
+        settings = _resolve_settings()
+        conn = SyncRegistry(settings.registry_path)
+        return cls(directory, conn, CollectionResolver(conn))
+
+    def dispatch(self) -> dict[str, object]:
+        """Route to Path A / B / C by (marker, covering) and close the registry."""
+        try:
+            registration = self._resolver.covering_registration(str(self._directory))
+            collection = registration.collection if registration is not None else None
+            if self._marker_present(registration):
+                return self._path_a(collection)
+            if collection is not None:
+                return self._path_c(collection)
+            return self._path_b()
+        finally:
+            self._conn.close()
+
+    def _marker_present(self, registration: DirectoryRegistration | None) -> bool:
+        """Return whether the marker is present at cwd OR at the covering root.
+
+        A session opened in a subdirectory of an enabled repo has no marker of
+        its own — the marker lives at the repo root the registration names —
+        so ancestry, not just cwd, decides "enabled."
+        """
+        from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
+
+        if EnabledMarker(self._directory).is_present():
+            return True
+        return (
+            registration is not None
+            and EnabledMarker(Path(registration.directory)).is_present()
+        )
+
+    def _path_a(self, collection: str | None) -> dict[str, object]:
+        """Marker present: run the active flow (auto-register if needed, sync)."""
         if collection is None:
-            # Step 2: No coverage -- check for descendant registrations
-            # before auto-registering.  A parent registration would
-            # subsume existing child registrations, causing data loss.
-            if conn.has_registrations_under(directory):
+            registered_or_short_circuit = self._auto_register()
+            if isinstance(registered_or_short_circuit, dict):
+                return registered_or_short_circuit
+            collection = registered_or_short_circuit
+        return _session_start_output(self._active_context(collection))
+
+    def _path_b(self) -> dict[str, object]:
+        """No marker, no coverage: nudge the operator to run ``quarry enable``.
+
+        Read-only: the covering registration was already checked to reach
+        here, but nothing is written — the daemon is not consulted, no
+        registration is written, no guide is deposited. § 2.3 reserves both
+        mutations to the explicit ``enable`` verb.
+        """
+        return _session_start_output(
+            "Quarry semantic search is available but not enabled for this project.\n"
+            f"Directory: {self._directory}\n"
+            "This directory is not registered for sync. To turn quarry on:\n"
+            f"  quarry enable {self._directory}\n"
+            "This runs once, commits an opt-in marker, deposits the agent guide,\n"
+            "and registers this directory for background sync."
+        )
+
+    def _path_c(self, collection: str) -> dict[str, object]:
+        """Marker absent + coverage exists: surface the drift; two doors, no auto-fix.
+
+        Auto-register is refused (already registered); auto-deregister is
+        refused (would delete indexed data on marker drift, violating § 2.9's
+        promise that toggling never destroys committed content).
+        """
+        logger.warning(
+            "session-start: covering registration %r for %s has no opt-in "
+            "marker; surfacing drift instead of auto-registering",
+            collection,
+            self._directory,
+        )
+        return _session_start_output(
+            "Quarry: this project has an indexed collection but no opt-in marker\n"
+            f"({self._directory}, collection {collection!r}). Two doors:\n"
+            f"  quarry enable {self._directory}         re-adopt: marker + guide.\n"
+            f"  quarry deregister {collection}    drop the registration (keep-data).\n"
+            "Auto-register is refused (already registered); auto-deregister is\n"
+            "refused (would delete indexed data on marker drift)."
+        )
+
+    def _auto_register(self) -> str | dict[str, object]:
+        """Register the covering row and return its collection name.
+
+        Returns the collection ``str`` on success. Returns a response
+        envelope (``dict``) when the flow must short-circuit — subsumption
+        refusal or daemon-unreachable defer.
+        """
+        if self._conn.has_registrations_under(self._directory):
+            logger.warning(
+                "session-start: existing child registrations found under %s; "
+                "skipping auto-register to prevent subsumption. Run "
+                "'quarry enable %s' to explicitly register the parent.",
+                self._directory,
+                self._directory,
+            )
+            return _session_start_output(
+                f"Quarry: child registrations exist under {self._directory}. "
+                "Auto-register skipped to prevent subsumption. "
+                f"Run 'quarry enable {self._directory}' to register the parent."
+            )
+        # A same-directory re-adopt reuses this cwd's own keep-data archive
+        # before consulting the daemon — so a re-open of an archived repo
+        # works even when quarryd is down.
+        collection = self._resolver.archived_collection_for(self._directory)
+        if collection is None:
+            try:
+                chunk_collections = _daemon_chunk_collections()
+            except ConnectionError:
+                # Fail closed: an unverifiable chunk set means a merge-safe
+                # fresh name is unpickable, and writing a registration now
+                # would clear the orphan sweep's pending mark and arm a
+                # latent cross-project merge on the daemon's return.
                 logger.warning(
-                    "session-start: existing child registrations found "
-                    "under %s; skipping auto-register to prevent "
-                    "subsumption. Run 'quarry enable %s' to explicitly "
-                    "register the parent.",
-                    directory,
-                    directory,
+                    "session-start: quarryd unreachable; deferring "
+                    "auto-registration of %s to avoid a cross-project merge",
+                    self._directory,
                 )
                 return _session_start_output(
-                    f"Quarry: child registrations exist under {directory}. "
-                    "Auto-register skipped to prevent subsumption. "
-                    f"Run 'quarry enable {directory}' to register the parent."
+                    f"Quarry: quarryd is unreachable, so auto-registration of "
+                    f"{self._directory} is deferred to avoid merging chunks across "
+                    "projects. Start quarryd and re-open the session to enable "
+                    "semantic search here."
                 )
-
-            # Re-adopt this cwd's own keep-data archive if it owns one (checked
-            # first, over LOCAL retained markers, so a same-dir re-adopt works even
-            # with the daemon down).  Only a cwd owning NO archive needs a fresh
-            # name — and a merge-safe fresh name requires the daemon's chunk set.
-            collection = resolver.archived_collection_for(directory)
-            if collection is None:
-                try:
-                    chunk_collections = _daemon_chunk_collections()
-                except ConnectionError:
-                    # Fail closed: the daemon is unreachable, so the chunk set is
-                    # unverifiable.  Writing a registration now would clear the
-                    # orphan sweep's pending mark and arm a latent cross-project
-                    # merge when the daemon returns.  No indexing runs while the
-                    # daemon is down, so deferring has zero functional cost.
-                    logger.warning(
-                        "session-start: quarryd unreachable; deferring "
-                        "auto-registration of %s to avoid a cross-project merge",
-                        directory,
-                    )
-                    return _session_start_output(
-                        f"Quarry: quarryd is unreachable, so auto-registration of "
-                        f"{directory} is deferred to avoid merging chunks across "
-                        "projects. Start quarryd and re-open the session to enable "
-                        "semantic search here."
-                    )
-                collection = resolver.unique_collection_name(
-                    directory, chunk_collections
-                )
-            conn.register_directory(directory, collection)
-            logger.info(
-                "session-start: auto-registered %s as '%s'",
-                directory,
-                collection,
+            collection = self._resolver.unique_collection_name(
+                self._directory, chunk_collections
             )
+        self._conn.register_directory(self._directory, collection)
+        logger.info(
+            "session-start: auto-registered %s as '%s'",
+            self._directory,
+            collection,
+        )
+        return collection
 
+    def _active_context(self, collection: str) -> str:
+        """Build the active-mode ``additionalContext`` string."""
         captures_collection = f"{collection}-captures"
-
-        # Return context immediately; sync runs in background.
         sync_status = _sync_in_background()
         sync_line = {
             "launched": "Background sync in progress.",
             "running": "Background sync already running.",
         }.get(sync_status, "Background sync failed to launch.")
-        context = (
+        return (
             "Quarry semantic search is active for this project.\n"
-            f'Collection: "{collection}" ({directory})\n'
+            f'Collection: "{collection}" ({self._directory})\n'
             f'Captures: "{captures_collection}"\n'
             f"{sync_line}\n"
             "Use the quarry MCP tools (find, show, ingest, remember) "
@@ -310,9 +426,6 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
             "For deep research across local docs and the web, use the "
             "researcher agent."
         )
-        return _session_start_output(context)
-    finally:
-        conn.close()
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:

@@ -25,6 +25,18 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- `tool`: SessionStart now gates on the `.punt-labs/quarry/enabled`
+  marker. A repo with the marker takes the existing active flow
+  (walk-up coverage, auto-register, background sync). A repo without
+  the marker gets one of two read-only nudges: if there is no covering
+  registration, the hook returns a message pointing at
+  `quarry enable DIR`; if there IS a covering registration (drift — the
+  marker was never written or was deleted), the hook surfaces both
+  `quarry enable DIR` (re-adopt) and `quarry deregister COLLECTION` (drop) and
+  refuses to pick automatically. The nudge and drift paths never mutate
+  the registry, never launch a sync, and never deposit the guide.
+  Standard `punt-kit/standards/tool-enable-disable.md` §§ 2.1, 2.3,
+  2.9, 2.11.
 - `tool`: `/quarry:remember`'s `argument-hint` was `<document name>`, easily
   misread as "type the content here" next to a description that says "Remember
   inline text content." The command's own arguments are the memory's name,
@@ -67,6 +79,17 @@ across `transform`, `index`, and `connector`).
   canonical `@`-import remains as the single delivery path. Documented the
   ownership contract in `src/quarry/guidance.py`'s module docstring so a
   future editor does not fork the string back into a fenced block.
+- `tool`: `quarry disable` now teardown-commits the marker + `@`-import
+  via `Enablement.disable()` **before** deregistering the sync
+  collection via the daemon. Under the old order, a mid-disable failure
+  in `Enablement.disable` (hostile symlink, lock contention, filesystem
+  error) left the collection already gone while the marker and import
+  still declared the repo enabled — the § 2.11 forbidden state (marker
+  present, no functional collection). The reordered flow leaves either
+  the fully-enabled state (recoverable) or a coherent disabled surface
+  (marker-absent, import-absent) with only a runtime registration
+  residue a retry converges — never the invalid state in between.
+
 - `tool`: README and `/ingest` (and `/ingest-dev`) described `ingest`/`quarry
   ingest` as accepting a local file path. It only ever accepts an `http(s)`
   URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the
