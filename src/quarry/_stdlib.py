@@ -153,7 +153,7 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
 # ── Session setup (plugin bootstrap) ─────────────────────────────────
 
 # Commands removed or renamed — add old filenames here to auto-retire.
-_RETIRED_COMMANDS: list[str] = []
+_RETIRED_COMMANDS: list[str] = ["use", "use-dev"]
 
 
 def _read_plugin_name(plugin_root: Path) -> str:
