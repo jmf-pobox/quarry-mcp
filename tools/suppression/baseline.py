@@ -305,11 +305,21 @@ class SuppressionBaseline:
             f"\nFAIL: suppression count increased by {diff}",
             "\nFiles with new or increased suppressions:",
         ]
+        sum_of_file_increases = 0
         for fpath in sorted(set(current_by_file) | set(baseline_by_file)):
             cur = sum(current_by_file.get(fpath, {}).values())
             base = sum(baseline_by_file.get(fpath, {}).values())
             if cur > base:
-                lines.append(f"  {fpath}: +{cur - base} ({base} -> {cur})")
+                rise = cur - base
+                sum_of_file_increases += rise
+                lines.append(f"  {fpath}: +{rise} ({base} -> {cur})")
+        if sum_of_file_increases != diff:
+            # --relax waived part of the rise; per-file listing sums high.
+            lines.append(
+                f"\nNet after --relax waivers: +{diff} "
+                f"(sum of per-file increases above: +{sum_of_file_increases}; "
+                "difference is waived by --relax)"
+            )
         return lines
 
     @classmethod
