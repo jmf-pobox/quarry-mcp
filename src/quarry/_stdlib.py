@@ -153,7 +153,7 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
 # ── Session setup (plugin bootstrap) ─────────────────────────────────
 
 # Commands removed or renamed — add old filenames here to auto-retire.
-_RETIRED_COMMANDS: list[str] = []
+_RETIRED_COMMANDS: list[str] = ["use", "use-dev"]
 
 
 def _read_plugin_name(plugin_root: Path) -> str:
@@ -242,15 +242,7 @@ def _allow_mcp_tools(plugin_name: str, settings_path: Path) -> str | None:
         return None
 
     tool_pattern = f"mcp__plugin_{plugin_name}_quarry__*"
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-        settings["permissions"] = permissions
-
-    allow_list = permissions.get("allow")
-    if not isinstance(allow_list, list):
-        allow_list = []
-        permissions["allow"] = allow_list
+    allow_list = _ensure_allow_list(settings)
 
     # Check if any existing entry already covers this plugin's tools.
     tool_prefix = f"mcp__plugin_{plugin_name}_quarry__"

@@ -14,6 +14,30 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- `tool`: `/quarry:help` (and `-dev` twin) lists all seven slash commands with
+  one-line descriptions, matching the org's `/help` template.
+- `tool`: `plugin/skills/recall/SKILL.md` — a Claude Code plugin skill so
+  agents that never invoke a quarry slash command still reach for `/find`
+  before WebSearch/WebFetch, before a why/how/what-did-we-decide answer, and
+  when a durable fact is worth persisting past compaction.
+
+### Changed
+
+- `tool`: `/quarry:remember`'s `argument-hint` was `<document name>`, easily
+  misread as "type the content here" next to a description that says "Remember
+  inline text content." The command's own arguments are the memory's name,
+  not its content (content is asked separately); reworded to `<name for this
+  memory>`.
+
+### Removed
+
+- `tool`: `/quarry:use` (and `-dev` twin) — the manager subcommand
+  `/quarry:quarry use <db>` is the only slash-command door to switching
+  databases; a bare top-level command for one subcommand was redundant. The
+  CLI verb `quarry use` is unaffected.
+
 ### Fixed
 
 - `tool`: the `researcher` sub-agent's `tools:` allowlist granted only `Read,
