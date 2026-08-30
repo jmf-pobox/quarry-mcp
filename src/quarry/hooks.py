@@ -324,7 +324,7 @@ class _SessionStartContext:
         return _session_start_output(
             "Quarry semantic search is available but not enabled for this project.\n"
             f"Directory: {self._directory}\n"
-            "Nothing has been indexed here yet. To turn quarry on:\n"
+            "This directory is not registered for sync. To turn quarry on:\n"
             f"  quarry enable {self._directory}\n"
             "This runs once, commits an opt-in marker, deposits the agent guide,\n"
             "and registers this directory for background sync."
