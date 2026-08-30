@@ -133,7 +133,6 @@ class TestRetrievalDecayRate:
         monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "0.0")
         assert Settings().retrieval_decay_rate == 0.0
 
-    def test_negative_rejected(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("QUARRY_RETRIEVAL_DECAY_RATE", "-0.1")
+    def test_negative_rejected(self):
         with pytest.raises(ValidationError, match="greater_than_equal"):
-            Settings()
+            Settings.model_validate({"QUARRY_RETRIEVAL_DECAY_RATE": -0.1})
