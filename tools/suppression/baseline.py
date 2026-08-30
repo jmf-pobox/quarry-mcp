@@ -134,7 +134,9 @@ class SuppressionBaseline:
         if forgiven:
             head.append(f"Relaxed by audited --relax: +{forgiven}")
         if current_total > adjusted_total:
-            lines = self._regression(baseline_by_file, current_by_file, adjusted_total)
+            lines = self._regression(
+                baseline_by_file, current_by_file, current_total, adjusted_total
+            )
             return Outcome(1, tuple(head + lines))
         if current_total < baseline_total:
             drop = baseline_total - current_total
@@ -292,9 +294,12 @@ class SuppressionBaseline:
     def _regression(
         baseline_by_file: dict[str, dict[str, int]],
         current_by_file: dict[str, dict[str, int]],
+        current_total: int,
         adjusted_total: int,
     ) -> list[str]:
-        current_total = sum(sum(counts.values()) for counts in current_by_file.values())
+        # current_total is report.total (files + per_file_ignores), passed in
+        # rather than resummed from current_by_file, which excludes the
+        # config-level per_file_ignores category and would understate the diff.
         diff = current_total - adjusted_total
         lines = [
             f"\nFAIL: suppression count increased by {diff}",

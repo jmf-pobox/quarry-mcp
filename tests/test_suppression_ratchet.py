@@ -202,6 +202,33 @@ class TestMergeBaseCheck:
         assert code == 1
         assert "increased by 1" in out
 
+    def test_increase_reports_correct_delta_with_per_file_ignores_configured(
+        self,
+        git_sandbox: GitSandbox,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The reported delta must be the file-level increase, not skewed by config.
+
+        ``per_file_ignores`` is a config-level category with no owning file, so
+        it is absent from ``by_file`` but present in ``total``. The regression
+        message must still report the true 1-suppression increase, not a
+        negative or inflated number derived from re-summing ``by_file`` alone.
+        """
+        monkeypatch.chdir(git_sandbox.root)
+        git_sandbox.write(
+            "pyproject.toml",
+            '[tool.ruff.lint.per-file-ignores]\n"tests/*" = ["S101", "PLR2004"]\n',
+        )
+        base = _seat_and_commit(git_sandbox, _SRC)
+        git_sandbox.write("src/mod.py", _SRC + "y = 2  # type: ignore\n")
+        code = tools.suppression.main(
+            ["src", "--check", "--base-ref", base, "--require-base"]
+        )
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "increased by 1" in out
+
     def test_decrease_passes(
         self, git_sandbox: GitSandbox, monkeypatch: pytest.MonkeyPatch
     ) -> None:
