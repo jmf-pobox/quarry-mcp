@@ -97,6 +97,23 @@ class TestFuse:
         fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
         assert fused[0].document_name == "old"
 
+    def test_null_agent_handle_never_decays(self) -> None:
+        """``agent_handle=None`` must be treated as absent, not the literal ``"None"``.
+
+        LanceDB returns ``None`` for NULL columns; ``str(None) == "None"`` is
+        truthy, so a naive check would decay knowledge chunks whose handle is
+        NULL rather than empty-string.
+        """
+        now = datetime.now(tz=UTC)
+        old_ts = now - timedelta(days=30)
+        old = dict(_row("old", chunk=0, memory_type="fact", ts=old_ts))
+        old["agent_handle"] = None
+        recent = dict(_row("recent", chunk=1, memory_type="fact", ts=now))
+        recent["agent_handle"] = None
+
+        fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
+        assert fused[0].document_name == "old"
+
 
 class TestTemporalWeight:
     def test_no_decay_returns_one(self) -> None:

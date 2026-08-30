@@ -71,28 +71,22 @@ class RrfFusion:
         return results
 
     def _contribution(self, row: dict[str, object], rank: int, now_ts: float) -> float:
-        """RRF term ``1 / (k + rank)`` for one row, scaled by temporal weight."""
-        if self._is_agent_memory(row):
-            weight = self.temporal_weight(
-                row.get("ingestion_timestamp", ""), now_ts, self._decay_rate
-            )
+        """RRF term ``1 / (k + rank)`` for one row, scaled by temporal weight.
+
+        Knowledge chunks (empty/NULL ``agent_handle``) never decay -- only
+        agent-owned rows follow the recency curve.
+        """
+        memory_type = str(row.get("memory_type") or "")
+        if (
+            self._decay_rate > 0
+            and memory_type in _DECAYABLE_TYPES
+            and row.get("agent_handle")
+        ):
+            ts = row.get("ingestion_timestamp", "")
+            weight = self.temporal_weight(ts, now_ts, self._decay_rate)
         else:
             weight = 1.0
-        return weight / (self._rrf_k + rank)
-
-    def _is_agent_memory(self, row: dict[str, object]) -> bool:
-        """Agent-owned decayable row: carries both a handle and a decayable type.
-
-        Knowledge chunks (empty ``agent_handle``) are exempt from decay even
-        when they carry a ``memory_type`` tag; only agent-owned rows follow the
-        recency curve.
-        """
-        if self._decay_rate <= 0:
-            return False
-        return (
-            bool(str(row.get("agent_handle", "")))
-            and str(row.get("memory_type", "")) in _DECAYABLE_TYPES
-        )
+        return (1.0 / (self._rrf_k + rank)) * weight
 
     @staticmethod
     def _row_key(row: dict[str, object]) -> _RowKey:
