@@ -1498,7 +1498,10 @@ class TestT15SessionStartChildUsesParentCollection:
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "proj" in ctx
+        # Path A active flow, not Path C drift-surfacing: the marker lives at
+        # the parent root, not the child cwd, and must still be honored.
+        assert ctx.startswith("Quarry semantic search is active for this project.")
+        assert 'Collection: "proj"' in ctx
 
         # Verify no new registration was created.
         conn = SyncRegistry(settings.registry_path)
