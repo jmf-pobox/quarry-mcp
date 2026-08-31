@@ -32,7 +32,10 @@ class RetrievalConfig:
     ``decay_rate`` carries the agent-memory temporal-decay knob. The dataclass
     default stays ``0.0`` (no decay) so unit tests and the eval runner get the
     reproducible baseline; the daemon threads the production value from
-    ``Settings.retrieval_decay_rate`` at wire time.
+    ``Settings.retrieval_decay_rate`` at wire time. ``lesson_boost`` carries
+    the ``quarry learn`` retrieval-preference knob the same way: the dataclass
+    default ``1.0`` is neutral (no boost), and the daemon threads the
+    production value from ``Settings.retrieval_lesson_boost``.
     """
 
     rrf_k: int = _DEFAULT_RRF_K
@@ -42,3 +45,4 @@ class RetrievalConfig:
     reranker: Reranker = field(default_factory=NullReranker)
     embedding_strategy: str = _DEFAULT_EMBEDDING_STRATEGY
     decay_rate: float = 0.0
+    lesson_boost: float = 1.0

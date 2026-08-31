@@ -43,3 +43,18 @@ class IngestRequest(BaseModel):
     agent_handle: str = ""
     memory_type: str = ""
     summary: str = ""
+
+
+class LearnRequest(BaseModel):
+    """Body for saving a distilled lesson with retrieval preference.
+
+    ``cwd`` is never a caller-facing parameter on any surface (CLI, MCP,
+    slash, client) -- ``QuarryClient.learn()`` resolves it via ``Path.cwd()``
+    before this model is built, exactly the way ``CaptureIngestRequest.cwd``
+    is populated by the caller's own working directory, not the user.
+    """
+
+    lesson: str
+    topic: str = ""
+    name: str = ""
+    cwd: str = ""

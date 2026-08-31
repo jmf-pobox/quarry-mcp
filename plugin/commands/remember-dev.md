@@ -1,5 +1,5 @@
 ---
-description: Remember inline text content in your knowledge base
+description: Remember inline text content in your knowledge base. remember = a specific durable fact, ingest = a URL, learn = a distilled lesson that gets retrieval preference.
 argument-hint: "<name for this memory>"
 ---
 <!-- markdownlint-disable MD041 -->

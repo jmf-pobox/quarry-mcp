@@ -2685,3 +2685,91 @@ the hook to either import `quarry.sync_registry` (violating the engine-free
 hook boundary) or guess the name from `cwd` with a copy of the daemon's own
 derivation logic — a second implementation of `CapturesCollection.for_cwd`
 that could silently diverge from the one the daemon uses at write time.
+
+## DES-053: `quarry learn` — a fourth capture verb with retrieval preference
+
+**Context.** `remember` and `ingest` cover a durable fact and a URL, but
+neither gives a caller a way to say "this rule should outrank ordinary
+results" — the only lever is `memory_type`, which is descriptive metadata,
+not a retrieval signal. The design considered and rejected a two-call shape
+(`learn` then `set_config`): a crash between the two calls leaves a lesson
+that never surfaces, and the shape freezes solid the moment a client exists.
+Operator-ratified 2026-08-31 (three constraints, `docs/design/quarry-b6p-
+quarry-learn.md`): **C1** atomic operation (one call writes the chunk and
+registers the boost, on every surface); **C2** same verb/shape everywhere
+(`learn` on CLI/MCP/slash/client, lesson text positional, `topic`/`name`
+trailing options); **C3** slash is a thin door (`/quarry:learn` parses and
+calls the MCP tool, no logic in the `.md`).
+
+**Decision.**
+
+1. **Collection: project-scoped `<repo>-lessons`, not agent-scoped.** A new
+   `LessonsCollection` (structurally identical to `CapturesCollection`) maps a
+   lesson's `cwd` to `<repo>-lessons` or `default-lessons`. The ratified wire
+   shape (`{lesson, topic?, name?}`) has no `agent_handle` field on any
+   surface — a distilled lesson is project knowledge, not personal memory.
+2. **Retrieval preference is a fusion-time rank multiplier, not a second
+   write.** `RrfFusion` gains `lesson_boost` (default `1.5`, threaded from
+   `Settings.retrieval_lesson_boost`, `ge=1.0`): a row's RRF term is
+   multiplied by `lesson_boost` when `memory_type == "lesson"`. This is why
+   C1's atomicity is trivial — "retrieval preference" is a derived property of
+   the one field (`memory_type`) the single write already sets, not a second
+   row. A multiplier (not a hard filter/promotion) means an irrelevant lesson
+   still loses to a relevant plain result; `1.5` is derived from RRF's
+   `1/(k+rank)` term so a lesson ranked in the top ~30 of its own channel
+   outranks even the single best non-lesson hit, while rank 40+ still loses.
+3. **Lessons are exempt from decay for free.** `learn` never sets
+   `agent_handle`, so every lesson row already fails the existing
+   `RrfFusion` decay gate (`decay_rate > 0 AND memory_type in _DECAYABLE_TYPES
+   AND agent_handle`) — no new gate needed. `_DECAYABLE_TYPES` deliberately
+   excludes `"lesson"` as belt-and-suspenders documentation against a future
+   change that adds `agent_handle` to `learn`'s shape.
+4. **Document naming is always daemon-generated, never the caller's literal
+   name.** `LessonComposer.document_name` returns `lesson-<slug>-<8 hex>` —
+   the slug comes from `name`, else `topic`, else `"note"`. Forced by
+   `RrfFusion`'s dedup key `(document_name, chunk_index, page_number)`: two
+   lessons sharing a literal name would collide at `chunk_index=0,
+   page_number=0` (the common case for a short lesson), merging scores and
+   silently dropping one lesson's text. `learn`'s whole premise — quick,
+   low-ceremony capture — makes name reuse the expected case, so the
+   uniqueness guarantee is unconditional, not caller-opt-in; `overwrite` is
+   therefore never exposed as a `learn` parameter.
+5. **`memory_type == "lesson"` is reserved.** `remember`/`ingest` both reject
+   a caller-supplied `memory_type: "lesson"` with `400` — without the guard, a
+   caller could get the retrieval boost while bypassing `learn`'s naming,
+   topic, and length-cap rules, defeating C1's atomicity guarantee.
+6. **Length cap: 500 characters, server-side only.** `learn` rejects a lesson
+   over 500 characters, pointing the caller at `remember`. "Distilled" is the
+   operative word in the boundary sentence; without an enforced boundary,
+   `learn` would accept the same content `remember` does.
+7. **`quarry doctor`'s memory-corpus check gains a handle-independent lesson
+   count.** The existing `_tally` excluded every empty-`agent_handle` row from
+   its type tally — meaning every lesson (empty handle by design) was
+   invisible to the one diagnostic built to answer "how much distilled
+   knowledge exists here." `_tally`'s counters were extracted into a
+   `_CorpusTally` accumulator (`add(row)` per row) so the lesson count is a
+   fourth, independently-gated field rather than a fifth tuple position.
+8. **The boundary sentence propagates to `remember`/`ingest`, not just the
+   newcomer.** "remember = a specific durable fact, ingest = a URL, learn = a
+   distilled lesson that gets retrieval preference" appears verbatim in the
+   CLI, MCP, and slash-command descriptions of all three verbs — otherwise the
+   boundary the sentence exists to draw only holds for two of three verbs.
+
+**One resolved deviation from C2's literal text.** C2's ratified prose spells
+the client signature `topic=None, name=None`; the implementation uses
+`topic: str = "", name: str = ""`. No `Optional`/`| None` field exists
+anywhere in `quarry.api` today (`RememberRequest`, `IngestRequest` both use
+the empty-string sentinel), and `None` here would be the only exception for no
+different reason than the two adjacent methods that already use `""`. Read as
+C2 specifying the *shape* (three params, one positional, two optional) and
+implementing the *type* per the codebase's settled convention.
+
+**Rejected: boost scoped by query-supplied `topic`.** Would require a new
+`topic` filter on `find`/`SearchRequest`/`SearchFilter` — a much larger
+surface-parity change (bug class 3) than a v1 retrieval-preference feature
+justifies. A real, data-backed need for topic-scoped boosting is a separate
+follow-on, not a speculative addition here.
+
+**Rejected: agent-scoped lessons (route via `agent_handle` like
+`remember`).** Would require smuggling an identity parameter onto a wire
+shape (C2) that has no field for it on any of the four surfaces.

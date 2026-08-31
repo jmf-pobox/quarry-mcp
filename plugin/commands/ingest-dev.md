@@ -1,5 +1,5 @@
 ---
-description: Ingest a URL, directory, or file into your knowledge base
+description: Ingest a URL, directory, or file into your knowledge base. remember = a specific durable fact, ingest = a URL, learn = a distilled lesson that gets retrieval preference.
 argument-hint: "<url, directory, or file path>"
 ---
 <!-- markdownlint-disable MD041 -->

@@ -57,10 +57,14 @@ class CaptureRoutes(RouteGroup):
         overwrite = RequestGuards.coerce_bool_field(body, "overwrite", default=True)
         if isinstance(overwrite, JSONResponse):
             return overwrite
-        source_url = self._str_field(body, "source_url")
-        rejection = await self._reject_unsafe_source(source_url)
+        memory_type = self._str_field(body, "memory_type")
+        rejection = self.reject_reserved_memory_type(memory_type)
         if rejection is not None:
             return rejection
+        source_url = self._str_field(body, "source_url")
+        url_rejection = await self._reject_unsafe_source(source_url)
+        if url_rejection is not None:
+            return url_rejection
         collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
         inline = ScrubbedIngestJob(
             name=name,
@@ -70,7 +74,7 @@ class CaptureRoutes(RouteGroup):
             overwrite=overwrite,
             scrub_label="capture",
             agent_handle=self._str_field(body, "agent_handle"),
-            memory_type=self._str_field(body, "memory_type"),
+            memory_type=memory_type,
             summary=self._str_field(body, "summary"),
         )
         return CaptureIngestJob(inline=inline, source_url=source_url)

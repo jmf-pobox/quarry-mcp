@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from pydantic import BaseModel, ValidationError
@@ -35,6 +36,7 @@ from quarry.api import (
     DocumentList,
     HealthResponse,
     IngestRequest,
+    LearnRequest,
     OptimizeRequest,
     RegisterRequest,
     RegistrationList,
@@ -148,6 +150,27 @@ class QuarryClient:
     ) -> TaskAccepted:
         """Fetch and index a URL as a 202 background task."""
         return self._post("/ingest", TaskAccepted, req, timeout=timeout)
+
+    def learn(self, lesson: str, topic: str = "", name: str = "") -> TaskAccepted:
+        """Save a distilled lesson as a 202 background task.
+
+        remember = a specific durable fact, ingest = a URL, learn = a
+        distilled lesson that gets retrieval preference.
+
+        Resolves the caller's cwd to scope the lesson to this project's
+        ``<repo>-lessons`` collection -- the one deliberate exception to this
+        client's pure-transport contract: ``cwd`` is not user-supplied on
+        any surface (CLI/MCP/slash/client), so a lesson's project scope has
+        to come from somewhere the caller is not asked to state twice.  A
+        deleted cwd (e.g. a cleaned-up tmpdir) degrades to "" rather than
+        crashing; the daemon then routes to ``default-lessons``.
+        """
+        try:
+            cwd = str(Path.cwd())
+        except OSError:
+            cwd = ""
+        req = LearnRequest(lesson=lesson, topic=topic, name=name, cwd=cwd)
+        return self._post("/learn", TaskAccepted, req)
 
     # -- sync & captures ---------------------------------------------------
 

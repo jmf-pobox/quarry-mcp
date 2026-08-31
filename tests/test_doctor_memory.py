@@ -108,6 +108,47 @@ class TestCorpus:
         assert result.passed is False
         assert "check failed" in result.message
 
+    def test_lessons_counted_despite_empty_agent_handle(self, tmp_path: Path) -> None:
+        """A quarry-learn lesson row (empty agent_handle by design) still counts.
+
+        Without D9's handle-independent path, a lesson row is invisible to
+        both the handle and type tallies -- this is the gap D9 closes.
+        """
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        lesson_row: dict[str, object] = {
+            "agent_handle": "",
+            "memory_type": "lesson",
+            "collection": "quarry-lessons",
+        }
+        rows: list[dict[str, object]] = [lesson_row, dict(lesson_row)]
+        with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
+            result = MemoryDiagnostics.corpus(db_path)
+        assert "lessons=2" in result.message
+
+    def test_lessons_segment_absent_when_no_lessons(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        rows: list[dict[str, object]] = [
+            {"agent_handle": "rmh", "memory_type": "fact", "collection": "memory-rmh"},
+        ]
+        with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
+            result = MemoryDiagnostics.corpus(db_path)
+        assert "lessons=" not in result.message
+
+    def test_lessons_count_unaffected_by_agent_handle_presence(
+        self, tmp_path: Path
+    ) -> None:
+        """A lesson row with a (non-standard) handle still counts as a lesson."""
+        db_path = tmp_path / "lancedb"
+        db_path.mkdir()
+        rows: list[dict[str, object]] = [
+            {"agent_handle": "rmh", "memory_type": "lesson", "collection": "c"},
+        ]
+        with patch("quarry.db.facade.Database.connect", return_value=_patch_rows(rows)):
+            result = MemoryDiagnostics.corpus(db_path)
+        assert "lessons=1" in result.message
+
 
 class TestIdentityActive:
     def test_no_handle_when_config_missing(self, tmp_path: Path) -> None:

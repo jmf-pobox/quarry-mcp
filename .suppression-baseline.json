@@ -1,7 +1,7 @@
 {
-  "total": 212,
+  "total": 214,
   "by_category": {
-    "noqa": 176,
+    "noqa": 178,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 0,
@@ -166,8 +166,11 @@
       "noqa": 1
     },
     "src/quarry/web_fetch_loop_closer.py": {
+      "noqa": 2
+    },
+    "src/quarry/lesson.py": {
       "noqa": 1
     }
   },
-  "updated_at": "2026-08-31T12:43:34Z"
+  "updated_at": "2026-08-31T18:12:19Z"
 }

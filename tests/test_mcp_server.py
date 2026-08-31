@@ -32,11 +32,12 @@ from quarry.db_pointer import SELECTION
 from quarry.mcp_server import McpTools, mcp
 from quarry.results import SearchResult
 
-# The eleven tools the MCP surface exposes; a rename or removal is a regression.
+# The twelve tools the MCP surface exposes; a rename or removal is a regression.
 _EXPECTED_TOOLS = {
     "find",
     "ingest",
     "remember",
+    "learn",
     "list",
     "show",
     "delete",
@@ -445,6 +446,35 @@ class TestIngest:
         assert "task" in result
 
 
+class TestLearn:
+    def test_dispatches_and_returns_task(self, harness: _ToolHarness) -> None:
+        result = harness.tools.learn("always run make check before committing")
+        assert "task" in result
+
+    def test_blank_lesson_rejected(self, harness: _ToolHarness) -> None:
+        result = harness.tools.learn("")
+        assert result.startswith("Error:")
+        assert "lesson" in result
+
+    def test_topic_and_name_reach_the_daemon(self, harness: _ToolHarness) -> None:
+        captured: list[dict[str, object]] = []
+        real_learn_job = __import__(
+            "quarry.daemon.routes.ingestion", fromlist=["IngestionRoutes"]
+        ).IngestionRoutes._learn_job
+
+        async def spy(self: object, body: dict[str, object]) -> object:
+            captured.append(dict(body))
+            return await real_learn_job(self, body)
+
+        with patch("quarry.daemon.routes.ingestion.IngestionRoutes._learn_job", spy):
+            harness.tools.learn("a lesson", topic="testing", name="auth-gotcha")
+
+        assert len(captured) == 1
+        assert captured[0]["lesson"] == "a lesson"
+        assert captured[0]["topic"] == "testing"
+        assert captured[0]["name"] == "auth-gotcha"
+
+
 class TestDelete:
     def test_document_dispatches(self, harness: _ToolHarness) -> None:
         result = harness.tools.delete("report.pdf")
@@ -654,6 +684,10 @@ class TestDaemonDown:
         result = self._down_tools().remember("x", "n.md")
         assert result.startswith("Error:")
 
+    def test_learn_returns_error_string(self) -> None:
+        result = self._down_tools().learn("x")
+        assert result.startswith("Error:")
+
 
 class TestInputValidation:
     """Malformed inputs are rejected/normalized without hitting the daemon.
@@ -751,6 +785,10 @@ class TestToolDocstringOpeners:
         "Use remember when you learn something durable — a decision, a gotcha, "
         "a non-obvious fact, a procedure — so it survives context compaction."
     )
+    _BOUNDARY = (
+        "remember = a specific durable fact, ingest = a URL, learn = a "
+        "distilled lesson that gets retrieval preference."
+    )
 
     def test_server_instructions_lead_with_r1_and_r2(self) -> None:
         assert mcp.instructions is not None
@@ -774,6 +812,15 @@ class TestToolDocstringOpeners:
         assert "clipboard" not in doc.lower()
         assert "api response" not in doc.lower()
         assert "sandbox-uploaded" not in doc.lower()
+
+    def test_boundary_sentence_in_remember_ingest_learn_docstrings(self) -> None:
+        """The three capture verbs must each carry the identical boundary
+        sentence, not just the newcomer -- otherwise the boundary blurs for
+        whichever verb is missing it.
+        """
+        for tool in (McpTools.remember, McpTools.ingest, McpTools.learn):
+            doc = tool.__doc__ or ""
+            assert self._BOUNDARY in doc, tool.__name__
 
     def test_other_tools_open_with_non_mechanism_sentence(self) -> None:
         """Every non-trigger tool opens with 'Use ...' — an occasion, not a verb.

@@ -38,7 +38,10 @@ class SearchRoutes(RouteGroup):
         limit = self._limit(params)
         search_filter = self._filter(params)
         query_vector = self.ctx.embedder.embed_query(query)
-        config = RetrievalConfig(decay_rate=self.ctx.settings.retrieval_decay_rate)
+        config = RetrievalConfig(
+            decay_rate=self.ctx.settings.retrieval_decay_rate,
+            lesson_boost=self.ctx.settings.retrieval_lesson_boost,
+        )
         results = SearchService(self.ctx.query_database, config).search(
             query, query_vector, search_filter, limit
         )

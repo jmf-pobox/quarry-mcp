@@ -574,6 +574,34 @@ class TestSearch:
 
         assert seen_rates == [0.0]
 
+    def test_search_threads_settings_lesson_boost(self, tmp_path: Path) -> None:
+        """The daemon threads ``Settings.retrieval_lesson_boost`` into search."""
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.0
+        settings.retrieval_lesson_boost = 2.0
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_boosts: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            boost = getattr(config, "lesson_boost", None)
+            if boost is not None:
+                seen_boosts.append(float(boost))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_boosts == [2.0]
+
 
 class TestDocuments:
     def test_list_documents(self, client: TestClient) -> None:
@@ -1857,6 +1885,17 @@ class TestCapture:
         url.assert_not_called()  # the SSRF sink was never reached
         content.assert_not_called()  # rejected before any ingest job ran
 
+    def test_capture_rejects_reserved_memory_type_lesson(
+        self, client: TestClient
+    ) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        resp = client.post(
+            "/v1/capture",
+            json={"content": "body", "document_name": "n.md", "memory_type": "lesson"},
+        )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
+
 
 class TestRemember:
     """Tests for POST /remember endpoint -- now returns 202."""
@@ -2099,6 +2138,15 @@ class TestRemember:
         )
         assert resp.status_code == 400
         assert "overwrite" in resp.json()["error"].lower()
+
+    def test_rejects_reserved_lesson_memory_type(self, client: TestClient) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        resp = client.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": "body", "memory_type": "lesson"},
+        )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
 
 
 def _fake_public_addrinfo(
@@ -2442,6 +2490,181 @@ class TestIngest:
             resp = client.post("/v1/ingest", json={"source": "http://cgnat.example/"})
         assert resp.status_code == 400
         assert "cgnat" in resp.json()["error"].lower()
+
+    def test_rejects_reserved_lesson_memory_type(self, client: TestClient) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        with patch(
+            "quarry.url_safety.socket_module.getaddrinfo",
+            side_effect=_fake_public_addrinfo,
+        ):
+            resp = client.post(
+                "/v1/ingest",
+                json={"source": "https://example.com/doc", "memory_type": "lesson"},
+            )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
+
+
+class TestLearn:
+    """Tests for POST /learn endpoint (quarry-b6p)."""
+
+    def test_success_returns_202_with_learn_prefixed_task_id(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"document_name": "n", "collection": "c", "chunks": 1},
+            ),
+        ):
+            resp = tc.post("/v1/learn", json={"lesson": "always run make check"})
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["task_id"].startswith("learn-")
+
+    def test_missing_lesson_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/learn", json={})
+        assert resp.status_code == 400
+        assert "lesson" in resp.json()["error"].lower()
+
+    def test_lesson_over_max_chars_returns_400_naming_the_limit(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post("/v1/learn", json={"lesson": "x" * 501})
+        assert resp.status_code == 400
+        assert "500" in resp.json()["error"]
+        assert "remember" in resp.json()["error"].lower()
+
+    def test_topic_lands_in_summary_and_name_in_document_name(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = name
+            seen["summary"] = kw["summary"]
+            seen["memory_type"] = kw["memory_type"]
+            seen["agent_handle"] = kw["agent_handle"]
+            return {"document_name": name, "collection": "c", "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post(
+                "/v1/learn",
+                json={
+                    "lesson": "always run make check",
+                    "topic": "testing",
+                    "name": "auth-gotcha",
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert str(seen["name"]).startswith("lesson-auth-gotcha-")
+        assert seen["summary"] == "testing"
+        assert seen["memory_type"] == "lesson"
+        assert seen["agent_handle"] == ""
+
+    def test_two_calls_same_name_produce_distinct_document_names(
+        self, tmp_path: Path
+    ) -> None:
+        """D6 regression: two lessons filed under the same name never collide."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        names: list[str] = []
+
+        def _ingest_content(
+            _content: str, name: str, *_a: object, **_kw: object
+        ) -> dict[str, object]:
+            names.append(name)
+            return {"document_name": name, "collection": "c", "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            for _ in range(2):
+                resp = tc.post(
+                    "/v1/learn",
+                    json={"lesson": "a lesson", "name": "auth-gotcha"},
+                )
+                _poll_task_done(tc, resp.json()["task_id"])
+
+        assert len(names) == 2
+        assert names[0] != names[1]
+
+    def test_empty_cwd_routes_to_default_lessons(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, _name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["collection"] = kw["collection"]
+            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post("/v1/learn", json={"lesson": "a lesson"})
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert seen["collection"] == "default-lessons"
+
+    def test_registered_cwd_routes_to_repo_lessons(self, tmp_path: Path) -> None:
+        """A cwd under a registered directory resolves to <repo>-lessons."""
+        from quarry.sync_registry import SyncRegistry
+
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = tmp_path / "registry.db"
+        project = tmp_path / "myapp"
+        project.mkdir()
+        reg = SyncRegistry(settings.registry_path)
+        reg.register_directory(project, "myapp")
+        reg.commit()
+        reg.close()
+
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, _name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["collection"] = kw["collection"]
+            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post(
+                "/v1/learn",
+                json={"lesson": "a lesson", "cwd": str(project)},
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert seen["collection"] == "myapp-lessons"
 
 
 class TestSync:
