@@ -931,8 +931,11 @@ class TestHandlePostWebFetch:
         }
 
         with (
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
-            patch("quarry.hooks._ingest_url_via_daemon") as ing,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_ingest_url") as ing,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -951,8 +954,11 @@ class TestHandlePostWebFetch:
         }
 
         with (
-            patch("quarry.hooks._capture_via_daemon") as cap,
-            patch("quarry.hooks._ingest_url_via_daemon", return_value=True) as ing,
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
+                return_value=True,
+            ) as ing,
         ):
             result = handle_post_web_fetch(payload)
 
@@ -974,8 +980,14 @@ class TestHandlePostWebFetch:
         }
 
         with (
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
-            patch("quarry.hooks._ingest_url_via_daemon", return_value=True) as ing,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
+                return_value=True,
+            ) as ing,
         ):
             handle_post_web_fetch(content_payload)
             handle_post_web_fetch(fetch_payload)
@@ -1091,8 +1103,13 @@ class TestHookImportsNoEngine:
 
         transcript = _make_transcript(tmp_path, "hello world")
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as pre_cap,
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as pre_cap,
         ):
             handle_pre_compact(
                 {"transcript_path": str(transcript), "session_id": "abcd1234ef"}
@@ -1100,8 +1117,14 @@ class TestHookImportsNoEngine:
         assert pre_cap.called
 
         with (
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as web_cap,
-            patch("quarry.hooks._ingest_url_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as web_cap,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
+                return_value=True,
+            ),
         ):
             handle_post_web_fetch(
                 {
@@ -1188,7 +1211,7 @@ class TestHandlePreCompact:
         hook must instead skip and never reach the daemon.
         """
         transcript = _make_transcript(tmp_path, "Hello")
-        with patch("quarry.hooks._capture_via_daemon") as cap:
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
             result = handle_pre_compact(
                 {"transcript_path": str(transcript), "session_id": None}
             )
@@ -1197,7 +1220,7 @@ class TestHandlePreCompact:
 
     def test_non_string_transcript_path_skips_cleanly(self, tmp_path: Path) -> None:
         """A non-string transcript_path (None) is MISSING — no phantom-path resolve."""
-        with patch("quarry.hooks._capture_via_daemon") as cap:
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
             result = handle_pre_compact(
                 {"transcript_path": None, "session_id": "abc123"}
             )
@@ -1209,8 +1232,13 @@ class TestHandlePreCompact:
         transcript = _make_transcript(tmp_path, "Important context here")
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             result = handle_pre_compact(
                 {
@@ -1230,10 +1258,17 @@ class TestHandlePreCompact:
         transcript = _make_transcript(tmp_path, "Working on myapp")
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._read_ethos_agent_handle", return_value="rmh"),
-            patch("quarry.hooks._write_capture_file"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.ethos_handle.EthosConfig.agent_handle_at", return_value="rmh"
+            ),
+            patch("quarry.capture.CaptureWriter.write"),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {
@@ -1251,7 +1286,7 @@ class TestHandlePreCompact:
         transcript = tmp_path / "empty.jsonl"
         transcript.write_text("")
 
-        with patch("quarry.hooks._capture_via_daemon") as cap:
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
             result = handle_pre_compact(
                 {
                     "transcript_path": str(transcript),
@@ -1272,12 +1307,17 @@ class TestHandlePreCompact:
         sessions_dir = tmp_path / "home" / ".punt-labs" / "quarry" / "sessions"
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.hooks._resolve_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             handle_pre_compact(
                 {
@@ -1307,12 +1347,17 @@ class TestHandlePreCompact:
         os.utime(old_file, (old_mtime, old_mtime))
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.hooks._resolve_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             handle_pre_compact(
                 {
@@ -1333,12 +1378,17 @@ class TestHandlePreCompact:
         )
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.transcript_reader.shutil.copy",
                 side_effect=OSError("disk full"),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {
@@ -1364,12 +1414,17 @@ class TestHandlePreCompact:
         prior.write_text("{}\n")
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.hooks._resolve_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             handle_pre_compact(
                 {
@@ -1396,12 +1451,17 @@ class TestHandlePreCompact:
         os.utime(transcript, (old_time, old_time))
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.hooks._resolve_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             handle_pre_compact(
                 {
@@ -1419,8 +1479,13 @@ class TestHandlePreCompact:
         transcript = _make_transcript(tmp_path, "Confirm capture")
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             result = handle_pre_compact(
                 {
@@ -1441,8 +1506,13 @@ class TestHandlePreCompact:
         transcript = _make_transcript(tmp_path, "Will not be indexed now")
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._capture_via_daemon", return_value=False),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
         ):
             result = handle_pre_compact(
                 {
@@ -1461,12 +1531,17 @@ class TestHandlePreCompact:
         transcript = _make_transcript(tmp_path)
 
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
             patch(
                 "quarry.hooks._resolve_settings",
                 return_value=_mock_settings(),
             ),
-            patch("quarry.hooks._capture_via_daemon", return_value=True),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
         ):
             result = handle_pre_compact(
                 {
@@ -1903,7 +1978,7 @@ class TestPreCompactCaptureRedaction:
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
         from quarry.artifacts import SessionArtifacts
-        from quarry.hooks import _write_capture_file
+        from quarry.capture import CaptureRequest, CaptureWriter
 
         artifacts = SessionArtifacts(
             commit_shas=(),
@@ -1912,12 +1987,15 @@ class TestPreCompactCaptureRedaction:
             bead_ids=(),
         )
         text = "worked in /Users/jfreeman/repo and pinged jmf@pobox.com"
-        _write_capture_file(
-            project_dir=tmp_path,
-            session_id="abcd1234ef",
-            timestamp="2026-07-11T00:00:00Z",
-            artifacts=artifacts,
-            text=text,
+        CaptureWriter().write(
+            CaptureRequest(
+                project_dir=tmp_path,
+                session_id="abcd1234ef",
+                timestamp="2026-07-11T00:00:00Z",
+                artifacts=artifacts,
+                text=text,
+                label="pre-compact",
+            )
         )
 
         capture = (
@@ -1985,7 +2063,9 @@ class TestCwdHardeningPostWebFetch:
             "tool_input": {"url": "https://example.com/docs"},
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
-        with patch("quarry.hooks._capture_via_daemon", return_value=True) as cap:
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+        ) as cap:
             handle_post_web_fetch(payload)
         # cwd is blanked, so the daemon files into default-captures, not a
         # project derived from the hook process's own directory.
@@ -1997,7 +2077,9 @@ class TestCwdHardeningPostWebFetch:
             "tool_input": {"url": "https://example.com/docs"},
             "tool_response": json.dumps({"result": "<p>Some docs</p>"}),
         }
-        with patch("quarry.hooks._capture_via_daemon", return_value=True) as cap:
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture", return_value=True
+        ) as cap:
             handle_post_web_fetch(payload)
         assert cap.call_args[0][0].cwd == ""
 
@@ -2008,10 +2090,15 @@ class TestCwdHardeningPreCompact:
     def test_relative_cwd_skips_local_write(self, tmp_path: Path) -> None:
         transcript = _make_transcript(tmp_path, "Working somewhere")
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._write_capture_file") as write_local,
-            patch("quarry.hooks._read_ethos_agent_handle") as ethos,
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch("quarry.capture.CaptureWriter.write") as write_local,
+            patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {
@@ -2030,10 +2117,15 @@ class TestCwdHardeningPreCompact:
     ) -> None:
         transcript = _make_transcript(tmp_path, "Working somewhere")
         with (
-            patch("quarry.hooks.Path.home", return_value=tmp_path / "home"),
-            patch("quarry.hooks._write_capture_file") as write_local,
-            patch("quarry.hooks._read_ethos_agent_handle") as ethos,
-            patch("quarry.hooks._capture_via_daemon", return_value=True) as cap,
+            patch(
+                "quarry.session_transcript.Path.home", return_value=tmp_path / "home"
+            ),
+            patch("quarry.capture.CaptureWriter.write") as write_local,
+            patch("quarry.ethos_handle.EthosConfig.agent_handle_at") as ethos,
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ) as cap,
         ):
             handle_pre_compact(
                 {

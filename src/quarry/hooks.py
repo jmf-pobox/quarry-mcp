@@ -22,19 +22,16 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
 from quarry._stdlib import load_hook_config
+from quarry.daemon_capture import DaemonCaptureSender
+from quarry.ethos_handle import EthosConfig
+from quarry.session_transcript import SessionTranscriptCapture
 from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from quarry.api import CaptureIngestRequest, IngestRequest
-    from quarry.artifacts import SessionArtifacts
-    from quarry.client import QuarryClient
     from quarry.collection_resolver import CollectionResolver
     from quarry.config import Settings
     from quarry.results import CoverageCounts
@@ -629,6 +626,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     # document name; redact it for the name the daemon files under.
     meta_url = CaptureUrl(url).redacted(lambda raw: scrub_and_log(raw, "web-fetch"))
 
+    sender = DaemonCaptureSender()
     content = parsed.content
     if content:
         # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
@@ -636,7 +634,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # JS-rendered page) the daemon can re-fetch it server-side — the capture
         # route SSRF-gates source_url before the re-fetch — so the page is
         # captured, not silently dropped, and the client stays engine-free.
-        _capture_via_daemon(
+        sender.send_capture(
             CaptureIngestRequest(
                 content=content,
                 cwd=cwd,
@@ -650,119 +648,12 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # Fallback: no usable content — the daemon re-fetches through the
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
         logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
-        _ingest_url_via_daemon(
+        sender.send_ingest_url(
             IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
     return {}
 
-
-def _read_ethos_agent_handle(cwd: str) -> str:
-    """Read the agent handle from the ethos sidecar config.
-
-    Looks for ``.punt-labs/ethos/config.yaml`` relative to *cwd* and
-    walks up to the filesystem root.  Returns the ``agent`` field value
-    (which is the agent handle), or empty string if not found.
-    """
-    import yaml as _yaml  # noqa: PLC0415
-
-    current = Path(cwd).resolve()
-    while True:
-        config_path = current / ".punt-labs" / "ethos" / "config.yaml"
-        if config_path.is_file():
-            try:
-                data = _yaml.safe_load(config_path.read_text())
-            except (OSError, _yaml.YAMLError):
-                logger.warning(
-                    "pre-compact: could not parse ethos config %s",
-                    config_path,
-                    exc_info=True,
-                )
-                return ""
-            if isinstance(data, dict):
-                agent = data.get("agent", "")
-                if isinstance(agent, str) and agent:
-                    return agent
-            return ""
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return ""
-
-
-def _write_capture_file(
-    project_dir: Path,
-    session_id: str,
-    timestamp: str,
-    artifacts: SessionArtifacts,
-    text: str,
-) -> None:
-    """Write the PreCompact session capture via the shared CaptureWriter.
-
-    The writer scrubs secrets, PII, and profanity before any bytes reach the
-    git-tracked capture file, and fails silently so capture issues never
-    block the main ingest flow.
-    """
-    from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
-
-    CaptureWriter().write(
-        CaptureRequest(
-            project_dir=project_dir,
-            session_id=session_id,
-            timestamp=timestamp,
-            artifacts=artifacts,
-            text=text,
-            label="pre-compact",
-        )
-    )
-
-
-def _send_to_daemon(
-    post: Callable[[QuarryClient], object], *, unreachable_log: str
-) -> bool:
-    """Connect to the daemon and run *post*; return False if the send failed.
-
-    The hook imports only the thin client — no engine.  A failed send is never
-    fatal (the request is fire-and-forget; the daemon 202s immediately), so this
-    returns False rather than raising.  The four failure classes are logged
-    distinctly so an operator is not misled: a local misconfiguration (e.g. a
-    QUARRY_URL pointing at a refused cleartext remote) is a config error, not a
-    down daemon; a genuine connection failure is "unreachable" (what that costs
-    differs per caller — a compaction has a durable archive, a web fetch does not
-    — so the caller supplies *unreachable_log*); a non-2xx response means the
-    daemon is up but rejected the request (auth, server, validation), not "down";
-    a bare QuarryError is a reachable-but-broken daemon (malformed response).
-    """
-    from quarry.client import (  # noqa: PLC0415
-        ClientConfigError,
-        HttpError,
-        QuarryConnectionError,
-        QuarryError,
-        TargetResolver,
-    )
-
-    try:
-        post(TargetResolver.connect())
-    except ClientConfigError as exc:
-        logger.warning("daemon target misconfigured: %s", exc.message)
-        return False
-    except QuarryConnectionError:
-        logger.warning("%s", unreachable_log)
-        return False
-    except HttpError as exc:
-        logger.warning("daemon rejected request: HTTP %s — %s", exc.status, exc.message)
-        return False
-    except QuarryError as exc:
-        logger.warning("daemon send failed (malformed response): %s", exc.message)
-        return False
-    return True
-
-
-# The daemon 202s a capture before any embedding runs, so a healthy send is near
-# instant.  Cap it well below the client's 15s default: a saturated daemon must
-# never make a compaction wait — the durable archive already holds the transcript.
-_CAPTURE_SEND_TIMEOUT = 5.0
 
 # A web fetch writes NO durable local copy and backfill-sessions only re-ingests
 # session transcripts, so a lost web capture is genuinely lost — the log must not
@@ -770,22 +661,6 @@ _CAPTURE_SEND_TIMEOUT = 5.0
 _WEB_FETCH_UNREACHABLE = (
     "web-fetch: daemon unreachable; page not indexed (re-fetch to retry)"
 )
-
-
-def _capture_via_daemon(req: CaptureIngestRequest, *, unreachable_log: str) -> bool:
-    """Send an inline capture (transcript or fetched page) to the daemon."""
-    return _send_to_daemon(
-        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT),
-        unreachable_log=unreachable_log,
-    )
-
-
-def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
-    """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
-    return _send_to_daemon(
-        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT),
-        unreachable_log=unreachable_log,
-    )
 
 
 def _as_str(value: object) -> str:
@@ -857,59 +732,18 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
         return {}
     cwd, session_id, tp = target
 
-    from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
-
-    # Archive raw JSONL before extraction.
-    sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
-    reader = TranscriptReader(tp)
-    try:
-        reader.archive(session_id, sessions_dir)
-    except Exception:
-        logger.exception("pre-compact: archival failed, proceeding with ingest")
-
-    text = reader.text()
-    if not text:
-        logger.debug("pre-compact: no conversation text found")
-        return {}
-
-    from quarry.artifacts import (  # noqa: PLC0415
-        extract_artifacts,
-        format_artifacts_header,
-    )
-
-    artifacts = extract_artifacts(text)
-    raw_text = text  # preserve before header prepend for capture file
-    header = format_artifacts_header(artifacts)
-    if header:
-        text = header + "\n\n" + text
-
-    agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
-
-    # Write the scrubbed .md capture to the project directory (durable copy).
-    if cwd:
-        iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _write_capture_file(
-            project_dir=Path(cwd),
-            session_id=session_id,
-            timestamp=iso_timestamp,
-            artifacts=artifacts,
-            text=raw_text,
-        )
-
-    from quarry.api import CaptureIngestRequest  # noqa: PLC0415
-
-    req = CaptureIngestRequest(
-        content=text,
+    outcome = SessionTranscriptCapture(
         cwd=cwd,
         session_id=session_id,
-        agent_handle=agent_handle,
-        format_hint="markdown",
-    )
-    unreachable = (
-        "pre-compact: daemon unreachable; transcript archived, "
-        "run backfill-sessions to index it"
-    )
-    if not _capture_via_daemon(req, unreachable_log=unreachable):
+        transcript_path=tp,
+        label="pre-compact",
+        agent_handle=EthosConfig.agent_handle_at(cwd) if cwd else "",
+    ).capture()
+
+    if not outcome.text_captured:
+        return {}
+
+    if not outcome.sent:
         return {
             "systemMessage": (
                 "Warning: quarryd is not reachable, so this session was not "
