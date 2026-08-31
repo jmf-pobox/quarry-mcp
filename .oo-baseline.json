@@ -2927,10 +2927,10 @@
   "src/quarry/web_fetch_loop_closer.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.75,
+    "avg_params": 1.0,
     "max_complexity": 3.0,
     "avg_complexity": 2.25,
-    "module_size": 65.0,
+    "module_size": 74.0,
     "classes_per_module": 1.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,

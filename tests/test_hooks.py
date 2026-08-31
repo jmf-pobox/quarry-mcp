@@ -1179,6 +1179,31 @@ class TestWebFetchLoopCloser:
 
         assert result == {}
 
+    def test_matched_context_redacts_query_fragment_and_userinfo(self) -> None:
+        """The URL echoed into additionalContext must never carry secrets.
+
+        additionalContext lands in the session transcript, so a query-string
+        token like ``?api_key=secret`` must not survive into the nudge text.
+        """
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
+        raw_url = "https://user:pass@example.com/reset?api_key=secret123#frag"
+        payload: dict[str, object] = {"tool_input": {"url": raw_url}}
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch(payload)
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        context = str(output["additionalContext"])
+        assert "secret123" not in context
+        assert "user:pass" not in context
+        assert "?" not in context
+        assert "#" not in context
+        assert "@" not in context
+        assert "https://example.com/reset" in context
+
     def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
         from quarry.api import CapturesLookupResponse
 

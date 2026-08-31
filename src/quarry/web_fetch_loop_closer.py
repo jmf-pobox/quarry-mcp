@@ -55,10 +55,20 @@ class WebFetchLoopCloser:
         return self._output(resp.document_name)
 
     def _output(self, document_name: str | None) -> dict[str, object]:
-        """Build the hookSpecificOutput envelope naming the URL and a find query."""
+        """Build the hookSpecificOutput envelope naming the URL and a find query.
+
+        Uses the redacted (query/fragment/userinfo-stripped) form of the URL,
+        never ``self._url`` raw — this text lands in the session transcript via
+        ``additionalContext``, so any secret token in the query string must not
+        survive into it.
+        """
+        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
+
+        redacted_url = CaptureUrl.for_web_fetch(self._url)
         lines = [
-            f"You already fetched {self._url} earlier — use find with a query "
-            f"like {self._suggested_query()!r} instead of re-fetching next time."
+            f"You already fetched {redacted_url} earlier — use find with a "
+            f"query like {self._suggested_query(redacted_url)!r} instead of "
+            "re-fetching next time."
         ]
         if document_name:
             lines.append(
@@ -72,8 +82,9 @@ class WebFetchLoopCloser:
             },
         }
 
-    def _suggested_query(self) -> str:
+    @staticmethod
+    def _suggested_query(redacted_url: str) -> str:
         """Return the URL's last path segment, or its host when the path is bare."""
-        parts = urlsplit(self._url)
+        parts = urlsplit(redacted_url)
         segment = parts.path.rstrip("/").rsplit("/", 1)[-1]
-        return segment or parts.hostname or self._url
+        return segment or parts.hostname or redacted_url
