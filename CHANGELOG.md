@@ -16,6 +16,25 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- `tool`: four new agent-lifecycle hooks — `SessionEnd`, `PostToolUse:WebSearch`,
+  `PostToolUse:Read`, `SubagentStop`. `SessionEnd` captures the full session
+  transcript on every close (closing the "PreCompact never fires on short
+  sessions" gap); `PostToolUse:WebSearch` files a scrubbed digest of the
+  results under `<repo>-captures`; `PostToolUse:Read` (opt-in via
+  `HookConfig.read`, default `false`) captures prose files (`.md`, `.pdf`,
+  `.docx`, ...) read from outside any registered tree, gated by a four-check
+  fail-closed filter (in-tree exclusion, secret-path denylist, extension
+  allowlist, 200 KB size cap); `SubagentStop` archives the subagent's own
+  `agent_transcript_path` (distinct from the parent's `transcript_path`) with
+  `agent_id` as the wire identity. `SubagentStop` is a BLOCKING hook — the
+  handler always returns `{}` and never emits a `decision` field, verified
+  under crafted-adversarial payloads.
+- `infra`: extract `DaemonCaptureSender` (`daemon_capture.py`) and
+  `SessionTranscriptCapture` (`session_transcript.py`) out of `hooks.py`,
+  along with `WebSearchPayload`, `ReadPayload`, `ReadCaptureFilter`, and
+  `hooks_agent.py` for the four new handlers. `hooks.py` shrinks from 926 to
+  760 lines; `handle_pre_compact` now delegates to `SessionTranscriptCapture`
+  without behavior change.
 - `query`: `GET /v1/coverage?collection=<repo>` returns three per-repo counts —
   `documents_indexed`, `transcripts_captured`, `memories_saved` — bounded to
   the collection and its `<repo>-captures` sibling via a single

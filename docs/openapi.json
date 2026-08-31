@@ -66,6 +66,30 @@
         "title": "CollectionList",
         "type": "object"
       },
+      "CoverageResponse": {
+        "description": "Per-repo coverage of a collection and its ``<collection>-captures`` sibling.\n\nThree distinct-name counts scoped to one repo's slice of the shared catalog:\nnon-memory documents in ``collection``, ``session-<id>`` compaction archives\nin ``captures_collection``, and memory rows (``agent_handle``/``memory_type``\nset) in ``collection``. A URL capture in the captures collection is neither\n\u2014 it's a background artifact and not surfaced here.",
+        "properties": {
+          "documents_indexed": {
+            "title": "Documents Indexed",
+            "type": "integer"
+          },
+          "memories_saved": {
+            "title": "Memories Saved",
+            "type": "integer"
+          },
+          "transcripts_captured": {
+            "title": "Transcripts Captured",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "documents_indexed",
+          "transcripts_captured",
+          "memories_saved"
+        ],
+        "title": "CoverageResponse",
+        "type": "object"
+      },
       "DatabaseInfo": {
         "description": "One named database's summary.\n\nThe daemon is fixed to a single database, so the list returns exactly one\nentry.  No size field: producing it meant walking the whole tree per\nrequest (10-19 s here), and LanceDB's O(1) statistic measures the live\ndataset rather than the directory, so it cannot stand in.\n\nThe model is CLOSED, unlike its siblings here.  Those mirror an engine\ncatalog or registry row and stay open so a new upstream field is not a\nvalidation error; this one is built from a literal two-key dict in the\nroute, so there is no upstream to track.  Closed also means a daemon that\nre-grew ``size_bytes`` fails client validation instead of quietly serving\nit again.",
         "properties": {
@@ -830,6 +854,25 @@
           }
         },
         "summary": "Collections"
+      }
+    },
+    "/v1/coverage": {
+      "get": {
+        "description": "Return per-repo counts for ``collection`` and its captures sibling.\n\nReads ``?collection=<repo>`` from the query string; a missing or blank\nvalue earns a 400. The captures sibling is derived server-side as\n``<collection>-captures`` so the wire contract carries one identifier,\nnot two \u2014 the CLI/hook never has to spell the naming rule.",
+        "operationId": "coverage_v1_coverage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Coverage"
       }
     },
     "/v1/databases": {
