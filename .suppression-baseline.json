@@ -1,7 +1,7 @@
 {
-  "total": 201,
+  "total": 208,
   "by_category": {
-    "noqa": 165,
+    "noqa": 172,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 0,
@@ -90,7 +90,7 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 14
+      "noqa": 15
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
@@ -114,7 +114,7 @@
       "noqa": 1
     },
     "src/quarry/mcp_server.py": {
-      "noqa": 1
+      "noqa": 7
     },
     "src/quarry/onnx_session.py": {
       "noqa": 1
@@ -154,5 +154,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-08-30T21:49:07Z"
+  "updated_at": "2026-08-31T01:43:56Z"
 }

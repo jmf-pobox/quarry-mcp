@@ -25,7 +25,7 @@ from quarry.api.documents import DeleteDocumentRequest, DocumentInfo, DocumentLi
 from quarry.api.errors import ErrorBody
 from quarry.api.ingestion import IngestRequest, RememberRequest
 from quarry.api.maintenance import BackfillRequest, OptimizeRequest
-from quarry.api.meta import HealthResponse, StatusResponse
+from quarry.api.meta import CoverageResponse, HealthResponse, StatusResponse
 from quarry.api.registrations import (
     RegisterRequest,
     RegistrationInfo,
@@ -47,6 +47,7 @@ __all__ = [
     "CapturesPushResponse",
     "CollectionInfo",
     "CollectionList",
+    "CoverageResponse",
     "DatabaseInfo",
     "DatabaseList",
     "DeleteCollectionRequest",

@@ -19,6 +19,7 @@ from quarry.api import (
     CaptureIngestRequest,
     CapturesPushResponse,
     CollectionList,
+    CoverageResponse,
     DatabaseList,
     DeregisterAccepted,
     DocumentInfo,
@@ -230,6 +231,7 @@ class RouteTable:
                 status_code=202,
             ),
             RouteSpec("/status", meta.status, ("GET",), StatusResponse),
+            RouteSpec("/coverage", meta.coverage, ("GET",), CoverageResponse),
             RouteSpec(
                 "/optimize",
                 maint.optimize,

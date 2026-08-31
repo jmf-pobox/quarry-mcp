@@ -16,12 +16,40 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- `query`: `GET /v1/coverage?collection=<repo>` returns three per-repo counts —
+  `documents_indexed`, `transcripts_captured`, `memories_saved` — bounded to
+  the collection and its `<repo>-captures` sibling via a single
+  `WHERE collection IN (...)` scan. `CoverageResponse` (wire model),
+  `CoverageCounts` (TypedDict), `ChunkCatalog.coverage`, and
+  `QuarryClient.coverage` land together so a new field never exists on one
+  path without the other.
+- `tool`: SessionStart `additionalContext` now leads with the three canonical
+  trigger rules (find-before-WebSearch, grep-for-symbols/find-for-meaning,
+  remember-for-durable-knowledge) in every branch that leaves quarry
+  operational — including the daemon-unreachable auto-register defer, so an
+  agent that reads the "restart quarryd" diagnosis also sees the rules to
+  apply once the tools come back (operator ratification R2b).
 - `tool`: `/quarry:help` (and `-dev` twin) lists all seven slash commands with
   one-line descriptions, matching the org's `/help` template.
 - `tool`: `plugin/skills/recall/SKILL.md` — a Claude Code plugin skill so
   agents that never invoke a quarry slash command still reach for `/find`
   before WebSearch/WebFetch, before a why/how/what-did-we-decide answer, and
   when a durable fact is worth persisting past compaction.
+
+### Changed
+
+- `tool`: MCP server `instructions` block leads with the two find-triggering
+  sentences (R1 + R2) plus an anti-rationalisation clause and a negative rule;
+  the formatting-policy paragraph is demoted below the trigger vocabulary.
+- `tool`: every MCP tool docstring opens with an occasion rather than a
+  mechanism verb. `find` and `remember` splice R1/R2 and R3 verbatim; the
+  other nine tools each get a situational "Use ..." opener naming the
+  occasion an agent would reach for them (operator ratification R3a drops
+  the previous clipboard / API-response / sandbox-uploaded-files framing on
+  `remember`).
+- `tool`: `plugin/skills/recall/SKILL.md` — frontmatter and "When to use it"
+  bullets splice R1/R2/R3 verbatim so the plugin skill, the SessionStart
+  context, and the MCP tool docstrings share one wording.
 - `query`: agent-memory temporal decay wired through the daemon's search
   route. A new `QUARRY_RETRIEVAL_DECAY_RATE` setting (default `0.000963`, a
   30-day half-life) is threaded from `Settings` into `RetrievalConfig` at
@@ -38,9 +66,6 @@ across `transform`, `index`, and `connector`).
   warning check that fires when the resident ethos handle has zero rows in
   a corpus that otherwise contains memory — the "ethos config resolves but
   PreCompact never fired" gap.
-
-### Changed
-
 - `tool`: SessionStart now gates on the `.punt-labs/quarry/enabled`
   marker. A repo with the marker takes the existing active flow
   (walk-up coverage, auto-register, background sync). A repo without

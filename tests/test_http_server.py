@@ -3783,3 +3783,57 @@ class TestHealthResponseFdOptional:
         health = HealthResponse.model_validate(payload)
         assert health.fd is not None
         assert (health.fd.open_fds, health.fd.soft_limit) == (42, 8192)
+
+
+class TestCoverageRoute:
+    """The ``/v1/coverage`` route: query-param contract + local/remote field parity.
+
+    Bug-class-3: a new query param must reach the DB, and the JSON response
+    fields must match the ``CoverageResponse`` model exactly — the client and
+    the daemon share that one shape.
+    """
+
+    def test_missing_collection_param_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/coverage")
+        assert resp.status_code == 400
+        assert "collection" in resp.json()["error"]
+
+    def test_blank_collection_param_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/coverage?collection=%20%20")
+        assert resp.status_code == 400
+
+    def test_collection_query_param_reaches_catalog(self, client: TestClient) -> None:
+        """The daemon reads ``?collection=<repo>`` and passes it (plus the derived
+        captures sibling) to ``ChunkCatalog.coverage``."""
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.coverage",
+            return_value={
+                "documents_indexed": 5,
+                "transcripts_captured": 2,
+                "memories_saved": 7,
+            },
+        ) as coverage_mock:
+            resp = client.get("/v1/coverage?collection=myproject")
+        assert resp.status_code == 200
+        args, _ = coverage_mock.call_args
+        assert args == ("myproject", "myproject-captures")
+
+    def test_response_keys_match_model(self, client: TestClient) -> None:
+        """Response has exactly the ``CoverageResponse`` fields."""
+        from quarry.api import CoverageResponse
+
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.coverage",
+            return_value={
+                "documents_indexed": 3,
+                "transcripts_captured": 1,
+                "memories_saved": 0,
+            },
+        ):
+            body = client.get("/v1/coverage?collection=myproject").json()
+        assert set(body) == set(CoverageResponse.model_fields)
+        assert body == {
+            "documents_indexed": 3,
+            "transcripts_captured": 1,
+            "memories_saved": 0,
+        }

@@ -23,6 +23,7 @@ from quarry.api import (
     CaptureIngestRequest,
     CapturesPushResponse,
     CollectionList,
+    CoverageResponse,
     DatabaseList,
     DeleteCollectionRequest,
     DeleteDocumentRequest,
@@ -59,7 +60,7 @@ _MAX_UNREACHABLE_POLLS = 3
 
 @final
 class QuarryClient:
-    """Authenticated transport to one daemon target: 20 REST operations plus
+    """Authenticated transport to one daemon target: 21 REST operations plus
     ``await_task`` (a client-side poll over ``task_status``)."""
 
     _transport: Transport
@@ -171,7 +172,7 @@ class QuarryClient:
         params = {"collection": req.collection, "keep_data": str(req.keep_data).lower()}
         return self._delete("/registrations", DeregisterAccepted, params=params)
 
-    # -- databases, status, maintenance, health ----------------------------
+    # -- databases, status, coverage, maintenance, health ------------------
 
     def list_databases(self) -> DatabaseList:
         """List the single database the daemon is fixed to."""
@@ -180,6 +181,12 @@ class QuarryClient:
     def status(self) -> StatusResponse:
         """Return the aggregate status over the daemon's database."""
         return self._get("/status", StatusResponse)
+
+    def coverage(self, collection: str) -> CoverageResponse:
+        """Return the three per-repo counts for ``collection`` and its captures."""
+        return self._get(
+            "/coverage", CoverageResponse, params={"collection": collection}
+        )
 
     def optimize(self, req: OptimizeRequest) -> TaskAccepted:
         """Compact the table and rebuild indexes as a singleton 202 task."""

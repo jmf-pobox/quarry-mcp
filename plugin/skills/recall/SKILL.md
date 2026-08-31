@@ -1,18 +1,16 @@
 ---
 name: recall
 description: >
-  Use this skill before WebSearch or WebFetch for any research question, before
-  answering a why/how/what-did-we-decide question, when recalling a prior
-  session or a past design decision, and when you learn something durable
-  worth surviving context compaction. Quarry is local semantic search over
-  this codebase, design docs, prior session transcripts, and previously
-  fetched web pages — it often already has the answer. Use it even when you
-  think you already know the answer; a prior decision or a teammate's note may
-  contradict your assumption. Prefer grep for exact symbol and value lookups
-  (a function name, a constant); prefer quarry for meaning ("why did we pick
-  X", "how does Y work", "what did we decide about Z"). Do not reach for this
-  on mechanical string searches or navigation within the current file — grep
-  and the editor already do that well.
+  Use find before WebSearch or WebFetch for research, or before answering a
+  why/how/what-did-we-decide question. Quarry indexes this codebase, design
+  docs, prior session transcripts, and previously fetched web pages — it often
+  already has the answer. Prefer grep for symbol and value lookups; prefer find
+  for meaning. Use remember when you learn something durable — a decision, a
+  gotcha, a non-obvious fact, a procedure — so it survives context compaction.
+  Use even when you think you already know the answer; a prior decision or a
+  teammate's note may contradict your assumption. Do not reach for find on
+  mechanical string searches or navigation within the current file — grep and
+  the editor already do that well.
 ---
 
 # Quarry — Local Semantic Search
@@ -24,13 +22,13 @@ WebSearch or WebFetch call re-discovering something already found.
 
 ## When to use it
 
-- Before WebSearch/WebFetch: run a query first. If quarry returns relevant
-  results, use them instead of researching from scratch.
-- Before answering "why", "how", or "what did we decide about X": quarry
-  usually has the design doc, the ADR, or the past conversation.
-- Recalling a prior session or a design decision that predates this one.
-- After learning something durable — a decision, a fact, a fix — that should
-  survive context compaction: remember it before the session ends.
+- Use find before WebSearch or WebFetch for research, or before answering a
+  why/how/what-did-we-decide question. Quarry indexes this codebase, design
+  docs, prior session transcripts, and previously fetched web pages — it often
+  already has the answer.
+- Prefer grep for symbol and value lookups; prefer find for meaning.
+- Use remember when you learn something durable — a decision, a gotcha, a
+  non-obvious fact, a procedure — so it survives context compaction.
 
 ## When not to use it
 

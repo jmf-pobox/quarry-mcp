@@ -465,7 +465,10 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         ctx = str(output["additionalContext"])
         assert "custom-name" in ctx
 
-    def test_returns_additional_context_with_mcp_guidance(self, tmp_path: Path) -> None:
+    def test_returns_additional_context_with_slash_commands(
+        self, tmp_path: Path
+    ) -> None:
+        """Active footer surfaces slash commands + researcher agent."""
         project = tmp_path / "repo"
         project.mkdir()
         _opt_in(project)
@@ -477,13 +480,22 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
             patch("quarry.hooks._sync_in_background"),
+            patch(
+                "quarry.hooks._session_coverage",
+                return_value={
+                    "documents_indexed": 0,
+                    "transcripts_captured": 0,
+                    "memories_saved": 0,
+                },
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
 
         output = result["hookSpecificOutput"]
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
-        assert "quarry MCP" in ctx
+        assert "/find" in ctx
+        assert "researcher agent" in ctx
 
     def test_disabled_by_config(self, tmp_path: Path) -> None:
         project = tmp_path / "myproject"
@@ -536,6 +548,7 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         assert "myproject-mine" in collections
 
     def test_context_includes_recall_hint(self, tmp_path: Path) -> None:
+        """Active-mode context leads with the identity line plus R1/R2/R3."""
         project = tmp_path / "hintproject"
         project.mkdir()
         _opt_in(project)
@@ -547,6 +560,14 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         with (
             patch("quarry.hooks._resolve_settings", return_value=settings),
             patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch(
+                "quarry.hooks._session_coverage",
+                return_value={
+                    "documents_indexed": 0,
+                    "transcripts_captured": 0,
+                    "memories_saved": 0,
+                },
+            ),
         ):
             result = handle_session_start({"cwd": str(project)})
 
@@ -554,6 +575,172 @@ class TestHandleSessionStart(_ReachableDaemonEmptyCatalog):
         assert isinstance(output, dict)
         ctx = str(output["additionalContext"])
         assert ctx.startswith("Quarry semantic search is active")
+        assert (
+            "Use find before WebSearch or WebFetch for research, or before "
+            "answering a why/how/what-did-we-decide question." in ctx
+        )
+        assert (
+            "Prefer grep for symbol and value lookups; prefer find for meaning." in ctx
+        )
+        assert (
+            "Use remember when you learn something durable — a decision, a gotcha, "
+            "a non-obvious fact, a procedure — so it survives context compaction."
+            in ctx
+        )
+
+
+class TestSessionStartTriggerRules(_ReachableDaemonEmptyCatalog):
+    """SessionStart context carries the three canonical R1/R2/R3 sentences.
+
+    Each surface — reachable-coverage, unreachable-coverage, subsumption,
+    daemon-unreachable-auto-register — must emit the sentences verbatim so an
+    agent reads the same rules regardless of which branch fired (design R2b).
+    """
+
+    _R1 = (
+        "Use find before WebSearch or WebFetch for research, or before "
+        "answering a why/how/what-did-we-decide question."
+    )
+    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
+    _R3 = (
+        "Use remember when you learn something durable — a decision, a gotcha, "
+        "a non-obvious fact, a procedure — so it survives context compaction."
+    )
+
+    @staticmethod
+    def _settings(tmp_path: Path) -> MagicMock:
+        s = MagicMock()
+        s.registry_path = tmp_path / "registry.db"
+        s.lancedb_path = tmp_path / "lancedb"
+        return s
+
+    def _assert_trailer(self, ctx: str) -> None:
+        assert self._R1 in ctx
+        assert self._R2 in ctx
+        assert self._R3 in ctx
+
+    def test_active_reachable_coverage_line_and_trailer(self, tmp_path: Path) -> None:
+        project = tmp_path / "reachable"
+        project.mkdir()
+        _opt_in(project)
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=self._settings(tmp_path),
+            ),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch(
+                "quarry.hooks._session_coverage",
+                return_value={
+                    "documents_indexed": 42,
+                    "transcripts_captured": 7,
+                    "memories_saved": 3,
+                },
+            ),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "42 documents indexed" in ctx
+        assert "7 transcripts captured" in ctx
+        assert "3 memories saved" in ctx
+        assert "reachable-captures" in ctx
+        self._assert_trailer(ctx)
+
+    def test_active_unreachable_coverage_falls_back_and_keeps_trailer(
+        self, tmp_path: Path
+    ) -> None:
+        """A coverage-query failure does not withhold the trigger rules."""
+        project = tmp_path / "unreachcov"
+        project.mkdir()
+        _opt_in(project)
+        with (
+            patch(
+                "quarry.hooks._resolve_settings",
+                return_value=self._settings(tmp_path),
+            ),
+            patch("quarry.hooks._sync_in_background", return_value="launched"),
+            patch("quarry.hooks._session_coverage", return_value=None),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "unavailable" in ctx
+        self._assert_trailer(ctx)
+
+    def test_subsumption_branch_carries_trailer(self, tmp_path: Path) -> None:
+        """Child registrations under this dir refuse auto-register + emit rules."""
+        parent = tmp_path / "parent"
+        parent.mkdir()
+        _opt_in(parent)
+        child = parent / "child"
+        child.mkdir()
+        settings = self._settings(tmp_path)
+        conn = SyncRegistry(settings.registry_path)
+        conn.register_directory(child, "child")
+        conn.close()
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background") as sync,
+        ):
+            result = handle_session_start({"cwd": str(parent)})
+        sync.assert_not_called()
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "child registrations exist" in ctx
+        self._assert_trailer(ctx)
+
+
+class TestSessionStartDaemonUnreachableCarriesTrailer:
+    """R2b: a daemon-unreachable auto-register defer still emits R1/R2/R3.
+
+    The design body proposed withholding the trailer here on the reasoning
+    that ``find``/``remember`` would fail at the client boundary. R2b reverses
+    that: an agent reading the message can act on the diagnosis (restart
+    quarryd) and then apply the rules once the tools return.
+    """
+
+    _R1 = (
+        "Use find before WebSearch or WebFetch for research, or before "
+        "answering a why/how/what-did-we-decide question."
+    )
+    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
+    _R3 = (
+        "Use remember when you learn something durable — a decision, a gotcha, "
+        "a non-obvious fact, a procedure — so it survives context compaction."
+    )
+
+    def test_unreachable_defer_carries_r1_r2_r3_and_restart_hint(
+        self, tmp_path: Path
+    ) -> None:
+        from quarry.client import QuarryConnectionError
+
+        project = tmp_path / "solo"
+        project.mkdir()
+        _opt_in(project)
+        settings = MagicMock()
+        settings.registry_path = tmp_path / "registry.db"
+        settings.lancedb_path = tmp_path / "lancedb"
+        with (
+            patch("quarry.hooks._resolve_settings", return_value=settings),
+            patch("quarry.hooks._sync_in_background"),
+            patch(
+                "quarry.client.TargetResolver.connect",
+                side_effect=QuarryConnectionError("down", "url"),
+            ),
+        ):
+            result = handle_session_start({"cwd": str(project)})
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        ctx = str(output["additionalContext"])
+        assert "unreachable" in ctx
+        assert "systemctl --user restart quarry" in ctx
+        assert self._R1 in ctx
+        assert self._R2 in ctx
+        assert self._R3 in ctx
 
 
 class TestSessionStartReadopt:
