@@ -152,9 +152,9 @@ class HookAgent:
         if not filter_.should_capture(file_path, cwd=cwd):
             logger.debug("post-read: filter rejected %s", file_path)
             return {}
-        if not filter_.should_capture(
-            file_path, cwd=cwd, content_bytes=len(content.encode())
-        ):
+        # avoid UnicodeEncodeError on lone surrogates; handler must fail open
+        content_bytes = len(content.encode("utf-8", errors="replace"))
+        if not filter_.should_capture(file_path, cwd=cwd, content_bytes=content_bytes):
             logger.debug("post-read: content too large for %s", file_path)
             return {}
 
