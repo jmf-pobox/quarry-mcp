@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "CapturesLookupResponse": {
+        "description": "Whether a URL is already indexed under a project's captures collection.\n\n``document_name`` names the stored capture when ``matched`` is true; it is\nabsent (``None``) on a miss \u2014 there is nothing to name, not a lookup\nfailure.",
+        "properties": {
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "matched"
+        ],
+        "title": "CapturesLookupResponse",
+        "type": "object"
+      },
       "CapturesPushResponse": {
         "description": "The response for pushing redacted capture shadows.\n\n``results`` maps each pushed collection to its per-collection push summary\n(``CaptureSync`` result dict) \u2014 a wire-boundary mapping the CLI renders,\nkept as ``dict`` so a summary-field addition never drops on the wire.",
         "properties": {
@@ -791,6 +816,25 @@
           }
         },
         "summary": "Capture"
+      }
+    },
+    "/v1/captures/lookup": {
+      "get": {
+        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nReads ``?url=<raw url>&cwd=<cwd>`` \u2014 the same ``cwd``-derived collection\ncontract as ``POST /capture`` (:meth:`_capture_job`), so this thin client\nnever opens the sync registry itself or spells the ``<repo>-captures``\nnaming rule.  The stored ``document_name`` for a WebFetch capture is the\nURL with userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``),\nso this recomputes the identical normalization before comparing: two\nURLs differing only by query string or fragment collapse to the SAME\ndocument and match; a trailing-slash difference does NOT normalize and\nwill not match.",
+        "operationId": "lookup_v1_captures_lookup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapturesLookupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lookup"
       }
     },
     "/v1/captures/push": {

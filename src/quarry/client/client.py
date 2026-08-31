@@ -21,6 +21,7 @@ from quarry.api import (
     API_VERSION,
     BackfillRequest,
     CaptureIngestRequest,
+    CapturesLookupResponse,
     CapturesPushResponse,
     CollectionList,
     CoverageResponse,
@@ -156,6 +157,13 @@ class QuarryClient:
     def captures_push(self) -> CapturesPushResponse:
         """Push each project's redacted capture shadow."""
         return self._post_empty("/captures/push", CapturesPushResponse)
+
+    def captures_lookup(self, url: str, cwd: str) -> CapturesLookupResponse:
+        """Check whether *url* is already indexed under *cwd*'s captures collection."""
+        params = {"url": url}
+        if cwd:
+            params["cwd"] = cwd
+        return self._get("/captures/lookup", CapturesLookupResponse, params=params)
 
     # -- registrations -----------------------------------------------------
 

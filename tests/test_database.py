@@ -160,6 +160,33 @@ class TestGetPageText:
         assert text == "raw text page 456"
 
 
+class TestDocumentExists:
+    def test_true_when_present(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("a.pdf", "c1") is True
+
+    def test_false_for_different_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("a.pdf", "c2") is False
+
+    def test_false_for_missing_document(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("b.pdf", "c1") is False
+
+    def test_false_on_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        assert ChunkCatalog(db).document_exists("a.pdf", "c1") is False
+
+
 class TestListDocuments:
     def test_lists_documents(self, tmp_path: Path):
         db = get_db(tmp_path / "db")

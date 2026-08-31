@@ -175,6 +175,25 @@ class ChunkCatalog:
             "memories_saved": len(memories),
         }
 
+    def document_exists(self, document_name: str, collection: str) -> bool:
+        """Return whether *document_name* has any indexed chunk in *collection*.
+
+        A capped ``limit(1)`` scan: presence is a yes/no question, so the first
+        matching row is enough — no need to pull every chunk of a document that
+        may span many pages.
+        """
+        if TABLE_NAME not in self._db.list_tables().tables:
+            return False
+        predicate = (
+            f"document_name = '{escape_sql(document_name)}'"
+            f" AND collection = '{escape_sql(collection)}'"
+        )
+        table = self._db.open_table(TABLE_NAME)
+        rows = (
+            table.search().where(predicate).limit(1).select(["document_name"]).to_list()
+        )
+        return bool(rows)
+
     def get_page_text(
         self,
         document_name: str,

@@ -216,14 +216,18 @@ Uploaded files in Claude Desktop live in a sandbox quarry cannot read — use `r
 
 ## Knowledge Capture
 
-As a Claude Code plugin, quarry hooks into three points in the session
-lifecycle and captures knowledge automatically, with no action from you:
+As a Claude Code plugin, quarry hooks into the session lifecycle and captures
+knowledge automatically, with no action from you:
 
 | Hook | What it captures |
 |------|-------------------|
 | `SessionStart` | Auto-registers and syncs the current project, so it's searchable from the first prompt |
-| `PostToolUse` (WebFetch) | Ingests URLs Claude fetches during research |
+| `PostToolUse` (WebFetch) | Ingests URLs Claude fetches during research. If the URL was already captured, the hook nudges Claude to `find` it instead of re-fetching |
+| `PostToolUse` (WebSearch) | Files a scrubbed digest of search results under `<repo>-captures` |
+| `PostToolUse` (Read) | Opt-in (off by default): captures prose files read from outside any registered tree, gated by an in-tree/secret-path/extension/size filter |
 | `PreCompact` | Captures the session transcript before context compaction discards it |
+| `SessionEnd` | Captures the full session transcript on every close, even a short session that never compacts |
+| `SubagentStop` | Archives a subagent's own transcript, separate from the parent session's |
 
 Every hook fails open — a hook failure never blocks Claude Code — and each is
 independently toggleable in `.punt-labs/quarry/config.md`.

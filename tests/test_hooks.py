@@ -1054,10 +1054,12 @@ class TestHandlePostWebFetch:
         server, validation).  It must be logged with its status, never collapsed
         into 'unreachable' — that would send an operator chasing a phantom down
         daemon when the real cause is a 401/500."""
+        from quarry.api import CapturesLookupResponse
         from quarry.client import HttpError
 
         client = MagicMock()
         client.capture.side_effect = HttpError("Unauthorized", 401, "")
+        client.captures_lookup.return_value = CapturesLookupResponse(matched=False)
         payload: dict[str, object] = {
             "tool_input": {"url": "https://example.com/p"},
             "tool_response": json.dumps({"result": "<html>hi</html>"}),
@@ -1103,6 +1105,92 @@ class TestHandlePostWebFetch:
         assert "page not indexed" not in caplog.text
         assert "unreachable" not in caplog.text
         assert "malformed response" not in caplog.text
+
+
+class TestWebFetchLoopCloser:
+    """The captures-lookup nudge: matched/no-match/unreachable, fail-open."""
+
+    def test_matched_true_returns_additional_context(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(
+            matched=True, document_name="https://example.com/docs/guide"
+        )
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/docs/guide"},
+        }
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch(payload)
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert output["hookEventName"] == "PostToolUse"
+        context = str(output["additionalContext"])
+        assert "https://example.com/docs/guide" in context
+        assert "'guide'" in context
+        assert "https://example.com/docs/guide" in context.split("Indexed as ")[1]
+
+    def test_matched_true_without_document_name_still_nudges(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/x"}}
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch(payload)
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert "Indexed as" not in str(output["additionalContext"])
+
+    def test_no_match_returns_empty_dict(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(matched=False)
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/x"}}
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+
+    def test_lookup_raising_connection_error_fails_open(self) -> None:
+        from quarry.client import QuarryConnectionError
+
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/x"}}
+        with patch(
+            "quarry.client.TargetResolver.connect",
+            side_effect=QuarryConnectionError("down", "url"),
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+
+    def test_lookup_raising_config_error_fails_open(self) -> None:
+        from quarry.client import ClientConfigError
+
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/x"}}
+        with patch(
+            "quarry.client.TargetResolver.connect",
+            side_effect=ClientConfigError("bad config"),
+        ):
+            result = handle_post_web_fetch(payload)
+
+        assert result == {}
+
+    def test_suggested_query_falls_back_to_host_for_bare_path(self) -> None:
+        from quarry.api import CapturesLookupResponse
+
+        client = MagicMock()
+        client.captures_lookup.return_value = CapturesLookupResponse(matched=True)
+        payload: dict[str, object] = {"tool_input": {"url": "https://example.com/"}}
+        with patch("quarry.client.TargetResolver.connect", return_value=client):
+            result = handle_post_web_fetch(payload)
+
+        output = result["hookSpecificOutput"]
+        assert isinstance(output, dict)
+        assert "'example.com'" in str(output["additionalContext"])
 
 
 class TestHookImportsNoEngine:

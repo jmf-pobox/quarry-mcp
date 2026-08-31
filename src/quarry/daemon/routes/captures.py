@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from quarry.capture_url import CaptureUrl
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import CaptureIngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.base import RouteGroup
@@ -110,6 +111,39 @@ class CaptureRoutes(RouteGroup):
             return f"session-{session_id[:8]}"
         return JSONResponse(
             {"error": "Missing document_name or session_id"}, status_code=400
+        )
+
+    def lookup(self, request: Request) -> JSONResponse:
+        """Answer whether a URL is already indexed under the caller's captures.
+
+        Reads ``?url=<raw url>&cwd=<cwd>`` — the same ``cwd``-derived collection
+        contract as ``POST /capture`` (:meth:`_capture_job`), so this thin client
+        never opens the sync registry itself or spells the ``<repo>-captures``
+        naming rule.  The stored ``document_name`` for a WebFetch capture is the
+        URL with userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``),
+        so this recomputes the identical normalization before comparing: two
+        URLs differing only by query string or fragment collapse to the SAME
+        document and match; a trailing-slash difference does NOT normalize and
+        will not match.
+        """
+        auth_resp = self.reject_unauthorized(request)
+        if auth_resp is not None:
+            return auth_resp
+        url = request.query_params.get("url", "").strip()
+        if not url:
+            return JSONResponse(
+                {"error": "Missing required parameter: url"}, status_code=400
+            )
+        cwd = request.query_params.get("cwd", "")
+        collection = CapturesCollection.for_registry_path(
+            cwd, self.ctx.settings.registry_path
+        )
+        document_name = CaptureUrl.for_web_fetch(url)
+        matched = self.ctx.database.catalog.document_exists(
+            document_name, collection.name
+        )
+        return JSONResponse(
+            {"matched": matched, "document_name": document_name if matched else None}
         )
 
     async def push(self, request: Request) -> JSONResponse:

@@ -15,3 +15,15 @@ class CapturesPushResponse(BaseModel):
 
     # wire boundary — per-collection push summaries keyed by collection name.
     results: dict[str, dict[str, object]]
+
+
+class CapturesLookupResponse(BaseModel):
+    """Whether a URL is already indexed under a project's captures collection.
+
+    ``document_name`` names the stored capture when ``matched`` is true; it is
+    absent (``None``) on a miss — there is nothing to name, not a lookup
+    failure.
+    """
+
+    matched: bool
+    document_name: str | None = None

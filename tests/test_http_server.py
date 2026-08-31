@@ -1387,6 +1387,135 @@ class TestShow:
         assert "must be >= 1" in resp.json()["error"]
 
 
+class TestCapturesLookup:
+    """Tests for GET /captures/lookup — bug class 3: url/cwd param parity."""
+
+    def test_missing_url_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/captures/lookup")
+        assert resp.status_code == 400
+        assert "url" in resp.json()["error"].lower()
+
+    def test_empty_url_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/captures/lookup?url=")
+        assert resp.status_code == 400
+
+    def test_matched_true_returns_document_name(self, client: TestClient) -> None:
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.for_repo("quarry"),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ),
+        ):
+            data = client.get(
+                "/v1/captures/lookup?url=https://example.com/docs&cwd=/repo"
+            ).json()
+
+        assert data == {
+            "matched": True,
+            "document_name": "https://example.com/docs",
+        }
+
+    def test_no_match_returns_false_and_no_document_name(
+        self, client: TestClient
+    ) -> None:
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+            return_value=False,
+        ):
+            data = client.get("/v1/captures/lookup?url=https://example.com/x").json()
+
+        assert data == {"matched": False, "document_name": None}
+
+    def test_reads_url_and_cwd_and_derives_collection(self, client: TestClient) -> None:
+        """The daemon derives ``<repo>-captures`` from ``cwd`` — same contract
+        as ``POST /capture`` — so the client never spells the naming rule."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path"
+            ) as for_path,
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=False,
+            ) as exists,
+        ):
+            for_path.return_value = CapturesCollection.for_repo("myproj")
+            client.get("/v1/captures/lookup?url=https://x.test/p&cwd=/projects/myproj")
+
+        for_path.assert_called_once()
+        assert for_path.call_args[0][0] == "/projects/myproj"
+        assert exists.call_args[0][1] == "myproj-captures"
+
+    def test_query_string_and_fragment_ignored_by_normalization(
+        self, client: TestClient
+    ) -> None:
+        """A lookup URL with a query string still reaches the redacted document
+        name — the SAME normalization the write path applies."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.resolve(None),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ) as exists,
+        ):
+            data = client.get(
+                "/v1/captures/lookup?url=https://x.test/guide?utm=1%23frag"
+            ).json()
+
+        assert data["document_name"] == "https://x.test/guide"
+        assert exists.call_args[0][0] == "https://x.test/guide"
+
+    def test_trailing_slash_produces_a_different_document_name(
+        self, client: TestClient
+    ) -> None:
+        """No normalization for a trailing slash — the compared name keeps it."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.resolve(None),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ) as exists,
+        ):
+            client.get("/v1/captures/lookup?url=https://x.test/guide/")
+
+        assert exists.call_args[0][0] == "https://x.test/guide/"
+
+    def test_end_to_end_matches_a_real_stored_capture(self, tmp_path: Path) -> None:
+        """No mocks on the catalog: a real chunk written under the derived
+        captures collection is found by a lookup with a differing query string."""
+        from quarry.capture_url import CaptureUrl
+        from quarry.db import ChunkStore
+        from quarry.db.storage import get_db
+        from tests.test_database import _make_chunk, _random_vectors
+
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        db = get_db(settings.lancedb_path)
+        stored_name = CaptureUrl.for_web_fetch("https://example.com/guide")
+        ChunkStore(db).insert(
+            [_make_chunk(document_name=stored_name, collection="default-captures")],
+            _random_vectors(1),
+        )
+        app = build_app(ctx)
+
+        with TestClient(app, raise_server_exceptions=False) as tc:
+            data = tc.get(
+                "/v1/captures/lookup?url=https://example.com/guide?ref=nav"
+            ).json()
+
+        assert data == {"matched": True, "document_name": stored_name}
+
+
 class TestDeleteDocuments:
     """Tests for DELETE /documents endpoint -- now returns 202."""
 
