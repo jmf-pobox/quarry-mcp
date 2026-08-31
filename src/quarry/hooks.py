@@ -208,7 +208,13 @@ def _daemon_chunk_collections() -> frozenset[str]:
 def _session_coverage(
     collection: str, captures_collection: str
 ) -> CoverageCounts | None:
-    """Fetch per-repo coverage counts from the daemon; ``None`` if unreachable.
+    """Fetch per-repo coverage counts from the daemon.
+
+    Returns ``None`` whenever the client cannot obtain counts — daemon
+    unreachable, HTTP error (including 401 not-authorized), malformed
+    response, or client misconfiguration.  ``ClientConfigError`` is a
+    ``QuarryError`` subclass, so a single ``except QuarryError`` catches
+    every failure mode the client hierarchy names.
 
     Mirrors ``_daemon_chunk_collections`` at the boundary: client-specific
     exceptions become a single ``None`` signal, so the SessionStart template
@@ -350,15 +356,17 @@ class _SessionStartTemplates:
         """Active-mode context when the coverage query itself failed.
 
         Registration and background sync are local operations that can succeed
-        while the daemon's HTTP API is momentarily down for the coverage call.
-        The trailer is still emitted so an agent that reads this message can
-        act on the diagnosis and then apply the rules.
+        while the daemon's HTTP API refuses the coverage call — the daemon is
+        unreachable, an HTTP status refused (401 not-authorized, 5xx), or the
+        client is misconfigured.  The trailer is still emitted so an agent that
+        reads this message can act on the diagnosis and then apply the rules.
         """
         header = (
             f"Quarry semantic search is active for this project.\n"
             f'Collection: "{collection}" ({directory})\n'
             f'Captures: "{captures_collection}"\n'
-            "Coverage counts unavailable (quarryd unreachable)."
+            "Coverage counts unavailable "
+            "(quarryd unreachable or client not authorized)."
         )
         return (
             f"{header}\n{cls._trailer()}\n"
