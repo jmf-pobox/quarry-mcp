@@ -876,3 +876,91 @@ class TestOptimizeRebuildsFtsIndex:
 
         # Data still accessible — no corruption.
         assert ChunkStore(db).count() == 2
+
+
+class TestCoverage:
+    """Per-repo coverage counts split across a collection and its captures sibling."""
+
+    def test_empty_db_returns_zeros(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        counts = ChunkCatalog(db).coverage("myproject", "myproject-captures")
+        assert counts == {
+            "documents_indexed": 0,
+            "transcripts_captured": 0,
+            "memories_saved": 0,
+        }
+
+    def test_counts_split_across_documents_transcripts_memories(self, tmp_path: Path):
+        """Each row lands in exactly one of the three buckets."""
+        db = get_db(tmp_path / "db")
+        docs = [
+            # Two non-memory documents in the primary collection (three chunks
+            # total). Distinct-name counting collapses "guide.md" to one.
+            _make_chunk(
+                chunk_index=0, document_name="guide.md", collection="myproject"
+            ),
+            _make_chunk(
+                chunk_index=1, document_name="guide.md", collection="myproject"
+            ),
+            _make_chunk(
+                chunk_index=0, document_name="notes.md", collection="myproject"
+            ),
+        ]
+        from dataclasses import replace
+
+        memory_a = replace(
+            _make_chunk(chunk_index=0, document_name="mem-a", collection="myproject"),
+            agent_handle="rmh",
+            memory_type="fact",
+        )
+        memory_b = replace(
+            _make_chunk(chunk_index=0, document_name="mem-b", collection="myproject"),
+            memory_type="procedure",
+        )
+        transcript = _make_chunk(
+            chunk_index=0,
+            document_name="session-abc12345",
+            collection="myproject-captures",
+        )
+        webpage = _make_chunk(
+            chunk_index=0,
+            document_name="example.com-docs",
+            collection="myproject-captures",
+        )
+        chunks = [*docs, memory_a, memory_b, transcript, webpage]
+        ChunkStore(db).insert(chunks, _random_vectors(len(chunks)))
+
+        counts = ChunkCatalog(db).coverage("myproject", "myproject-captures")
+        assert counts == {
+            "documents_indexed": 2,
+            "transcripts_captured": 1,
+            "memories_saved": 2,
+        }
+
+    def test_ignores_other_repos(self, tmp_path: Path):
+        """``WHERE collection IN`` bounds the scan; siblings never leak in."""
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(document_name="a.md", collection="myproject"),
+            _make_chunk(document_name="b.md", collection="otherproject"),
+        ]
+        ChunkStore(db).insert(chunks, _random_vectors(2))
+
+        counts = ChunkCatalog(db).coverage("myproject", "myproject-captures")
+        assert counts["documents_indexed"] == 1
+        assert counts["transcripts_captured"] == 0
+        assert counts["memories_saved"] == 0
+
+    def test_only_session_prefix_counts_as_transcript(self, tmp_path: Path):
+        """A URL capture in the captures sibling is not a transcript."""
+        db = get_db(tmp_path / "db")
+        chunks = [
+            _make_chunk(
+                document_name="example.com-page",
+                collection="myproject-captures",
+            ),
+        ]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        counts = ChunkCatalog(db).coverage("myproject", "myproject-captures")
+        assert counts["transcripts_captured"] == 0
