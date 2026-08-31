@@ -1794,14 +1794,14 @@
     "future_annotations": 1.0
   },
   "src/quarry/hooks.py": {
-    "method_ratio": 0.333,
+    "method_ratio": 0.472,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.0,
+    "avg_params": 1.22,
     "max_complexity": 8.0,
-    "avg_complexity": 2.89,
-    "module_size": 643.0,
-    "classes_per_module": 1.0,
-    "class_to_func_ratio": 0.053,
+    "avg_complexity": 2.47,
+    "module_size": 783.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.095,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
