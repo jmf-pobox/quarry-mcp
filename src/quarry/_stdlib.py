@@ -37,11 +37,22 @@ _CONFIG_FILENAME = ".punt-labs/quarry/config.md"
 
 @dataclass(frozen=True)
 class HookConfig:
-    """Per-project hook configuration from ``.punt-labs/quarry/config.md``."""
+    """Per-project hook configuration from ``.punt-labs/quarry/config.md``.
+
+    ``read`` alone defaults to ``False`` — the one deliberate exception to the
+    every-other-hook-defaults-``True`` pattern.  ``Read`` fires far more often
+    than any other hook and has the highest secret-leak surface, so shipping it
+    opt-in lets an operator confirm the filter set is clean before it captures
+    unattended.
+    """
 
     session_sync: bool = True
     web_fetch: bool = True
     compaction: bool = True
+    session_end: bool = True
+    web_search: bool = True
+    read: bool = False
+    subagent_stop: bool = True
 
 
 def load_hook_config(cwd: str) -> HookConfig:
@@ -49,8 +60,8 @@ def load_hook_config(cwd: str) -> HookConfig:
 
     Uses a pure-stdlib parser for a minimal subset of frontmatter, reading only
     the ``auto_capture`` block and its boolean fields.  This function does not
-    depend on PyYAML or support arbitrary YAML.  Returns defaults (all enabled)
-    if the file is missing, malformed, or the expected structure is absent.
+    depend on PyYAML or support arbitrary YAML.  Returns defaults if the file
+    is missing, malformed, or the expected structure is absent.
     """
     path = Path(cwd) / _CONFIG_FILENAME
     if not path.is_file():
@@ -69,6 +80,10 @@ def load_hook_config(cwd: str) -> HookConfig:
         session_sync=_bool_field(auto, "session_sync", default=True),
         web_fetch=_bool_field(auto, "web_fetch", default=True),
         compaction=_bool_field(auto, "compaction", default=True),
+        session_end=_bool_field(auto, "session_end", default=True),
+        web_search=_bool_field(auto, "web_search", default=True),
+        read=_bool_field(auto, "read", default=False),
+        subagent_stop=_bool_field(auto, "subagent_stop", default=True),
     )
 
 

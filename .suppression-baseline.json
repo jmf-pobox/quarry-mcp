@@ -1,7 +1,7 @@
 {
-  "total": 208,
+  "total": 222,
   "by_category": {
-    "noqa": 172,
+    "noqa": 186,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 0,
@@ -13,7 +13,7 @@
       "type_ignore": 1
     },
     "src/quarry/_hook_entry.py": {
-      "noqa": 4
+      "noqa": 8
     },
     "src/quarry/backfill.py": {
       "noqa": 1
@@ -152,7 +152,16 @@
     },
     "src/quarry/doctor_memory.py": {
       "noqa": 2
+    },
+    "src/quarry/hooks_agent.py": {
+      "noqa": 5
+    },
+    "src/quarry/session_transcript.py": {
+      "noqa": 4
+    },
+    "src/quarry/daemon_capture.py": {
+      "noqa": 1
     }
   },
-  "updated_at": "2026-08-31T01:43:56Z"
+  "updated_at": "2026-08-31T04:00:09Z"
 }
