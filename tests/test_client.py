@@ -60,8 +60,8 @@ class TestCapturesLookupWire:
 
 
 class TestLearnWire:
-    """``learn`` resolves the caller's cwd itself -- ``LearnRequest`` carries
-    no ``cwd`` parameter on any other surface."""
+    """``learn`` resolves the caller's cwd itself -- ``cwd`` is not
+    user-supplied on any surface (CLI/MCP/slash/client)."""
 
     def test_sends_real_cwd(self) -> None:
         seen: list[httpx.Request] = []

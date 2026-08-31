@@ -159,11 +159,11 @@ class QuarryClient:
 
         Resolves the caller's cwd to scope the lesson to this project's
         ``<repo>-lessons`` collection -- the one deliberate exception to this
-        client's pure-transport contract: ``LearnRequest`` carries no ``cwd``
-        parameter on any surface, so a lesson's project scope has to come
-        from somewhere the caller is not asked to state twice.  A deleted
-        cwd (e.g. a cleaned-up tmpdir) degrades to "" rather than crashing;
-        the daemon then routes to ``default-lessons``.
+        client's pure-transport contract: ``cwd`` is not user-supplied on
+        any surface (CLI/MCP/slash/client), so a lesson's project scope has
+        to come from somewhere the caller is not asked to state twice.  A
+        deleted cwd (e.g. a cleaned-up tmpdir) degrades to "" rather than
+        crashing; the daemon then routes to ``default-lessons``.
         """
         try:
             cwd = str(Path.cwd())
