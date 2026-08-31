@@ -1885,6 +1885,17 @@ class TestCapture:
         url.assert_not_called()  # the SSRF sink was never reached
         content.assert_not_called()  # rejected before any ingest job ran
 
+    def test_capture_rejects_reserved_memory_type_lesson(
+        self, client: TestClient
+    ) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        resp = client.post(
+            "/v1/capture",
+            json={"content": "body", "document_name": "n.md", "memory_type": "lesson"},
+        )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
+
 
 class TestRemember:
     """Tests for POST /remember endpoint -- now returns 202."""

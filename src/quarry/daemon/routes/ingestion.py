@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse
 
 from quarry.captures_collection import CapturesCollection
 from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
-from quarry.daemon.routes.base import RouteGroup
+from quarry.daemon.routes.base import RESERVED_MEMORY_TYPE, RouteGroup
 from quarry.http_guards import RequestGuards
 from quarry.ingest_collection import IngestCollection
 from quarry.lesson import LessonComposer, LessonsCollection
@@ -26,11 +26,6 @@ MAX_REMEMBER_BODY_BYTES = 50 * 1024 * 1024
 MAX_INGEST_BODY_BYTES = 1 * 1024 * 1024
 MAX_LEARN_BODY_BYTES = 64 * 1024
 _MAX_LESSON_CHARS = 500
-
-# fusion.py's boost keys purely on this value; reserving it here means only
-# ``learn`` (via ``_learn_job``) can ever write it, so a boosted row always
-# went through learn's naming/topic/length-cap rules.
-_RESERVED_MEMORY_TYPE = "lesson"
 
 
 @final
@@ -119,8 +114,9 @@ class IngestionRoutes(RouteGroup):
         if isinstance(overwrite, JSONResponse):
             return overwrite
         memory_type = self._str_field(body, "memory_type", "")
-        if memory_type == _RESERVED_MEMORY_TYPE:
-            return self._reserved_memory_type_error()
+        rejection = self.reject_reserved_memory_type(memory_type)
+        if rejection is not None:
+            return rejection
         agent_handle = self._str_field(body, "agent_handle", "")
         collection = self._resolve_memory_collection(
             self._str_field(body, "collection", ""), agent_handle
@@ -173,21 +169,8 @@ class IngestionRoutes(RouteGroup):
             overwrite=False,
             scrub_label="learn",
             agent_handle="",
-            memory_type=_RESERVED_MEMORY_TYPE,
+            memory_type=RESERVED_MEMORY_TYPE,
             summary=topic,
-        )
-
-    @staticmethod
-    def _reserved_memory_type_error() -> JSONResponse:
-        """Return the 400 for a caller-supplied ``memory_type='lesson'``."""
-        return JSONResponse(
-            {
-                "error": (
-                    f"memory_type '{_RESERVED_MEMORY_TYPE}' is reserved "
-                    "for quarry learn"
-                )
-            },
-            status_code=400,
         )
 
     @staticmethod
@@ -210,8 +193,9 @@ class IngestionRoutes(RouteGroup):
         if isinstance(scrub, JSONResponse):
             return scrub
         memory_type = self._str_field(body, "memory_type", "")
-        if memory_type == _RESERVED_MEMORY_TYPE:
-            return self._reserved_memory_type_error()
+        rejection = self.reject_reserved_memory_type(memory_type)
+        if rejection is not None:
+            return rejection
         collection = await self._ingest_collection(body, scrub=scrub)
         # Key the queue on the ACTUAL table: the explicit/captures name if set,
         # else the URL hostname — the SAME resolver the pipeline applies, so the
