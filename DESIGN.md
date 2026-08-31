@@ -2685,6 +2685,7 @@ the hook to either import `quarry.sync_registry` (violating the engine-free
 hook boundary) or guess the name from `cwd` with a copy of the daemon's own
 derivation logic — a second implementation of `CapturesCollection.for_cwd`
 that could silently diverge from the one the daemon uses at write time.
+
 ## DES-053: `quarry learn` — a fourth capture verb with retrieval preference
 
 **Context.** `remember` and `ingest` cover a durable fact and a URL, but

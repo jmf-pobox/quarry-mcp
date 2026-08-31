@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 from uuid import uuid4
 
-from quarry.collection_routing import covering_collection
+from quarry.collection_routing import CollectionRouting
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -74,11 +74,11 @@ class LessonsCollection:
     def for_cwd(cls, cwd: str, registrations: Mapping[str, str]) -> Self:
         """Resolve the lessons collection for *cwd* against the sync registry.
 
-        Shares :func:`quarry.collection_routing.covering_collection` with
-        :class:`~quarry.captures_collection.CapturesCollection` -- the
+        Shares :meth:`quarry.collection_routing.CollectionRouting.covering_collection`
+        with :class:`~quarry.captures_collection.CapturesCollection` -- the
         ancestor walk is identical regardless of the suffix.
         """
-        return cls.resolve(covering_collection(cwd, registrations))
+        return cls.resolve(CollectionRouting.covering_collection(cwd, registrations))
 
     @classmethod
     def for_registry_path(cls, cwd: str, registry_path: Path) -> Self:
