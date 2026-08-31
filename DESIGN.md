@@ -2653,15 +2653,16 @@ maintenance cost, not a blocker.
 See `punt-labs/homebrew-tap` PR #34 and `punt-kit/patterns/homebrew-pypi-
 formula.md`'s "Known failure mode" section for the full technical detail.
 
-## DES-052: `GET /captures/lookup` takes `cwd`, not a pre-resolved collection name
+## DES-052: `POST /v1/captures/lookup` takes `cwd`, not a pre-resolved collection name
 
 **Context.** The WebFetch loop-closer needs to ask the daemon "have I already
 captured this URL?" before re-sending it. The ticket's illustrative route
 shape was `/v1/captures/lookup?url=<url>&collection=<repo>-captures` — the
 caller passing an already-suffixed captures collection name.
 
-**Decision.** The route takes `cwd`, not `collection`, mirroring `POST
-/capture`'s existing contract exactly: the daemon derives the target
+**Decision.** The route is `POST /v1/captures/lookup`, taking `cwd` in the
+JSON body, not `collection`, mirroring `POST /capture`'s existing contract
+exactly: the daemon derives the target
 `<repo>-captures` collection server-side via
 `CapturesCollection.for_registry_path(cwd, registry_path)`. `CaptureUrl.for_web_fetch`
 also moved to run server-side, inside the route, rather than being computed by

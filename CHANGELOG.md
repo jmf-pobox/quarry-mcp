@@ -16,9 +16,11 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
-- `query`: `GET /v1/captures/lookup?url=<url>&cwd=<cwd>` answers whether a URL
-  is already indexed under the caller's `<repo>-captures` collection
-  (`CapturesLookupResponse`: `{matched, document_name}`); `QuarryClient.captures_lookup()`
+- `query`: `POST /v1/captures/lookup` (JSON body `{url, cwd}`) answers whether
+  a URL is already indexed under the caller's `<repo>-captures` collection
+  (`CapturesLookupResponse`: `{matched, document_name}`). POST avoids leaking
+  the target URL into server access logs and browser/proxy history (CWE-598:
+  sensitive query-string data). `QuarryClient.captures_lookup()`
   is the client-side wrapper. `PostToolUse:WebFetch` calls it BEFORE sending the
   new capture (a lookup run after would always match) via
   `WebFetchLoopCloser` (`web_fetch_loop_closer.py`); on a match the hook
