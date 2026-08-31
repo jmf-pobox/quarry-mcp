@@ -16,6 +16,22 @@ across `transform`, `index`, and `connector`).
 
 ### Added
 
+- `query`: `POST /v1/captures/lookup` (JSON body `{url, cwd}`) answers whether
+  a URL is already indexed under the caller's `<repo>-captures` collection
+  (`CapturesLookupResponse`: `{matched, document_name}`). POST avoids leaking
+  the target URL into server access logs and browser/proxy history (CWE-598:
+  sensitive query-string data). `QuarryClient.captures_lookup()`
+  is the client-side wrapper. `PostToolUse:WebFetch` calls it BEFORE sending the
+  new capture (a lookup run after would always match) via
+  `WebFetchLoopCloser` (`web_fetch_loop_closer.py`); on a match the hook
+  returns an `additionalContext` nudge naming the URL, a suggested `find`
+  query (the last path segment, or the host for a bare path), and the stored
+  `document_name` when the daemon supplies one. The lookup normalizes the URL
+  identically to the write path (`CaptureUrl.for_web_fetch`): two URLs
+  differing only by query string or fragment share one document; a
+  trailing-slash difference does not normalize and is a distinct document.
+  Fails open — an unreachable daemon or any client error returns `{}` silently
+  without blocking the fetch.
 - `tool`: four new agent-lifecycle hooks — `SessionEnd`, `PostToolUse:WebSearch`,
   `PostToolUse:Read`, `SubagentStop`. `SessionEnd` captures the full session
   transcript on every close (closing the "PreCompact never fires on short

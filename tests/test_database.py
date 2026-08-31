@@ -160,6 +160,51 @@ class TestGetPageText:
         assert text == "raw text page 456"
 
 
+class TestDocumentExists:
+    def test_true_when_present(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("a.pdf", "c1") is True
+
+    def test_false_for_different_collection(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("a.pdf", "c2") is False
+
+    def test_false_for_missing_document(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        chunks = [_make_chunk(document_name="a.pdf", collection="c1")]
+        ChunkStore(db).insert(chunks, _random_vectors(1))
+
+        assert ChunkCatalog(db).document_exists("b.pdf", "c1") is False
+
+    def test_false_on_empty_db(self, tmp_path: Path):
+        db = get_db(tmp_path / "db")
+        assert ChunkCatalog(db).document_exists("a.pdf", "c1") is False
+
+    def test_true_when_match_lands_after_the_first_scanned_row(self, tmp_path: Path):
+        """Regression: ``limit()`` bounds the raw scan, not the filtered match
+        count.  A ``limit(1)`` predicate query only ever inspects the table's
+        first physical row, so a real match anywhere else in the table is
+        missed entirely.  The target lands last so only a full scan finds it.
+        """
+        db = get_db(tmp_path / "db")
+        fillers = [
+            _make_chunk(document_name="filler.pdf", collection="c1", chunk_index=i)
+            for i in range(20)
+        ]
+        target = _make_chunk(document_name="a.pdf", collection="c1", chunk_index=20)
+        all_chunks = [*fillers, target]
+        vectors = _random_vectors(len(all_chunks))
+        ChunkStore(db).insert(all_chunks, vectors)
+
+        assert ChunkCatalog(db).document_exists("a.pdf", "c1") is True
+
+
 class TestListDocuments:
     def test_lists_documents(self, tmp_path: Path):
         db = get_db(tmp_path / "db")

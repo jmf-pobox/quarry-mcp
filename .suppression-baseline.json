@@ -1,7 +1,7 @@
 {
-  "total": 222,
+  "total": 212,
   "by_category": {
-    "noqa": 186,
+    "noqa": 176,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 0,
@@ -16,6 +16,9 @@
       "noqa": 8
     },
     "src/quarry/backfill.py": {
+      "noqa": 1
+    },
+    "src/quarry/capture_url.py": {
       "noqa": 1
     },
     "src/quarry/captures_collection.py": {
@@ -51,6 +54,9 @@
     "src/quarry/daemon/watch_reconcile.py": {
       "noqa": 2
     },
+    "src/quarry/daemon_capture.py": {
+      "noqa": 1
+    },
     "src/quarry/db/storage.py": {
       "noqa": 1,
       "type_ignore": 1
@@ -66,6 +72,9 @@
     },
     "src/quarry/doctor_inference.py": {
       "noqa": 1
+    },
+    "src/quarry/doctor_memory.py": {
+      "noqa": 2
     },
     "src/quarry/doctor_sync.py": {
       "noqa": 6
@@ -90,7 +99,10 @@
       "noqa": 1
     },
     "src/quarry/hooks.py": {
-      "noqa": 15
+      "noqa": 9
+    },
+    "src/quarry/hooks_agent.py": {
+      "noqa": 5
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
@@ -114,7 +126,7 @@
       "noqa": 1
     },
     "src/quarry/mcp_server.py": {
-      "noqa": 7
+      "noqa": 1
     },
     "src/quarry/onnx_session.py": {
       "noqa": 1
@@ -130,6 +142,9 @@
     },
     "src/quarry/remote.py": {
       "noqa": 2
+    },
+    "src/quarry/session_transcript.py": {
+      "noqa": 4
     },
     "src/quarry/shadow/_git.py": {
       "noqa": 1
@@ -150,18 +165,9 @@
     "src/quarry/sync_ingest.py": {
       "noqa": 1
     },
-    "src/quarry/doctor_memory.py": {
-      "noqa": 2
-    },
-    "src/quarry/hooks_agent.py": {
-      "noqa": 5
-    },
-    "src/quarry/session_transcript.py": {
-      "noqa": 4
-    },
-    "src/quarry/daemon_capture.py": {
+    "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 1
     }
   },
-  "updated_at": "2026-08-31T04:00:09Z"
+  "updated_at": "2026-08-31T12:43:34Z"
 }

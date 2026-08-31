@@ -17,6 +17,8 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from quarry.api import (
     BackfillRequest,
     CaptureIngestRequest,
+    CapturesLookupRequest,
+    CapturesLookupResponse,
     CapturesPushResponse,
     CollectionList,
     CoverageResponse,
@@ -202,6 +204,13 @@ class RouteTable:
                 captures.push,
                 ("POST",),
                 CapturesPushResponse,
+            ),
+            RouteSpec(
+                "/captures/lookup",
+                captures.lookup,
+                ("POST",),
+                CapturesLookupResponse,
+                request_model=CapturesLookupRequest,
             ),
             RouteSpec(
                 "/tasks/{task_id}",

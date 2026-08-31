@@ -603,7 +603,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     ``tool_response`` directly — no second fetch.  When the payload has no usable
     content, the daemon re-fetches through the SSRF-checked URL-ingest route
     instead.  The hook imports no engine — only the thin client and the
-    lightweight URL/scrub helpers.
+    lightweight URL/scrub helpers.  Looks up a PRIOR capture of this URL FIRST
+    — after the (unconditional) send would always match — via
+    :class:`~quarry.web_fetch_loop_closer.WebFetchLoopCloser`.
     """
     cwd = _as_dir(payload.get("cwd"))
     if cwd:
@@ -620,11 +622,9 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
 
     from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
     from quarry.capture_url import CaptureUrl  # noqa: PLC0415
-    from quarry.scrub import scrub_and_log  # noqa: PLC0415
+    from quarry.web_fetch_loop_closer import WebFetchLoopCloser  # noqa: PLC0415
 
-    # A capture must not persist the URL's userinfo/query/fragment as the stored
-    # document name; redact it for the name the daemon files under.
-    meta_url = CaptureUrl(url).redacted(lambda raw: scrub_and_log(raw, "web-fetch"))
+    context = WebFetchLoopCloser(url, cwd).context()
 
     sender = DaemonCaptureSender()
     content = parsed.content
@@ -638,7 +638,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             CaptureIngestRequest(
                 content=content,
                 cwd=cwd,
-                document_name=meta_url,
+                document_name=CaptureUrl.for_web_fetch(url),
                 format_hint="html",
                 source_url=url,
             ),
@@ -652,7 +652,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
-    return {}
+    return context
 
 
 # A web fetch writes NO durable local copy and backfill-sessions only re-ingests

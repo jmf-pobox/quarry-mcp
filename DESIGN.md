@@ -2652,3 +2652,36 @@ maintenance cost, not a blocker.
 
 See `punt-labs/homebrew-tap` PR #34 and `punt-kit/patterns/homebrew-pypi-
 formula.md`'s "Known failure mode" section for the full technical detail.
+
+## DES-052: `POST /v1/captures/lookup` takes `cwd`, not a pre-resolved collection name
+
+**Context.** The WebFetch loop-closer needs to ask the daemon "have I already
+captured this URL?" before re-sending it. The ticket's illustrative route
+shape was `/v1/captures/lookup?url=<url>&collection=<repo>-captures` — the
+caller passing an already-suffixed captures collection name.
+
+**Decision.** The route is `POST /v1/captures/lookup`, taking `cwd` in the
+JSON body, not `collection`, mirroring `POST /capture`'s existing contract
+exactly: the daemon derives the target
+`<repo>-captures` collection server-side via
+`CapturesCollection.for_registry_path(cwd, registry_path)`. `CaptureUrl.for_web_fetch`
+also moved to run server-side, inside the route, rather than being computed by
+the caller and passed as an opaque pre-normalized string.
+
+**Why.** `CapturesCollection.for_registry_path`'s own docstring states the
+constraint plainly: "the capture client cannot do this itself without
+importing the engine" — resolving a directory to its registered collection
+name requires opening the sync registry, and hooks are deliberately
+engine-free (`TestHookImportsNoEngine` runs the capture paths with `lancedb`
+and `onnxruntime` poisoned). A hook that had to spell `<repo>-captures` itself
+would need either a registry import (breaking engine-free) or a naming
+heuristic that can drift from what the daemon actually registered — exactly
+the bug-class-3 local/remote divergence this repo's review history recurs on.
+Passing raw `cwd` (as `POST /capture` already does) keeps the hook a pure
+thin-client caller and the daemon the single owner of the naming rule.
+
+**Rejected: client passes the literal `<repo>-captures` name.** Would require
+the hook to either import `quarry.sync_registry` (violating the engine-free
+hook boundary) or guess the name from `cwd` with a copy of the daemon's own
+derivation logic — a second implementation of `CapturesCollection.for_cwd`
+that could silently diverge from the one the daemon uses at write time.
