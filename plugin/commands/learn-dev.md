@@ -18,7 +18,5 @@ Call `mcp__plugin_quarry-dev_quarry__learn` with:
 
 - `lesson` set to the lesson text
 - `name` set to the parsed name, if any
-- `topic` set to a short domain tag, only if one is obviously implied by the
-  conversation (e.g. "testing", "release-process") -- omit if unclear
 
 The result is already formatted by a PostToolUse hook and displayed above. Do not repeat or reformat the data. Do not send any text after the tool call.
