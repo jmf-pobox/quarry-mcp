@@ -178,9 +178,9 @@ class ChunkCatalog:
     def document_exists(self, document_name: str, collection: str) -> bool:
         """Return whether *document_name* has any indexed chunk in *collection*.
 
-        A capped ``limit(1)`` scan: presence is a yes/no question, so the first
-        matching row is enough — no need to pull every chunk of a document that
-        may span many pages.
+        ``limit()`` bounds the SCAN, not the filtered match count, so
+        ``limit(1)`` can miss a real match. Use the same full-scan limit as
+        every other filtered read in this file.
         """
         if TABLE_NAME not in self._db.list_tables().tables:
             return False
@@ -189,10 +189,8 @@ class ChunkCatalog:
             f" AND collection = '{escape_sql(collection)}'"
         )
         table = self._db.open_table(TABLE_NAME)
-        rows = (
-            table.search().where(predicate).limit(1).select(["document_name"]).to_list()
-        )
-        return bool(rows)
+        query = table.search().where(predicate).limit(_FULL_SCAN_LIMIT)
+        return bool(query.select(["document_name"]).to_list())
 
     def get_page_text(
         self,
