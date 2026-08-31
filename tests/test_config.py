@@ -136,3 +136,27 @@ class TestRetrievalDecayRate:
     def test_negative_rejected(self):
         with pytest.raises(ValidationError, match="greater_than_equal"):
             Settings.model_validate({"QUARRY_RETRIEVAL_DECAY_RATE": -0.1})
+
+
+class TestRetrievalLessonBoost:
+    def test_default_is_one_point_five(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("QUARRY_RETRIEVAL_LESSON_BOOST", raising=False)
+        assert Settings().retrieval_lesson_boost == 1.5
+
+    def test_env_alias_reads_quarry_retrieval_lesson_boost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_LESSON_BOOST", "2.0")
+        assert Settings().retrieval_lesson_boost == 2.0
+
+    def test_one_accepted_as_the_disable_value(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("QUARRY_RETRIEVAL_LESSON_BOOST", "1.0")
+        assert Settings().retrieval_lesson_boost == 1.0
+
+    def test_below_one_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings.model_validate({"QUARRY_RETRIEVAL_LESSON_BOOST": 0.5})
+
+    def test_zero_rejected(self):
+        with pytest.raises(ValidationError, match="greater_than_equal"):
+            Settings.model_validate({"QUARRY_RETRIEVAL_LESSON_BOOST": 0.0})

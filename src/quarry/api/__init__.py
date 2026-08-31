@@ -27,7 +27,7 @@ from quarry.api.databases import DatabaseInfo, DatabaseList
 from quarry.api.deregister import DeregisterAccepted, DeregisterRequest
 from quarry.api.documents import DeleteDocumentRequest, DocumentInfo, DocumentList
 from quarry.api.errors import ErrorBody
-from quarry.api.ingestion import IngestRequest, RememberRequest
+from quarry.api.ingestion import IngestRequest, LearnRequest, RememberRequest
 from quarry.api.maintenance import BackfillRequest, OptimizeRequest
 from quarry.api.meta import CoverageResponse, HealthResponse, StatusResponse
 from quarry.api.registrations import (
@@ -65,6 +65,7 @@ __all__ = [
     "ErrorBody",
     "HealthResponse",
     "IngestRequest",
+    "LearnRequest",
     "OptimizeRequest",
     "RegisterRequest",
     "RegistrationInfo",

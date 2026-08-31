@@ -124,6 +124,7 @@ class McpTools:
         server.add_tool(self.find)
         server.add_tool(self.ingest)
         server.add_tool(self.remember)
+        server.add_tool(self.learn)
         server.add_tool(self.list_resources, name="list")
         server.add_tool(self.show)
         server.add_tool(self.delete)
@@ -161,7 +162,7 @@ class McpTools:
             page_type: Optional content type filter (text, code, spreadsheet, etc.).
             source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
             agent_handle: Optional agent handle to filter by (e.g. "rmh").
-            memory_type: Optional memory type filter (fact, observation, etc.).
+            memory_type: Optional memory type filter (fact, observation, lesson, etc.).
         """
         )
         if err := self._reject_blank(query, "query"):
@@ -191,6 +192,10 @@ class McpTools:
         (
             """Use when you have a URL to add to the knowledge base — a doc, """
             """an article, a spec.
+
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
 
         Fetches a URL with smart sitemap discovery and single-page fallback.
         For local files and directories, use ``register_directory`` +
@@ -233,6 +238,10 @@ class McpTools:
             """a gotcha, a non-obvious fact, a procedure — so it survives """
             """context compaction.
 
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
+
         The daemon scrubs secrets/PII before indexing. Returns immediately —
         the daemon indexes in the background.
 
@@ -244,7 +253,8 @@ class McpTools:
                 ``memory-<handle>`` when a handle is given, else ``default``.
             format_hint: Format hint: 'auto', 'plain', 'markdown', 'latex'.
             agent_handle: Agent that owns this memory (e.g. "rmh").
-            memory_type: Memory classification: fact, observation, opinion, procedure.
+            memory_type: Memory classification: fact, observation, opinion,
+                procedure. ``'lesson'`` is reserved for the ``learn`` tool.
             summary: One-line summary of the content.
         """
         )
@@ -268,6 +278,32 @@ class McpTools:
             )
         )
         return f"▶  Remembering {document_name} (task {accepted.task_id})"
+
+    @_guard
+    def learn(self, lesson: str, topic: str = "", name: str = "") -> str:
+        (
+            """Use learn to save a distilled lesson that should outrank """
+            """ordinary results for related queries -- a rule, a convention, """
+            """a "do it this way" insight, not a one-off fact.
+
+        """
+            """remember = a specific durable fact, ingest = a URL, learn = a """
+            """distilled lesson that gets retrieval preference.
+
+        The daemon scrubs secrets/PII before indexing, same as remember.
+        Lessons are capped at 500 characters -- use remember for anything
+        longer. Returns immediately -- the daemon indexes in the background.
+
+        Args:
+            lesson: The distilled lesson text (<= 500 chars).
+            topic: Optional domain tag (e.g. "testing", "release-process").
+            name: Optional user-visible slug for later reference.
+        """
+        )
+        if err := self._reject_blank(lesson, "lesson"):
+            return err
+        accepted = self._connect().learn(lesson, topic=topic, name=name)
+        return f"▶  Learning saved ({accepted.status}, task {accepted.task_id})"
 
     @_guard
     def list_resources(self, kind: str, collection: str = "") -> str:

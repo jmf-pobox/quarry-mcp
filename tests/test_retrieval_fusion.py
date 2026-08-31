@@ -97,6 +97,64 @@ class TestFuse:
         fused = RrfFusion(rrf_k=60, decay_rate=0.05).fuse([old, recent], [], limit=2)
         assert fused[0].document_name == "old"
 
+    def test_lesson_boost_lifts_a_moderately_ranked_lesson(self) -> None:
+        """A lesson-tagged row outranks an equal-or-better-ranked plain row.
+
+        Per the design's derivation: r_l < boost*(60+r_p) - 60. At boost=1.5
+        and r_p=0 (best-case plain competitor), r_l < 30 -- a lesson at rank
+        20 in its own channel outranks a plain hit at rank 5.
+        """
+        lesson = _row("lesson-doc", memory_type="lesson")
+        plain = _row("plain-doc", chunk=1)
+        # lesson at rank 20, plain at rank 5 -- both from the vector channel.
+        vec_results = (
+            [_row(f"filler-{i}", chunk=i + 2) for i in range(5)]
+            + [plain]
+            + [_row(f"filler2-{i}", chunk=i + 10) for i in range(14)]
+            + [lesson]
+        )
+        fused = RrfFusion(rrf_k=60, decay_rate=0.0, lesson_boost=1.5).fuse(
+            vec_results, [], limit=len(vec_results)
+        )
+        names = [r.document_name for r in fused]
+        assert names.index("lesson-doc") < names.index("plain-doc")
+
+    def test_lesson_boost_is_a_noop_at_one(self) -> None:
+        """boost=1.0 reproduces plain RRF rank order -- the neutral default."""
+        lesson = _row("lesson-doc", memory_type="lesson", chunk=1)
+        plain = _row("plain-doc", chunk=0)
+        fused = RrfFusion(rrf_k=60, decay_rate=0.0, lesson_boost=1.0).fuse(
+            [plain, lesson], [], limit=2
+        )
+        assert fused[0].document_name == "plain-doc"
+
+    def test_lesson_boost_does_not_apply_to_other_memory_types(self) -> None:
+        """The boost keys on memory_type=='lesson' exactly, not decayable types."""
+        fact = _row("fact-doc", memory_type="fact", chunk=1)
+        plain = _row("plain-doc", chunk=0)
+        fused = RrfFusion(rrf_k=60, decay_rate=0.0, lesson_boost=1.5).fuse(
+            [plain, fact], [], limit=2
+        )
+        assert fused[0].document_name == "plain-doc"
+
+    def test_lesson_boost_composes_with_decay_never_decaying_lessons(self) -> None:
+        """A lesson row is never decayed regardless of decay_rate.
+
+        Lessons never carry an agent_handle (D1/D3), so the existing decay
+        gate already exempts them -- confirmed here with both knobs active.
+        """
+        now = datetime.now(tz=UTC)
+        old_lesson = _row(
+            "old-lesson", memory_type="lesson", chunk=0, ts=now - timedelta(days=90)
+        )
+        recent_plain = _row("recent-plain", chunk=1, ts=now)
+        fused = RrfFusion(rrf_k=60, decay_rate=0.05, lesson_boost=1.5).fuse(
+            [old_lesson, recent_plain], [], limit=2
+        )
+        # The boosted, undecayed old lesson still outranks the equally-ranked
+        # (rank 0 vs rank 1) recent plain row.
+        assert fused[0].document_name == "old-lesson"
+
     def test_null_agent_handle_never_decays(self) -> None:
         """``agent_handle=None`` must be treated as absent, not the literal ``"None"``.
 

@@ -99,6 +99,21 @@ class Settings(BaseSettings):
         validation_alias="QUARRY_RETRIEVAL_DECAY_RATE",
     )
 
+    # ``quarry learn``'s retrieval-preference knob, threaded into
+    # RetrievalConfig at wire time (see daemon/routes/search.py). RRF's
+    # rank-1 term is 1/(60+0); boosting by 1.5x lifts a lesson ranked in the
+    # top ~30 of its own channel above even the single best non-lesson hit,
+    # while a genuinely poor-relevance lesson (rank 40+) still loses to a
+    # relevant plain result -- conservative enough that irrelevant lessons
+    # never dominate. ``ge=1.0`` fails loud on a value that would *suppress*
+    # lessons instead of boosting them -- 1.0 is how an operator disables the
+    # effect, not 0.0, because 0.0 would zero out the row's entire RRF term.
+    retrieval_lesson_boost: float = Field(
+        default=1.5,
+        ge=1.0,
+        validation_alias="QUARRY_RETRIEVAL_LESSON_BOOST",
+    )
+
     @field_validator("fd_limit", mode="before")
     @classmethod
     def _coerce_fd_limit(cls, value: object) -> int:

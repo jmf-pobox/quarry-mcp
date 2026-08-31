@@ -29,6 +29,7 @@ from quarry.api import (
     ErrorBody,
     HealthResponse,
     IngestRequest,
+    LearnRequest,
     OptimizeRequest,
     RegisterRequest,
     RegistrationList,
@@ -186,6 +187,14 @@ class RouteTable:
                 ("POST",),
                 TaskAccepted,
                 request_model=IngestRequest,
+                status_code=202,
+            ),
+            RouteSpec(
+                "/learn",
+                ingestion.learn,
+                ("POST",),
+                TaskAccepted,
+                request_model=LearnRequest,
                 status_code=202,
             ),
             RouteSpec(

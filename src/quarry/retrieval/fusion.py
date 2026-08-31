@@ -16,6 +16,7 @@ _RowKey = tuple[str, int, int]
 _DECAYABLE_TYPES: frozenset[str] = frozenset(
     {"fact", "observation", "opinion", "procedure"}
 )
+_LESSON_TYPE = "lesson"
 
 
 class RrfFusion:
@@ -24,18 +25,24 @@ class RrfFusion:
     ``rrf_k`` controls how sharply top ranks dominate (larger ``k`` flattens the
     weighting); ``decay_rate`` applies exponential temporal decay to
     agent-memory rows so recent memories rank higher. ``decay_rate == 0.0`` is
-    today's production default and disables decay entirely.
+    today's production default and disables decay entirely. ``lesson_boost``
+    multiplies a ``memory_type == "lesson"`` row's RRF term so a distilled
+    lesson (``quarry learn``) that is already a reasonably good match for the
+    query outranks equivalently-ranked plain content; ``lesson_boost == 1.0``
+    is a no-op.
     """
 
-    __slots__ = ("_decay_rate", "_rrf_k")
+    __slots__ = ("_decay_rate", "_lesson_boost", "_rrf_k")
 
     _rrf_k: int
     _decay_rate: float
+    _lesson_boost: float
 
-    def __new__(cls, rrf_k: int, decay_rate: float) -> Self:
+    def __new__(cls, rrf_k: int, decay_rate: float, lesson_boost: float = 1.0) -> Self:
         self = super().__new__(cls)
         self._rrf_k = rrf_k
         self._decay_rate = decay_rate
+        self._lesson_boost = lesson_boost
         return self
 
     def fuse(
@@ -86,7 +93,8 @@ class RrfFusion:
             weight = self.temporal_weight(ts, now_ts, self._decay_rate)
         else:
             weight = 1.0
-        return (1.0 / (self._rrf_k + rank)) * weight
+        boost = self._lesson_boost if memory_type == _LESSON_TYPE else 1.0
+        return (1.0 / (self._rrf_k + rank)) * weight * boost
 
     @staticmethod
     def _row_key(row: dict[str, object]) -> _RowKey:

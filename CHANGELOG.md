@@ -32,6 +32,21 @@ across `transform`, `index`, and `connector`).
   trailing-slash difference does not normalize and is a distinct document.
   Fails open — an unreachable daemon or any client error returns `{}` silently
   without blocking the fetch.
+- `tool`: `quarry learn` — a fourth capture verb, on CLI (`quarry learn`), MCP
+  (`learn`), slash (`/quarry:learn`), and the Python client
+  (`QuarryClient.learn`). A single call atomically saves a distilled lesson
+  (capped at 500 characters) and registers its retrieval preference — no
+  `learn`-then-`set_config` two-step. Lessons file into a project-scoped
+  `<repo>-lessons` collection (`default-lessons` when unregistered) and always
+  carry `memory_type="lesson"` with no `agent_handle`, so they never decay.
+  `memory_type='lesson'` is now reserved and rejected with `400` on
+  `remember`/`ingest`. `quarry doctor`'s memory-corpus check reports a
+  `lessons=N` segment. See DES-053.
+- `query`: `RrfFusion` gains a `lesson_boost` knob — a 1.5x default RRF-term
+  multiplier (`Settings.retrieval_lesson_boost`) that lifts a moderately
+  relevant lesson above equivalently-ranked plain content without letting an
+  irrelevant lesson dominate.
+
 - `tool`: four new agent-lifecycle hooks — `SessionEnd`, `PostToolUse:WebSearch`,
   `PostToolUse:Read`, `SubagentStop`. `SessionEnd` captures the full session
   transcript on every close (closing the "PreCompact never fires on short
@@ -73,6 +88,10 @@ across `transform`, `index`, and `connector`).
 
 ### Changed
 
+- `tool`: the `remember`/`ingest` descriptions on every surface (CLI, MCP,
+  slash) now carry the boundary sentence distinguishing the three capture
+  verbs: "remember = a specific durable fact, ingest = a URL, learn = a
+  distilled lesson that gets retrieval preference."
 - `tool`: MCP server `instructions` block leads with the two find-triggering
   sentences (R1 + R2) plus an anti-rationalisation clause and a negative rule;
   the formatting-policy paragraph is demoted below the trigger vocabulary.

@@ -1074,6 +1074,61 @@
         "summary": "Ingest"
       }
     },
+    "/v1/learn": {
+      "post": {
+        "description": "Save a distilled lesson as a background task.\n\nremember = a specific durable fact, ingest = a URL, learn = a\ndistilled lesson that gets retrieval preference. Body: {lesson,\ntopic?, name?, cwd?}. Always writes memory_type=\"lesson\" with no\nagent_handle -- a lesson is project-scoped, deliberately-curated\nknowledge, never a personal, decaying memory (fusion.py's decay gate\nexempts empty-handle rows already). Returns 202 with a task_id.",
+        "operationId": "learn_v1_learn_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for saving a distilled lesson with retrieval preference.\n\n``cwd`` is never a caller-facing parameter on any surface (CLI, MCP,\nslash, client) -- ``QuarryClient.learn()`` resolves it via ``Path.cwd()``\nbefore this model is built, exactly the way ``CaptureIngestRequest.cwd``\nis populated by the caller's own working directory, not the user.",
+                "properties": {
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "lesson": {
+                    "title": "Lesson",
+                    "type": "string"
+                  },
+                  "name": {
+                    "default": "",
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "topic": {
+                    "default": "",
+                    "title": "Topic",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "lesson"
+                ],
+                "title": "LearnRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Learn"
+      }
+    },
     "/v1/optimize": {
       "post": {
         "description": "Compact the table and rebuild indexes as a singleton background task.\n\nA second optimize while one is in flight is rejected with 409 and the\nrunning task's id, so concurrent runs never contend for the table lock.",
