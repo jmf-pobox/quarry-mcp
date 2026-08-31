@@ -62,27 +62,27 @@ def _pre_compact() -> None:
 
 
 def _session_end() -> None:
-    from quarry.hooks_agent import handle_session_end  # noqa: PLC0415
+    from quarry.hooks_agent import HookAgent  # noqa: PLC0415
 
-    run_hook(handle_session_end)
+    run_hook(HookAgent.session_end)
 
 
 def _post_web_search() -> None:
-    from quarry.hooks_agent import handle_post_web_search  # noqa: PLC0415
+    from quarry.hooks_agent import HookAgent  # noqa: PLC0415
 
-    run_hook(handle_post_web_search)
+    run_hook(HookAgent.post_web_search)
 
 
 def _post_read() -> None:
-    from quarry.hooks_agent import handle_post_read  # noqa: PLC0415
+    from quarry.hooks_agent import HookAgent  # noqa: PLC0415
 
-    run_hook(handle_post_read)
+    run_hook(HookAgent.post_read)
 
 
 def _subagent_stop() -> None:
-    from quarry.hooks_agent import handle_subagent_stop  # noqa: PLC0415
+    from quarry.hooks_agent import HookAgent  # noqa: PLC0415
 
-    run_hook(handle_subagent_stop)
+    run_hook(HookAgent.subagent_stop)
 
 
 _HANDLERS: dict[str, Callable[[], None]] = {

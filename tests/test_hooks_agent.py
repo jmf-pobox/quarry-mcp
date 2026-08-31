@@ -1,7 +1,7 @@
 """Handler tests for the four new agent-lifecycle hooks.
 
 Every handler must (a) run happy-path, (b) no-op on config-off, (c) survive a
-malformed payload without raising.  ``handle_subagent_stop`` gets extra
+malformed payload without raising.  ``HookAgent.subagent_stop`` gets extra
 adversarial coverage because it's the only BLOCKING hook — a ``decision`` or
 ``block`` field in its response hangs every subagent in the session.
 """
@@ -13,12 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-from quarry.hooks_agent import (
-    handle_post_read,
-    handle_post_web_search,
-    handle_session_end,
-    handle_subagent_stop,
-)
+from quarry.hooks_agent import HookAgent
 
 if TYPE_CHECKING:
     import pytest
@@ -61,7 +56,7 @@ class TestHandleSessionEnd:
                 return_value=True,
             ) as cap,
         ):
-            result = handle_session_end(
+            result = HookAgent.session_end(
                 {
                     "cwd": str(project),
                     "transcript_path": str(transcript),
@@ -81,7 +76,7 @@ class TestHandleSessionEnd:
         _write_config(project, "---\nauto_capture:\n  session_end: false\n---\n")
         transcript = _make_transcript(tmp_path)
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_session_end(
+            result = HookAgent.session_end(
                 {
                     "cwd": str(project),
                     "transcript_path": str(transcript),
@@ -92,12 +87,12 @@ class TestHandleSessionEnd:
         cap.assert_not_called()
 
     def test_missing_transcript_returns_empty(self, tmp_path: Path) -> None:
-        result = handle_session_end({"cwd": str(tmp_path), "session_id": "abc"})
+        result = HookAgent.session_end({"cwd": str(tmp_path), "session_id": "abc"})
         assert result == {}
 
     def test_non_jsonl_transcript_returns_empty(self, tmp_path: Path) -> None:
         # Defense-in-depth against a wire-format regression.
-        result = handle_session_end(
+        result = HookAgent.session_end(
             {
                 "cwd": str(tmp_path),
                 "transcript_path": str(tmp_path / "notes.txt"),
@@ -108,7 +103,7 @@ class TestHandleSessionEnd:
 
     def test_malformed_payload_survives(self) -> None:
         # Non-string cwd, non-string transcript, missing session_id.
-        result = handle_session_end(
+        result = HookAgent.session_end(
             {"cwd": 123, "transcript_path": None, "session_id": []}
         )
         assert result == {}
@@ -135,7 +130,7 @@ class TestHandlePostWebSearch:
             "quarry.daemon_capture.DaemonCaptureSender.send_capture",
             return_value=True,
         ) as cap:
-            result = handle_post_web_search(self._mk_payload(cwd=str(tmp_path)))
+            result = HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
         assert result == {}
         cap.assert_called_once()
         req = cap.call_args[0][0]
@@ -147,7 +142,7 @@ class TestHandlePostWebSearch:
     def test_config_off_returns_empty(self, tmp_path: Path) -> None:
         _write_config(tmp_path, "---\nauto_capture:\n  web_search: false\n---\n")
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_web_search(self._mk_payload(cwd=str(tmp_path)))
+            result = HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
         assert result == {}
         cap.assert_not_called()
 
@@ -157,12 +152,12 @@ class TestHandlePostWebSearch:
             "tool_response": json.dumps([]),
         }
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_web_search(payload)
+            result = HookAgent.post_web_search(payload)
         assert result == {}
         cap.assert_not_called()
 
     def test_malformed_payload_survives(self) -> None:
-        result = handle_post_web_search({"tool_input": None, "tool_response": 42})
+        result = HookAgent.post_web_search({"tool_input": None, "tool_response": 42})
         assert result == {}
 
 
@@ -180,13 +175,13 @@ class TestHandlePostReadFilterBranches:
 
     def test_secret_path_denylist_rejects(self, tmp_path: Path) -> None:
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_read(self._payload(tmp_path, "/home/u/.ssh/id_rsa"))
+            result = HookAgent.post_read(self._payload(tmp_path, "/home/u/.ssh/id_rsa"))
         assert result == {}
         cap.assert_not_called()
 
     def test_extension_allowlist_rejects(self, tmp_path: Path) -> None:
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_read(self._payload(tmp_path, "/tmp/x.py"))
+            result = HookAgent.post_read(self._payload(tmp_path, "/tmp/x.py"))
         assert result == {}
         cap.assert_not_called()
 
@@ -194,7 +189,7 @@ class TestHandlePostReadFilterBranches:
         payload = self._payload(tmp_path, "/tmp/big.pdf")
         payload["tool_response"] = "x" * (300 * 1024)  # 300 KB, over the 200 KB cap
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_read(payload)
+            result = HookAgent.post_read(payload)
         assert result == {}
         cap.assert_not_called()
 
@@ -213,12 +208,12 @@ class TestHandlePostReadFilterBranches:
         (tmp_path / "docs" / "readme.md").write_text("hi")
         with (
             patch(
-                "quarry.hooks_agent._collection_resolver_for",
+                "quarry.hooks_agent.HookAgent._collection_resolver_for",
                 return_value=_FakeResolver(),
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
         ):
-            result = handle_post_read(payload)
+            result = HookAgent.post_read(payload)
         assert result == {}
         cap.assert_not_called()
 
@@ -226,7 +221,7 @@ class TestHandlePostReadFilterBranches:
         payload = self._payload(tmp_path, "/external/vendor-spec.pdf")
         with (
             patch(
-                "quarry.hooks_agent._collection_resolver_for",
+                "quarry.hooks_agent.HookAgent._collection_resolver_for",
                 return_value=None,
             ),
             patch(
@@ -234,7 +229,7 @@ class TestHandlePostReadFilterBranches:
                 return_value=True,
             ) as cap,
         ):
-            result = handle_post_read(payload)
+            result = HookAgent.post_read(payload)
         assert result == {}
         cap.assert_called_once()
         req = cap.call_args[0][0]
@@ -251,16 +246,16 @@ class TestHandlePostRead:
             "tool_response": "hi",
         }
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_post_read(payload)
+            result = HookAgent.post_read(payload)
         assert result == {}
         cap.assert_not_called()
 
     def test_missing_cwd_returns_empty(self) -> None:
-        result = handle_post_read({"tool_input": {"file_path": "/tmp/x.md"}})
+        result = HookAgent.post_read({"tool_input": {"file_path": "/tmp/x.md"}})
         assert result == {}
 
     def test_malformed_payload_survives(self) -> None:
-        result = handle_post_read({"tool_input": 42, "tool_response": None})
+        result = HookAgent.post_read({"tool_input": 42, "tool_response": None})
         assert result == {}
 
 
@@ -301,7 +296,7 @@ class TestHandleSubagentStop:
                 "quarry.daemon_capture.DaemonCaptureSender.send_capture",
                 return_value=True,
             ):
-                result = handle_subagent_stop(payload)
+                result = HookAgent.subagent_stop(payload)
             assert "decision" not in result, (
                 f"BLOCKING regression on {payload}: decision must never appear"
             )
@@ -335,7 +330,7 @@ class TestHandleSubagentStop:
                 return_value=True,
             ) as cap,
         ):
-            result = handle_subagent_stop(payload)
+            result = HookAgent.subagent_stop(payload)
         assert result == {}
         cap.assert_called_once()
         req = cap.call_args[0][0]
@@ -364,7 +359,7 @@ class TestHandleSubagentStop:
                 return_value=True,
             ) as cap,
         ):
-            result = handle_subagent_stop(payload)
+            result = HookAgent.subagent_stop(payload)
         assert result == {}
         req = cap.call_args[0][0]
         assert req.agent_handle == "rmh"
@@ -372,7 +367,7 @@ class TestHandleSubagentStop:
     def test_config_off_returns_empty(self, tmp_path: Path) -> None:
         _write_config(tmp_path, "---\nauto_capture:\n  subagent_stop: false\n---\n")
         with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
-            result = handle_subagent_stop(
+            result = HookAgent.subagent_stop(
                 {
                     "cwd": str(tmp_path),
                     "agent_id": "x",
@@ -383,7 +378,7 @@ class TestHandleSubagentStop:
         cap.assert_not_called()
 
     def test_malformed_payload_survives(self, caplog: pytest.LogCaptureFixture) -> None:
-        result = handle_subagent_stop(
+        result = HookAgent.subagent_stop(
             {"cwd": 42, "agent_id": None, "agent_transcript_path": 3.14}
         )
         assert result == {}
