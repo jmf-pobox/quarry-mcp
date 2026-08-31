@@ -1388,15 +1388,24 @@ class TestShow:
 
 
 class TestCapturesLookup:
-    """Tests for GET /captures/lookup — bug class 3: url/cwd param parity."""
+    """Tests for POST /captures/lookup — bug class 3: url/cwd param parity.
+
+    POST, not a ``?url=`` query string: a query-string token (an API key, a
+    session id) rides the URL itself and can leak into proxy/WAF/browser logs
+    even on a loopback hop (CWE-598).
+    """
+
+    def test_route_is_post_not_get(self, client: TestClient) -> None:
+        resp = client.get("/v1/captures/lookup?url=https://example.com/x")
+        assert resp.status_code == 405
 
     def test_missing_url_returns_400(self, client: TestClient) -> None:
-        resp = client.get("/v1/captures/lookup")
+        resp = client.post("/v1/captures/lookup", json={})
         assert resp.status_code == 400
         assert "url" in resp.json()["error"].lower()
 
     def test_empty_url_returns_400(self, client: TestClient) -> None:
-        resp = client.get("/v1/captures/lookup?url=")
+        resp = client.post("/v1/captures/lookup", json={"url": ""})
         assert resp.status_code == 400
 
     def test_matched_true_returns_document_name(self, client: TestClient) -> None:
@@ -1410,8 +1419,9 @@ class TestCapturesLookup:
                 return_value=True,
             ),
         ):
-            data = client.get(
-                "/v1/captures/lookup?url=https://example.com/docs&cwd=/repo"
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/docs", "cwd": "/repo"},
             ).json()
 
         assert data == {
@@ -1426,7 +1436,9 @@ class TestCapturesLookup:
             "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
             return_value=False,
         ):
-            data = client.get("/v1/captures/lookup?url=https://example.com/x").json()
+            data = client.post(
+                "/v1/captures/lookup", json={"url": "https://example.com/x"}
+            ).json()
 
         assert data == {"matched": False, "document_name": None}
 
@@ -1443,7 +1455,10 @@ class TestCapturesLookup:
             ) as exists,
         ):
             for_path.return_value = CapturesCollection.for_repo("myproj")
-            client.get("/v1/captures/lookup?url=https://x.test/p&cwd=/projects/myproj")
+            client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://x.test/p", "cwd": "/projects/myproj"},
+            )
 
         for_path.assert_called_once()
         assert for_path.call_args[0][0] == "/projects/myproj"
@@ -1464,8 +1479,9 @@ class TestCapturesLookup:
                 return_value=True,
             ) as exists,
         ):
-            data = client.get(
-                "/v1/captures/lookup?url=https://x.test/guide?utm=1%23frag"
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://x.test/guide?utm=1#frag"},
             ).json()
 
         assert data["document_name"] == "https://x.test/guide"
@@ -1485,7 +1501,7 @@ class TestCapturesLookup:
                 return_value=True,
             ) as exists,
         ):
-            client.get("/v1/captures/lookup?url=https://x.test/guide/")
+            client.post("/v1/captures/lookup", json={"url": "https://x.test/guide/"})
 
         assert exists.call_args[0][0] == "https://x.test/guide/"
 
@@ -1509,8 +1525,9 @@ class TestCapturesLookup:
         app = build_app(ctx)
 
         with TestClient(app, raise_server_exceptions=False) as tc:
-            data = tc.get(
-                "/v1/captures/lookup?url=https://example.com/guide?ref=nav"
+            data = tc.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/guide?ref=nav"},
             ).json()
 
         assert data == {"matched": True, "document_name": stored_name}

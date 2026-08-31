@@ -21,6 +21,7 @@ from quarry.api import (
     API_VERSION,
     BackfillRequest,
     CaptureIngestRequest,
+    CapturesLookupRequest,
     CapturesLookupResponse,
     CapturesPushResponse,
     CollectionList,
@@ -159,11 +160,13 @@ class QuarryClient:
         return self._post_empty("/captures/push", CapturesPushResponse)
 
     def captures_lookup(self, url: str, cwd: str) -> CapturesLookupResponse:
-        """Check whether *url* is already indexed under *cwd*'s captures collection."""
-        params = {"url": url}
-        if cwd:
-            params["cwd"] = cwd
-        return self._get("/captures/lookup", CapturesLookupResponse, params=params)
+        """Check whether *url* is already indexed under *cwd*'s captures collection.
+
+        POST, not a query string: *url* can carry a secret token that a GET
+        would expose to proxy/WAF/browser logs (CWE-598).
+        """
+        req = CapturesLookupRequest(url=url, cwd=cwd)
+        return self._post("/captures/lookup", CapturesLookupResponse, req)
 
     # -- registrations -----------------------------------------------------
 

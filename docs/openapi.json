@@ -819,9 +819,35 @@
       }
     },
     "/v1/captures/lookup": {
-      "get": {
-        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nReads ``?url=<raw url>&cwd=<cwd>`` \u2014 the same ``cwd``-derived collection\ncontract as ``POST /capture`` (:meth:`_capture_job`), so this thin client\nnever opens the sync registry itself or spells the ``<repo>-captures``\nnaming rule.  The stored ``document_name`` for a WebFetch capture is the\nURL with userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``),\nso this recomputes the identical normalization before comparing: two\nURLs differing only by query string or fragment collapse to the SAME\ndocument and match; a trailing-slash difference does NOT normalize and\nwill not match.",
-        "operationId": "lookup_v1_captures_lookup_get",
+      "post": {
+        "description": "Answer whether a URL is already indexed under the caller's captures.\n\nBody: {url, cwd} \u2014 POST, not a ``?url=`` query string: a query-string\ntoken (an API key, a session id) rides the URL itself and can leak into\nproxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares\n``POST /capture``'s ``cwd``-derived collection contract\n(:meth:`_capture_job`), so this thin client never opens the sync\nregistry itself or spells the ``<repo>-captures`` naming rule.  The\nstored ``document_name`` for a WebFetch capture is the URL with\nuserinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``), so this\nrecomputes the identical normalization before comparing: two URLs\ndiffering only by query string or fragment collapse to the SAME\ndocument and match; a trailing-slash difference does NOT normalize and\nwill not match.",
+        "operationId": "lookup_v1_captures_lookup_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Body for looking up whether a URL is already indexed under captures.\n\nPOST, not a query string: *url* can carry a secret token (an API key in\nthe query, a session id in the path) that a GET would otherwise expose to\nproxy, WAF, and browser history logs (CWE-598). Mirrors ``POST /capture``'s\n``cwd``-derived collection contract.",
+                "properties": {
+                  "cwd": {
+                    "default": "",
+                    "title": "Cwd",
+                    "type": "string"
+                  },
+                  "url": {
+                    "title": "Url",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "title": "CapturesLookupRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

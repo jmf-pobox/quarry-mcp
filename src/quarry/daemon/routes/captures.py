@@ -61,11 +61,7 @@ class CaptureRoutes(RouteGroup):
         rejection = await self._reject_unsafe_source(source_url)
         if rejection is not None:
             return rejection
-        collection = await run_in_threadpool(
-            CapturesCollection.for_registry_path,
-            self._str_field(body, "cwd"),
-            self.ctx.settings.registry_path,
-        )
+        collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
         inline = ScrubbedIngestJob(
             name=name,
             content=content,
@@ -78,6 +74,16 @@ class CaptureRoutes(RouteGroup):
             summary=self._str_field(body, "summary"),
         )
         return CaptureIngestJob(inline=inline, source_url=source_url)
+
+    async def _collection_for_cwd(self, cwd: str) -> CapturesCollection:
+        """Derive the ``<repo>-captures`` collection for *cwd* off the event loop.
+
+        Shared by ``capture`` and ``lookup`` so both routes apply the identical
+        registry-derived naming rule from one call site.
+        """
+        return await run_in_threadpool(
+            CapturesCollection.for_registry_path, cwd, self.ctx.settings.registry_path
+        )
 
     async def _reject_unsafe_source(self, source_url: str) -> JSONResponse | None:
         """Reject a source_url that resolves to a private/metadata address.
@@ -113,34 +119,32 @@ class CaptureRoutes(RouteGroup):
             {"error": "Missing document_name or session_id"}, status_code=400
         )
 
-    def lookup(self, request: Request) -> JSONResponse:
+    async def lookup(self, request: Request) -> JSONResponse:
         """Answer whether a URL is already indexed under the caller's captures.
 
-        Reads ``?url=<raw url>&cwd=<cwd>`` — the same ``cwd``-derived collection
-        contract as ``POST /capture`` (:meth:`_capture_job`), so this thin client
-        never opens the sync registry itself or spells the ``<repo>-captures``
-        naming rule.  The stored ``document_name`` for a WebFetch capture is the
-        URL with userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``),
-        so this recomputes the identical normalization before comparing: two
-        URLs differing only by query string or fragment collapse to the SAME
+        Body: {url, cwd} — POST, not a ``?url=`` query string: a query-string
+        token (an API key, a session id) rides the URL itself and can leak into
+        proxy/WAF/browser logs even on a loopback hop (CWE-598).  Shares
+        ``POST /capture``'s ``cwd``-derived collection contract
+        (:meth:`_capture_job`), so this thin client never opens the sync
+        registry itself or spells the ``<repo>-captures`` naming rule.  The
+        stored ``document_name`` for a WebFetch capture is the URL with
+        userinfo/query/fragment stripped (``CaptureUrl.for_web_fetch``), so this
+        recomputes the identical normalization before comparing: two URLs
+        differing only by query string or fragment collapse to the SAME
         document and match; a trailing-slash difference does NOT normalize and
         will not match.
         """
-        auth_resp = self.reject_unauthorized(request)
-        if auth_resp is not None:
-            return auth_resp
-        url = request.query_params.get("url", "").strip()
-        if not url:
-            return JSONResponse(
-                {"error": "Missing required parameter: url"}, status_code=400
-            )
-        cwd = request.query_params.get("cwd", "")
-        collection = CapturesCollection.for_registry_path(
-            cwd, self.ctx.settings.registry_path
-        )
+        body = await self._authorized_body(request, MAX_CAPTURES_BODY_BYTES)
+        if isinstance(body, JSONResponse):
+            return body
+        url = self._require_text(body, "url")
+        if isinstance(url, JSONResponse):
+            return url
+        collection = await self._collection_for_cwd(self._str_field(body, "cwd"))
         document_name = CaptureUrl.for_web_fetch(url)
-        matched = self.ctx.database.catalog.document_exists(
-            document_name, collection.name
+        matched = await run_in_threadpool(
+            self.ctx.database.catalog.document_exists, document_name, collection.name
         )
         return JSONResponse(
             {"matched": matched, "document_name": document_name if matched else None}
