@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 
 from quarry.api import CapturesLookupResponse
 from quarry.client.client import QuarryClient
 from quarry.client.transport import HttpxTransport
+
+if TYPE_CHECKING:
+    import pytest
 
 _Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -52,3 +57,39 @@ class TestCapturesLookupWire:
             "cwd": "/repo",
         }
         assert result == CapturesLookupResponse(matched=False)
+
+
+class TestLearnWire:
+    """``learn`` resolves the caller's cwd itself -- ``LearnRequest`` carries
+    no ``cwd`` parameter on any other surface."""
+
+    def test_sends_real_cwd(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(202, json={"task_id": "t1", "status": "accepted"})
+
+        _client(handler).learn("a lesson")
+
+        assert json.loads(seen[0].read())["cwd"] == str(Path.cwd())
+
+    def test_degrades_to_empty_cwd_when_cwd_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A deleted process cwd must not crash learn -- fall back to ''."""
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(202, json={"task_id": "t1", "status": "accepted"})
+
+        def _raise() -> Path:
+            raise OSError("no such file or directory")
+
+        monkeypatch.setattr(Path, "cwd", _raise)
+
+        result = _client(handler).learn("a lesson")
+
+        assert json.loads(seen[0].read())["cwd"] == ""
+        assert result.task_id == "t1"

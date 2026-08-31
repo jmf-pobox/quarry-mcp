@@ -161,9 +161,15 @@ class QuarryClient:
         ``<repo>-lessons`` collection -- the one deliberate exception to this
         client's pure-transport contract: ``LearnRequest`` carries no ``cwd``
         parameter on any surface, so a lesson's project scope has to come
-        from somewhere the caller is not asked to state twice.
+        from somewhere the caller is not asked to state twice.  A deleted
+        cwd (e.g. a cleaned-up tmpdir) degrades to "" rather than crashing;
+        the daemon then routes to ``default-lessons``.
         """
-        req = LearnRequest(lesson=lesson, topic=topic, name=name, cwd=str(Path.cwd()))
+        try:
+            cwd = str(Path.cwd())
+        except OSError:
+            cwd = ""
+        req = LearnRequest(lesson=lesson, topic=topic, name=name, cwd=cwd)
         return self._post("/learn", TaskAccepted, req)
 
     # -- sync & captures ---------------------------------------------------
