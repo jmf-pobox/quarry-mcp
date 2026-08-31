@@ -732,3 +732,72 @@ class TestInputValidation:
             ):
                 result = harness.tools.show("missing.pdf", page_number=page)
             assert result == "Document 'missing.pdf' not found", page
+
+
+class TestToolDocstringOpeners:
+    """Every tool docstring opens with an occasion, not a mechanism verb.
+
+    The two trigger-carrying tools (find, remember) splice R1/R2/R3 verbatim;
+    the rest lead with a situational "Use to ..." / "Use when ..." sentence
+    per the design's per-tool table.
+    """
+
+    _R1 = (
+        "Use find before WebSearch or WebFetch for research, or before "
+        "answering a why/how/what-did-we-decide question."
+    )
+    _R2 = "Prefer grep for symbol and value lookups; prefer find for meaning."
+    _R3 = (
+        "Use remember when you learn something durable — a decision, a gotcha, "
+        "a non-obvious fact, a procedure — so it survives context compaction."
+    )
+
+    def test_server_instructions_lead_with_r1_and_r2(self) -> None:
+        assert mcp.instructions is not None
+        assert self._R1 in mcp.instructions
+        assert self._R2 in mcp.instructions
+
+    def test_find_docstring_carries_r1_and_r2(self) -> None:
+        doc = McpTools.find.__doc__
+        assert doc is not None
+        assert self._R1 in doc
+        assert self._R2 in doc
+
+    def test_remember_docstring_carries_r3(self) -> None:
+        doc = McpTools.remember.__doc__
+        assert doc is not None
+        assert self._R3 in doc
+
+    def test_remember_drops_clipboard_framing(self) -> None:
+        """R3a: the clipboard/API-response framing is dropped entirely."""
+        doc = McpTools.remember.__doc__ or ""
+        assert "clipboard" not in doc.lower()
+        assert "api response" not in doc.lower()
+        assert "sandbox-uploaded" not in doc.lower()
+
+    def test_other_tools_open_with_non_mechanism_sentence(self) -> None:
+        """Every non-trigger tool opens with 'Use ...' — an occasion, not a verb.
+
+        The nine remaining tools each get a situational opener per the design
+        table. A mechanism opener would name the underlying operation (fetch,
+        list, show, delete, register, ...); the required pattern instead names
+        the occasion an agent would reach for it.
+        """
+        expected_openers = {
+            "ingest": "Use when you have a URL to add to the knowledge base",
+            "list_resources": "Use to see what's already indexed before ingesting",
+            "show": "Use to read a specific page, or to check whether a document",
+            "delete": "Use to remove stale or wrong content before re-ingesting",
+            "register_directory": (
+                "Use to track a local directory so future changes sync"
+            ),
+            "deregister_directory": "Use to stop tracking a directory",
+            "sync_all_registrations": "Use after registering a new directory",
+            "status": "Use to check how much is indexed",
+            "use_database": "Use to point every other tool at a different",
+        }
+        for name, opener in expected_openers.items():
+            doc = getattr(McpTools, name).__doc__
+            assert doc is not None, name
+            first_line = doc.lstrip().split("\n", 1)[0]
+            assert opener in first_line, f"{name}: got {first_line!r}"
