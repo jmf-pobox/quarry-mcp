@@ -145,7 +145,10 @@ class McpTools:
         agent_handle: str = "",
         memory_type: str = "",
     ) -> str:
-        """Use find before WebSearch or WebFetch for research, or before answering a why/how/what-did-we-decide question. Prefer grep for symbol and value lookups; prefer find for meaning.
+        (
+            """Use find before WebSearch or WebFetch for research, or before """
+            """answering a why/how/what-did-we-decide question. """
+            """Prefer grep for symbol and value lookups; prefer find for meaning.
 
         Combines vector similarity and BM25 full-text search via Reciprocal
         Rank Fusion (RRF) for better recall on both meaning and exact terms.
@@ -159,7 +162,8 @@ class McpTools:
             source_format: Optional source format filter (.pdf, .py, .xlsx, etc.).
             agent_handle: Optional agent handle to filter by (e.g. "rmh").
             memory_type: Optional memory type filter (fact, observation, etc.).
-        """  # noqa: E501
+        """
+        )
         if err := self._reject_blank(query, "query"):
             return err
         if limit <= 0:
@@ -184,7 +188,9 @@ class McpTools:
         overwrite: bool = False,
         collection: str = "",
     ) -> str:
-        """Use when you have a URL to add to the knowledge base — a doc, an article, a spec.
+        (
+            """Use when you have a URL to add to the knowledge base — a doc, """
+            """an article, a spec.
 
         Fetches a URL with smart sitemap discovery and single-page fallback.
         For local files and directories, use ``register_directory`` +
@@ -197,7 +203,8 @@ class McpTools:
             source: HTTP(S) URL to ingest.
             overwrite: If true, replace existing data.
             collection: Collection name. Auto-derived if empty.
-        """  # noqa: E501
+        """
+        )
         if not source.startswith(("http://", "https://")):
             return (
                 f"Error: {source!r} is not a URL. Use "
@@ -221,7 +228,10 @@ class McpTools:
         memory_type: str = "",
         summary: str = "",
     ) -> str:
-        """Use remember when you learn something durable — a decision, a gotcha, a non-obvious fact, a procedure — so it survives context compaction.
+        (
+            """Use remember when you learn something durable — a decision, """
+            """a gotcha, a non-obvious fact, a procedure — so it survives """
+            """context compaction.
 
         The daemon scrubs secrets/PII before indexing. Returns immediately —
         the daemon indexes in the background.
@@ -236,7 +246,8 @@ class McpTools:
             agent_handle: Agent that owns this memory (e.g. "rmh").
             memory_type: Memory classification: fact, observation, opinion, procedure.
             summary: One-line summary of the content.
-        """  # noqa: E501
+        """
+        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         if err := self._reject_blank(content, "content"):
@@ -287,7 +298,9 @@ class McpTools:
         page_number: int = 0,
         collection: str = "",
     ) -> str:
-        """Use to read a specific page, or to check whether a document is already indexed.
+        (
+            """Use to read a specific page, or to check whether a document is """
+            """already indexed.
 
         Without page_number: shows document metadata (pages, chunks, collection).
         With page_number: shows the full text for that page.
@@ -296,7 +309,8 @@ class McpTools:
             document_name: Document filename (e.g., 'report.pdf').
             page_number: Page number (1-indexed). 0 means show metadata only.
             collection: Optional collection scope.
-        """  # noqa: E501
+        """
+        )
         if err := self._reject_blank(document_name, "document_name"):
             return err
         client = self._connect()
@@ -379,7 +393,9 @@ class McpTools:
 
     @_guard
     def deregister_directory(self, collection: str, keep_data: bool = False) -> str:
-        """Use to stop tracking a directory — keep its indexed data with ``keep_data=True``, or purge it.
+        (
+            """Use to stop tracking a directory — keep its indexed data with """
+            """``keep_data=True``, or purge it.
 
         Returns the removed-file count synchronously; the chunk purge runs as a
         background task. An unknown collection surfaces as an error, not a
@@ -388,7 +404,8 @@ class McpTools:
         Args:
             collection: Collection name to deregister.
             keep_data: If true, keep indexed data in LanceDB.
-        """  # noqa: E501
+        """
+        )
         if err := self._reject_blank(collection, "collection"):
             return err
         accepted = self._connect().deregister(
@@ -401,10 +418,13 @@ class McpTools:
 
     @_guard
     def sync_all_registrations(self) -> str:
-        """Use after registering a new directory, or when tracked files changed outside quarry's own writes.
+        (
+            """Use after registering a new directory, or when tracked files """
+            """changed outside quarry's own writes.
 
         Returns immediately — the daemon runs the sync in the background.
-        """  # noqa: E501
+        """
+        )
         accepted = self._connect().sync()
         return f"▶  Syncing all registrations (task {accepted.task_id})"
 
