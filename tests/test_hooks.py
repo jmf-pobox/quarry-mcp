@@ -203,6 +203,34 @@ class TestLoadHookConfig:
         assert config.session_sync is False
         assert config.web_fetch is False
 
+    def test_session_end_and_subagent_stop_default_to_compaction(
+        self, tmp_path: Path
+    ) -> None:
+        """An operator disabling compaction expects both transcript captures off."""
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
+            "---\nauto_capture:\n  compaction: false\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.compaction is False
+        assert config.session_end is False
+        assert config.subagent_stop is False
+
+    def test_session_end_explicit_override_wins_over_compaction(
+        self, tmp_path: Path
+    ) -> None:
+        """An explicit session_end key overrides the compaction-derived default."""
+        config_dir = tmp_path / ".punt-labs" / "quarry"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.md").write_text(
+            "---\nauto_capture:\n  compaction: false\n  session_end: true\n---\n"
+        )
+        config = load_hook_config(str(tmp_path))
+        assert config.compaction is False
+        assert config.session_end is True
+        assert config.subagent_stop is False
+
 
 # ---------------------------------------------------------------------------
 # _sync_in_background tests

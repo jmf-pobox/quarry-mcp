@@ -76,14 +76,18 @@ def load_hook_config(cwd: str) -> HookConfig:
     if auto is None:
         return HookConfig()
 
+    # session_end and subagent_stop both capture the transcript, same as
+    # compaction — an operator who disables compaction to turn off transcript
+    # capture expects both to follow unless explicitly overridden.
+    compaction = _bool_field(auto, "compaction", default=True)
     return HookConfig(
         session_sync=_bool_field(auto, "session_sync", default=True),
         web_fetch=_bool_field(auto, "web_fetch", default=True),
-        compaction=_bool_field(auto, "compaction", default=True),
-        session_end=_bool_field(auto, "session_end", default=True),
+        compaction=compaction,
+        session_end=_bool_field(auto, "session_end", default=compaction),
         web_search=_bool_field(auto, "web_search", default=True),
         read=_bool_field(auto, "read", default=False),
-        subagent_stop=_bool_field(auto, "subagent_stop", default=True),
+        subagent_stop=_bool_field(auto, "subagent_stop", default=compaction),
     )
 
 

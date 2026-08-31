@@ -126,7 +126,7 @@ class SessionTranscriptCapture:
         sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
         try:
             reader.archive(self._session_id, sessions_dir)
-        except Exception:
+        except OSError:
             logger.exception("%s: archival failed, proceeding with ingest", self._label)
             return False
         return True

@@ -65,7 +65,9 @@ class WebSearchPayload:
         if isinstance(parsed, list):
             return list(parsed)
         if isinstance(parsed, dict):
-            candidates = parsed.get("results") or parsed.get("result")
+            candidates = parsed.get("results")
+            if candidates is None:
+                candidates = parsed.get("result")
             if isinstance(candidates, list):
                 return list(candidates)
         return []

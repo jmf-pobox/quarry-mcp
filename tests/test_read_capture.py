@@ -120,6 +120,58 @@ class TestFilterSecretPathDenylist:
     def test_secret_check_is_case_insensitive(self) -> None:
         assert self._filter().should_capture("/root/.SSH/ID_RSA", cwd="") is False
 
+    def test_rejects_credentials_md(self) -> None:
+        assert self._filter().should_capture("/tmp/credentials.md", cwd="") is False
+
+    def test_rejects_passwords_txt(self) -> None:
+        assert self._filter().should_capture("/tmp/passwords.txt", cwd="") is False
+
+    def test_rejects_secrets_md(self) -> None:
+        assert self._filter().should_capture("/tmp/secrets.md", cwd="") is False
+
+    def test_rejects_api_keys_md(self) -> None:
+        assert self._filter().should_capture("/tmp/api-keys.md", cwd="") is False
+
+    def test_rejects_id_ecdsa(self) -> None:
+        assert self._filter().should_capture("/home/u/.ssh/id_ecdsa", cwd="") is False
+
+    def test_rejects_pfx_files(self) -> None:
+        assert self._filter().should_capture("/tmp/client.pfx", cwd="") is False
+
+    def test_rejects_p12_files(self) -> None:
+        assert self._filter().should_capture("/tmp/client.p12", cwd="") is False
+
+    def test_rejects_gnupg_dir(self) -> None:
+        assert self._filter().should_capture("/home/u/.gnupg/notes.md", cwd="") is False
+
+    def test_rejects_kube_dir(self) -> None:
+        assert self._filter().should_capture("/home/u/.kube/config.md", cwd="") is False
+
+    def test_rejects_docker_dir(self) -> None:
+        assert (
+            self._filter().should_capture("/home/u/.docker/notes.md", cwd="") is False
+        )
+
+
+class TestFilterSymlinkResolution:
+    """The denylist runs on the RESOLVED path — a symlink cannot hide a secret."""
+
+    def test_md_symlink_to_dotenv_is_rejected(self, tmp_path: Path) -> None:
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=1")
+        link = tmp_path / "notes.md"
+        link.symlink_to(secret)
+        f = ReadCaptureFilter(resolver=None)
+        assert f.should_capture(str(link), cwd="") is False
+
+    def test_md_symlink_to_ordinary_file_is_accepted(self, tmp_path: Path) -> None:
+        target = tmp_path / "report.md"
+        target.write_text("nothing secret here")
+        link = tmp_path / "alias.md"
+        link.symlink_to(target)
+        f = ReadCaptureFilter(resolver=None)
+        assert f.should_capture(str(link), cwd="") is True
+
 
 class TestFilterExtensionAllowlist:
     """Only prose formats the loaders understand are captured."""

@@ -23,6 +23,7 @@ from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.read_capture import ReadCaptureFilter, ReadPayload
+from quarry.scrub import Scrubber, ScrubConfig
 from quarry.session_transcript import SessionTranscriptCapture
 from quarry.web_search_capture import WebSearchPayload
 
@@ -36,6 +37,12 @@ _WEB_SEARCH_UNREACHABLE = (
     "web-search: daemon unreachable; digest not indexed (re-run to retry)"
 )
 _READ_UNREACHABLE = "post-read: daemon unreachable; file not indexed"
+
+# Secrets-only scrubber, built once: a client-side defense-in-depth check on
+# Read content ahead of the daemon's own scrub, relevant when QUARRY_URL
+# points at a remote daemon.  PII/profanity passes are off — those aren't
+# reasons to withhold a capture, only genuine secrets are.
+_SECRET_SCRUBBER = Scrubber(ScrubConfig(scrub_pii=False, scrub_profanity=False))
 
 
 class HookAgent:
@@ -52,7 +59,10 @@ class HookAgent:
         to.
         """
         cwd = HookAgent._as_dir(payload.get("cwd"))
-        if cwd and not load_hook_config(cwd).session_end:
+        if not cwd:
+            logger.debug("session-end: missing or relative cwd, skipping")
+            return {}
+        if not load_hook_config(cwd).session_end:
             logger.debug("session-end: disabled by config")
             return {}
         transcript_path = HookAgent._as_str(payload.get("transcript_path"))
@@ -69,7 +79,7 @@ class HookAgent:
             session_id=session_id,
             transcript_path=tp,
             label="session-end",
-            agent_handle=EthosConfig.agent_handle_at(cwd) if cwd else "",
+            agent_handle=EthosConfig.agent_handle_at(cwd),
         ).capture()
         return {}
 
@@ -136,11 +146,20 @@ class HookAgent:
             logger.debug("post-read: no content in payload, skipping")
             return {}
 
+        # Fast checks (in-tree/denylist/extension) run before the content is
+        # ever encoded — most rejections never need the byte length at all.
         filter_ = ReadCaptureFilter(resolver=HookAgent._collection_resolver_for(cwd))
+        if not filter_.should_capture(file_path, cwd=cwd):
+            logger.debug("post-read: filter rejected %s", file_path)
+            return {}
         if not filter_.should_capture(
             file_path, cwd=cwd, content_bytes=len(content.encode())
         ):
-            logger.debug("post-read: filter rejected %s", file_path)
+            logger.debug("post-read: content too large for %s", file_path)
+            return {}
+
+        if HookAgent._content_has_secret(content):
+            logger.debug("post-read: secret pattern matched, skipping %s", file_path)
             return {}
 
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
@@ -173,7 +192,10 @@ class HookAgent:
         parent's).
         """
         cwd = HookAgent._as_dir(payload.get("cwd"))
-        if cwd and not load_hook_config(cwd).subagent_stop:
+        if not cwd:
+            logger.debug("subagent-stop: missing or relative cwd, skipping")
+            return {}
+        if not load_hook_config(cwd).subagent_stop:
             logger.debug("subagent-stop: disabled by config")
             return {}
 
@@ -194,10 +216,20 @@ class HookAgent:
             session_id=agent_id,
             transcript_path=tp,
             label="subagent-stop",
-            agent_handle=agent_type
-            or (EthosConfig.agent_handle_at(cwd) if cwd else ""),
+            agent_handle=agent_type or EthosConfig.agent_handle_at(cwd),
         ).capture()
         return {}
+
+    @staticmethod
+    def _content_has_secret(content: str) -> bool:
+        """Return whether *content* matches a secret pattern (PEM/env/PAT/etc).
+
+        Defense-in-depth ahead of the daemon's own scrub — catches an obvious
+        secret before it leaves the machine, which matters when ``QUARRY_URL``
+        points at a remote daemon.
+        """
+        _, redactions = _SECRET_SCRUBBER.scrub(content)
+        return bool(redactions)
 
     @staticmethod
     def _as_str(value: object) -> str:

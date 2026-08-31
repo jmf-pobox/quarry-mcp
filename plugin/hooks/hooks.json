@@ -83,7 +83,7 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.sh",
-            "timeout": 8000
+            "timeout": 30000
           }
         ]
       }

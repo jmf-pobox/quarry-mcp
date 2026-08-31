@@ -90,6 +90,31 @@ class TestHandleSessionEnd:
         result = HookAgent.session_end({"cwd": str(tmp_path), "session_id": "abc"})
         assert result == {}
 
+    def test_missing_cwd_fails_closed_no_capture(self) -> None:
+        """No cwd means no config can be checked — fail closed, not open."""
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
+            result = HookAgent.session_end(
+                {"transcript_path": "/tmp/x.jsonl", "session_id": "abc"}
+            )
+        assert result == {}
+        cap.assert_not_called()
+
+    def test_compaction_false_disables_session_end(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        _write_config(project, "---\nauto_capture:\n  compaction: false\n---\n")
+        transcript = _make_transcript(tmp_path)
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
+            result = HookAgent.session_end(
+                {
+                    "cwd": str(project),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc",
+                }
+            )
+        assert result == {}
+        cap.assert_not_called()
+
     def test_non_jsonl_transcript_returns_empty(self, tmp_path: Path) -> None:
         # Defense-in-depth against a wire-format regression.
         result = HookAgent.session_end(
@@ -210,6 +235,22 @@ class TestHandlePostReadFilterBranches:
             patch(
                 "quarry.hooks_agent.HookAgent._collection_resolver_for",
                 return_value=_FakeResolver(),
+            ),
+            patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
+        ):
+            result = HookAgent.post_read(payload)
+        assert result == {}
+        cap.assert_not_called()
+
+    def test_content_matching_secret_pattern_rejects(self, tmp_path: Path) -> None:
+        """Client-side scrub pre-check: a filter-passing file with a real
+        secret pattern embedded is still not captured."""
+        payload = self._payload(tmp_path, "/external/notes.md")
+        payload["tool_response"] = "ghp_" + "a" * 36
+        with (
+            patch(
+                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                return_value=None,
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
         ):
@@ -372,6 +413,29 @@ class TestHandleSubagentStop:
                     "cwd": str(tmp_path),
                     "agent_id": "x",
                     "agent_transcript_path": "/x.jsonl",
+                }
+            )
+        assert result == {}
+        cap.assert_not_called()
+
+    def test_missing_cwd_fails_closed_no_capture(self) -> None:
+        """No cwd means no config can be checked — fail closed, not open."""
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
+            result = HookAgent.subagent_stop(
+                {"agent_id": "x", "agent_transcript_path": "/x.jsonl"}
+            )
+        assert result == {}
+        cap.assert_not_called()
+
+    def test_compaction_false_disables_subagent_stop(self, tmp_path: Path) -> None:
+        _write_config(tmp_path, "---\nauto_capture:\n  compaction: false\n---\n")
+        subagent = _make_transcript(tmp_path)
+        with patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap:
+            result = HookAgent.subagent_stop(
+                {
+                    "cwd": str(tmp_path),
+                    "agent_id": "x",
+                    "agent_transcript_path": str(subagent),
                 }
             )
         assert result == {}
