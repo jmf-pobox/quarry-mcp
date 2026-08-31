@@ -1,5 +1,33 @@
 # Proactive Trigger Vocabulary — SessionStart Context and MCP Tool Descriptions
 
+## Ratifications (2026-08-30)
+
+Three operator rulings that override the design body where they conflict:
+
+- **R1a — new `/v1/coverage` route: proceed.** Ship the endpoint as specified.
+- **R2b — trigger trailer applies uniformly.** The design's Branch (2)
+  (daemon unreachable) section proposes withholding the trailer; that is
+  reversed. All three branches emit R1/R2/R3 verbatim, including Branch (2).
+  Rationale: an agent that sees the rules alongside a "daemon unreachable"
+  operational message can act on the diagnosis (restart quarryd, run
+  `quarry doctor`) and then apply the rules. Withholding the rules assumed the
+  agent was a passive receiver, which is not how this repo's agents behave.
+- **R3a — `remember` docstring narrowing: proceed.** Drop the clipboard/API-
+  response/sandbox-uploaded-files framing entirely; replace with R3 verbatim.
+
+The Branch (2) template becomes:
+
+```text
+Quarry is enabled for this repo but quarryd is currently unreachable.
+Once you restart it (systemctl --user restart quarry / launchctl kickstart)
+the tools below become available.
+Use find before WebSearch or WebFetch for research, or before answering a
+why/how/what-did-we-decide question.
+Prefer grep for symbol and value lookups; prefer find for meaning.
+Use remember when you learn something durable — a decision, a gotcha, a
+non-obvious fact, a procedure — so it survives context compaction.
+```
+
 Two surfaces load automatically for every agent session — the SessionStart
 `additionalContext` and the MCP tool listing — plus one surface an agent must
 actively invoke (the `recall` skill). This design makes the three carry the
