@@ -120,4 +120,5 @@ class TestDigest:
         )
         digest = payload.digest
         assert digest is not None
-        assert "https://a.example" in digest
+        line = next(line for line in digest.splitlines() if line.startswith("- ["))
+        assert line == "- [https://a.example](https://a.example): hi"
