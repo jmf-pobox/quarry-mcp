@@ -14,7 +14,7 @@ lesson and no name is given.
 
 ## Task
 
-Call `mcp__plugin_quarry-dev_quarry__learn` with:
+Call `mcp__quarry-dev__learn` with:
 
 - `lesson` set to the lesson text
 - `name` set to the parsed name, if any
