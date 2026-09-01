@@ -13,10 +13,99 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry.hooks_agent import HookAgent
 
 if TYPE_CHECKING:
     import pytest
+
+
+class TestHookPayload:
+    """HookPayload parses untrusted payload fields defensively."""
+
+    def test_as_str_returns_string_value(self) -> None:
+        assert HookPayload.as_str("hello") == "hello"
+
+    def test_as_str_rejects_non_string(self) -> None:
+        assert HookPayload.as_str(None) == ""
+        assert HookPayload.as_str(42) == ""
+        assert HookPayload.as_str([]) == ""
+
+    def test_as_dir_accepts_absolute_path(self, tmp_path: Path) -> None:
+        assert HookPayload.as_dir(str(tmp_path)) == str(tmp_path)
+
+    def test_as_dir_rejects_relative(self) -> None:
+        assert HookPayload.as_dir("relative/path") == ""
+
+    def test_as_dir_rejects_non_string(self) -> None:
+        assert HookPayload.as_dir(None) == ""
+        assert HookPayload.as_dir(123) == ""
+
+    def test_resolve_jsonl_returns_resolved_path(self, tmp_path: Path) -> None:
+        jsonl = tmp_path / "t.jsonl"
+        jsonl.write_text("{}")
+        resolved = HookPayload.resolve_jsonl(str(jsonl), label="test")
+        assert resolved is not None
+        assert resolved.suffix == ".jsonl"
+
+    def test_resolve_jsonl_rejects_non_jsonl_suffix(self, tmp_path: Path) -> None:
+        assert HookPayload.resolve_jsonl(str(tmp_path / "t.txt"), label="test") is None
+
+
+class TestHookTrace:
+    """HookTrace emits one INFO line per outcome for grep-ability."""
+
+    def test_skip_emits_expected_shape(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        trace = HookTrace("post-web-search")
+        trace.mark_config(on=True)
+        trace.mark_payload(ok=False)
+        trace.skip("no-digest")
+        records = [r for r in caplog.records if r.name == "quarry.hooks"]
+        assert len(records) == 1
+        msg = records[0].getMessage()
+        assert "post-web-search" in msg
+        assert "config=on" in msg
+        assert "payload_ok=N" in msg
+        assert "-> skip:no-digest" in msg
+
+    def test_capture_emits_expected_shape(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        trace = HookTrace("post-web-fetch")
+        trace.mark_config(on=True)
+        trace.mark_payload(ok=True)
+        trace.capture()
+        records = [r for r in caplog.records if r.name == "quarry.hooks"]
+        assert len(records) == 1
+        assert "-> capture" in records[0].getMessage()
+
+    def test_unknown_state_renders_as_question_mark(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Emitting before marks resolves the unknown dimension to ``?``."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        HookTrace("session-start").skip("cwd")
+        msg = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "config=?" in msg
+        assert "payload_ok=?" in msg
+
+
+class TestReadAdmission:
+    """ReadAdmission groups Read-specific admission helpers."""
+
+    def test_content_has_secret_flags_pat(self) -> None:
+        assert ReadAdmission.content_has_secret("ghp_" + "a" * 36) is True
+
+    def test_content_has_secret_ignores_clean_text(self) -> None:
+        assert ReadAdmission.content_has_secret("just a plain note") is False
 
 
 def _make_transcript(tmp_path: Path, text: str = "hello world") -> Path:
@@ -133,6 +222,38 @@ class TestHandleSessionEnd:
         )
         assert result == {}
 
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: an unreachable daemon must not read as ``capture`` in the trace."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        project = tmp_path / "project"
+        project.mkdir()
+        transcript = _make_transcript(tmp_path, "work discussed today")
+        with (
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.session_end(
+                {
+                    "cwd": str(project),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345",
+                    "reason": "clear",
+                }
+            )
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
+
 
 class TestHandlePostWebSearch:
     def _mk_payload(self, *, cwd: str = "") -> dict[str, object]:
@@ -185,6 +306,22 @@ class TestHandlePostWebSearch:
         result = HookAgent.post_web_search({"tool_input": None, "tool_response": 42})
         assert result == {}
 
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a false send_capture return must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=False,
+        ):
+            HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
+
 
 class TestHandlePostReadFilterBranches:
     """Each of the four filter branches rejects independently."""
@@ -233,7 +370,7 @@ class TestHandlePostReadFilterBranches:
         (tmp_path / "docs" / "readme.md").write_text("hi")
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=_FakeResolver(),
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
@@ -249,7 +386,7 @@ class TestHandlePostReadFilterBranches:
         payload["tool_response"] = "ghp_" + "a" * 36
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=None,
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
@@ -262,7 +399,7 @@ class TestHandlePostReadFilterBranches:
         payload = self._payload(tmp_path, "/external/vendor-spec.pdf")
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=None,
             ),
             patch(
@@ -298,6 +435,34 @@ class TestHandlePostRead:
     def test_malformed_payload_survives(self) -> None:
         result = HookAgent.post_read({"tool_input": 42, "tool_response": None})
         assert result == {}
+
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a false send_capture return must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        _write_config(tmp_path, "---\nauto_capture:\n  read: true\n---\n")
+        payload: dict[str, object] = {
+            "cwd": str(tmp_path),
+            "tool_input": {"file_path": "/external/vendor-spec.pdf"},
+            "tool_response": "the file content",
+        }
+        with (
+            patch(
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
+                return_value=None,
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.post_read(payload)
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
 
 
 _CONFIRMED_SUBAGENT_PAYLOAD: dict[str, object] = {
@@ -446,3 +611,33 @@ class TestHandleSubagentStop:
             {"cwd": 42, "agent_id": None, "agent_transcript_path": 3.14}
         )
         assert result == {}
+
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a subagent transcript send that fails must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        subagent = _make_transcript(tmp_path, "sub work")
+        subagent.rename(tmp_path / "sub.jsonl")
+        payload: dict[str, object] = {
+            "cwd": str(tmp_path),
+            "agent_id": "sub-1",
+            "agent_type": "general-purpose",
+            "agent_transcript_path": str(tmp_path / "sub.jsonl"),
+        }
+        with (
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.subagent_stop(payload)
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line

@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 from quarry.daemon.job_spool import SpoolRecord
 from quarry.daemon.tasks import task_terminal
+from quarry.ingestion.web_fetch import WebFetcher
 
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
@@ -226,24 +227,87 @@ class CaptureIngestJob:
         return self._refetch(ctx)
 
     def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
-        """Re-fetch the source URL when inline extraction yielded no chunks."""
-        from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
+        """Re-fetch source URL; route HTML through extractor, non-HTML as text.
+
+        G4 capture-as-text: a JSON or plain-text URL (a REST endpoint,
+        a raw log) used to raise ``ValueError: URL returned non-HTML
+        content`` from :meth:`WebFetcher.fetch`, dumping a stack trace
+        in the daemon log and dropping the capture entirely.  The new
+        :meth:`WebFetcher.fetch_body` returns the body with its media
+        type so we can route HTML through the HTML extractor and
+        everything else through the text pipeline instead of skipping.
+        A safety/network failure still logs cleanly at WARN and returns
+        an empty result — never a traceback.
+        """
+        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
+        from quarry.ingestion.pipeline import (  # noqa: PLC0415
+            ingest_content,
+            ingest_url,
+        )
         from quarry.scrub import scrub_and_log  # noqa: PLC0415
 
         def scrub(text: str) -> str:
             return scrub_and_log(text, "web-fetch")
 
+        try:
+            body = WebFetcher().fetch_body(self.source_url)
+        except (OSError, ValueError, TimeoutError) as exc:
+            # Redact the URL through the same normaliser writes use (drops
+            # userinfo/query/fragment) and log only the exception class — the
+            # exception's own text quotes the raw URL and can carry ?token=
+            # or user:pass@ secrets into the persistent quarry.log (CWE-532).
+            logger.warning(
+                "capture: refetch of %s failed (%s); skipping",
+                CaptureUrl.for_web_fetch(self.source_url),
+                type(exc).__name__,
+            )
+            return {"chunks": 0, "sections": 0}
+
+        if body.is_html:
+            logger.info(
+                "capture: %s inline extracted to zero chunks — re-fetching via daemon",
+                self.inline.name,
+            )
+            return dict(
+                ingest_url(
+                    self.source_url,
+                    ctx.database,
+                    ctx.settings,
+                    overwrite=self.inline.overwrite,
+                    collection=self.inline.collection,
+                    content_scrubber=scrub,
+                    agent_handle=self.inline.agent_handle,
+                    memory_type=self.inline.memory_type,
+                    summary=self.inline.summary,
+                    # Already have the body from fetch_body above — reusing it
+                    # here avoids fetching self.source_url a second time.
+                    prefetched_html=body.text,
+                )
+            )
+
+        # Non-HTML (JSON, plain text, XML, etc.): capture as text so a
+        # REST-API response or a raw log becomes searchable instead of a
+        # stack trace in the daemon log.  The stored document leads with an
+        # HTML-comment mime marker so a reader — and a downstream grep — knows
+        # what shape the body actually carries; the marker is inert to both
+        # the markdown extractor and the scrub choke point.
+        media_type = body.media_type or "unknown"
         logger.info(
-            "capture: %s extracted to zero chunks — re-fetching source via daemon",
+            "capture: %s non-HTML (%s) — capturing body as text (%d chars)",
             self.inline.name,
+            media_type,
+            len(body.text),
         )
+        content = f"<!-- media_type: {media_type} -->\n{body.text}"
         return dict(
-            ingest_url(
-                self.source_url,
+            ingest_content(
+                content,
+                self.inline.name,
                 ctx.database,
                 ctx.settings,
                 overwrite=self.inline.overwrite,
                 collection=self.inline.collection,
+                format_hint="markdown",
                 content_scrubber=scrub,
                 agent_handle=self.inline.agent_handle,
                 memory_type=self.inline.memory_type,

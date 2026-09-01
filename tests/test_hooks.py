@@ -1106,6 +1106,62 @@ class TestHandlePostWebFetch:
         assert "unreachable" not in caplog.text
         assert "malformed response" not in caplog.text
 
+    def test_capture_success_emits_g6_breadcrumb(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: the happy path leaves an INFO ``-> capture`` breadcrumb.
+
+        The previous round only traced the two early-exit skips; the busiest
+        exit — a successful send_capture — returned silently, defeating the
+        breadcrumb's purpose.  The line must fire when the daemon accepts the
+        capture so an operator can prove the hook ran end to end.
+        """
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+            "tool_response": json.dumps({"result": "<html>Page content</html>"}),
+        }
+        with (
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=True,
+            ),
+            caplog.at_level(logging.INFO, logger="quarry.hooks"),
+        ):
+            handle_post_web_fetch(payload)
+
+        breadcrumbs = [
+            r
+            for r in caplog.records
+            if r.name == "quarry.hooks" and "post-web-fetch" in r.message
+        ]
+        assert breadcrumbs, "no post-web-fetch breadcrumb was emitted"
+        assert any("-> capture" in r.message for r in breadcrumbs)
+
+    def test_ingest_url_fallback_emits_g6_breadcrumb(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: the fallback re-fetch branch also leaves a breadcrumb.
+
+        Parity with :meth:`test_capture_success_emits_g6_breadcrumb`: the
+        no-content-in-payload path must not go dark either.
+        """
+        payload: dict[str, object] = {
+            "tool_input": {"url": "https://example.com/page"},
+        }
+        with (
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_ingest_url",
+                return_value=True,
+            ),
+            caplog.at_level(logging.INFO, logger="quarry.hooks"),
+        ):
+            handle_post_web_fetch(payload)
+
+        assert any(
+            "post-web-fetch" in r.message and "-> capture" in r.message
+            for r in caplog.records
+        )
+
 
 class TestWebFetchLoopCloser:
     """The captures-lookup nudge: matched/no-match/unreachable, fail-open."""

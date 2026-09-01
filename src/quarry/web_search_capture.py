@@ -42,10 +42,32 @@ class WebSearchPayload:
     def digest(self) -> str | None:
         """Return a markdown digest of the search results, or ``None``.
 
-        Handles two shapes observed for ``tool_response``: a JSON-encoded string
-        holding a list/dict, or an already-parsed dict.  A response with no
-        result items yields ``None`` so the handler skips a content-free capture.
+        Three shapes for ``tool_response`` are supported, in order of the
+        Claude Code payloads observed so far:
+
+        1. A JSON-encoded list/dict of structured result items with
+           ``title``/``url``/``snippet`` fields — the original shape.
+        2. A dict-shaped payload wrapping the results under ``results``
+           or ``result``.
+        3. A plain text/markdown string that Claude Code's newer
+           WebSearch handler emits directly (post the 2026-05 revision
+           the tool response is a rendered summary, not a structured
+           list).  Falling back to the raw text keeps the capture
+           useful when the extractor would otherwise skip.
+
+        ``None`` still means "nothing to capture" — the tool response
+        genuinely has no textual content.
         """
+        structured = self._structured_digest()
+        if structured is not None:
+            return structured
+        text = self._text_fallback()
+        if not text:
+            return None
+        return f"# Web search: {self.query or '(no query)'}\n\n{text}"
+
+    def _structured_digest(self) -> str | None:
+        """Return the structured-list digest, or ``None`` when no items parse."""
         results = self._results()
         if not results:
             return None
@@ -54,9 +76,44 @@ class WebSearchPayload:
             line = self._format_item(item)
             if line:
                 lines.append(line)
-        if len(lines) == 1:
-            return None
-        return "\n".join(lines)
+        return "\n".join(lines) if len(lines) > 1 else None
+
+    def _text_fallback(self) -> str:
+        """Return raw tool_response text, or ``""`` when unusable.
+
+        A string that parses as a JSON container (list/dict) is left to
+        the structured path — the fallback only fires when the payload
+        is genuine text.  An empty list or invalid JSON container yields
+        ``""`` so a content-free capture is skipped, matching the
+        pre-G5 contract.  A plain text/markdown string is returned as
+        is; an already-parsed dict falls through to the known text keys.
+        """
+        raw = self._raw.get("tool_response")
+        if isinstance(raw, dict):
+            return self._dict_text_field(raw)
+        if not isinstance(raw, str):
+            return ""
+        stripped = raw.strip()
+        if not stripped:
+            return ""
+        # If it parses as a container, structured_digest owned the case;
+        # a scalar/string parse or a parse failure means it's real text.
+        try:
+            parsed = json.loads(stripped)
+        except (ValueError, TypeError):
+            return stripped
+        if isinstance(parsed, (dict, list)):
+            return ""
+        return stripped
+
+    @classmethod
+    def _dict_text_field(cls, parsed: dict[str, object]) -> str:
+        """Return the first non-blank string under a known text key, else ``""``."""
+        for key in ("content", "text", "summary"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
 
     def _results(self) -> list[object]:
         """Return the raw result items from ``tool_response``, or an empty list."""

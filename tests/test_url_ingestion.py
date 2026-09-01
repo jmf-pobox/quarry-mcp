@@ -174,6 +174,36 @@ class TestIngestUrl:
 
         assert result["document_name"] == url
 
+    @patch(_FETCH)
+    def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):
+        """A caller that already fetched the body must not pay for a second fetch.
+
+        The daemon's capture re-fetch (``CaptureIngestJob._refetch``) calls
+        ``WebFetcher.fetch_body`` itself to decide HTML vs. text routing;
+        ``prefetched_html`` lets ``ingest_url`` reuse that body instead of
+        fetching the URL again (Copilot round-4, PR #496).
+        """
+        from quarry.ingestion.pipeline import ingest_url
+
+        settings = _fake_settings()
+        db = _fake_db()
+        html = (
+            "<html><body><h1>Already fetched</h1><p>Some body text.</p></body></html>"
+        )
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            result = ingest_url(
+                "https://example.com/page",
+                db,
+                settings,
+                prefetched_html=html,
+            )
+
+        mock_fetch.assert_not_called()
+        assert result["chunks"] >= 1
+
 
 class TestRememberCollectionRouting:
     """Server-side sentinel: empty ``collection`` routes by ``agent_handle``.

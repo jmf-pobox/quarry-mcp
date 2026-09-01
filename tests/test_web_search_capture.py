@@ -85,14 +85,52 @@ class TestDigest:
         )
         assert payload.digest is None
 
-    def test_returns_none_for_invalid_json(self) -> None:
+    def test_falls_back_to_raw_text_for_non_json_response(self) -> None:
+        """A plain string tool_response is the newer Claude Code shape — use it.
+
+        The old contract returned ``None`` on any JSON parse failure, but
+        Claude Code's post-2026-05 WebSearch handler emits a rendered
+        markdown summary directly rather than a JSON list.  A silent
+        skip on that shape is the G5 bug — treat unparseable strings as
+        text so the capture still lands.
+        """
         payload = WebSearchPayload(
-            {"tool_input": {"query": "x"}, "tool_response": "{not-json"}
+            {
+                "tool_input": {"query": "x"},
+                "tool_response": "The rendered search summary.",
+            }
         )
-        assert payload.digest is None
+        digest = payload.digest
+        assert digest is not None
+        assert "rendered search summary" in digest
+        assert "Web search: x" in digest
 
     def test_returns_none_for_non_string_response(self) -> None:
         payload = WebSearchPayload({"tool_input": {"query": "x"}, "tool_response": 42})
+        assert payload.digest is None
+
+    def test_text_fallback_declines_string_json_container(self) -> None:
+        """A JSON string that decodes to a container is left to the structured
+        path.
+
+        The isinstance check inside ``_text_fallback`` must accept both a
+        JSON list AND a JSON dict, and it must not raise on either.  The
+        two-arg tuple form is the only shape guaranteed to work under
+        ``isinstance`` for every Python; the PEP 604 union form is a
+        recurring copy-paste hazard.
+        """
+        # JSON that decodes to a list — the structured path owns this
+        payload = WebSearchPayload(
+            {"tool_input": {"query": "x"}, "tool_response": "[]"}
+        )
+        assert payload.digest is None
+        # JSON that decodes to a dict WITHOUT ``results``/``result`` keys
+        payload = WebSearchPayload(
+            {
+                "tool_input": {"query": "x"},
+                "tool_response": '{"unrelated": "value"}',
+            }
+        )
         assert payload.digest is None
 
     def test_skips_non_dict_items(self) -> None:

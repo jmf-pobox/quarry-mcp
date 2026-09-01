@@ -32,6 +32,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.ingestion.web_fetch import FetchedBody
 from quarry.results import SearchResult
 
 # Bound on how long fixture teardown waits for a background job to finish for
@@ -1783,10 +1784,21 @@ class TestCapture:
             }
 
         empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        # G4: _refetch now calls WebFetcher.fetch_body first to route HTML
+        # through ingest_url (this test's path) vs. non-HTML through
+        # ingest_content-as-text. Stub the network fetch as HTML so the
+        # existing refetch-via-ingest_url expectations hold.
+        html_body = FetchedBody(
+            text="<html><body>refetched</body></html>", media_type="text/html"
+        )
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=html_body,
+            ),
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1810,6 +1822,120 @@ class TestCapture:
         # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
         assert "[REDACTED:email]" in scrub("reach jdoe@example.com")
+
+    def test_refetch_non_html_captures_body_as_text(self, tmp_path: Path) -> None:
+        """G4: a JSON/plain-text URL is captured as text (not dropped).
+
+        Pre-G4, WebFetcher.fetch() rejected non-HTML with ValueError and the
+        capture disappeared into a stack trace.  Now fetch_body returns the
+        body + media type; the refetch routes non-HTML through ingest_content
+        with a mime marker so the shape survives into the stored document.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        content_kwargs: list[dict[str, object]] = []
+        empty: dict[str, object] = {
+            "document_name": "p",
+            "collection": "default-captures",
+            "chunks": 0,
+        }
+
+        def _content(
+            content: str,
+            name: str,
+            *_a: object,
+            **kw: object,
+        ) -> dict[str, object]:
+            content_kwargs.append({"content": content, "name": name, **kw})
+            # First invocation is the inline empty extraction; every later
+            # one is the refetch-as-text landing.
+            if len(content_kwargs) == 1:
+                return empty
+            return {
+                "document_name": name,
+                "collection": kw["collection"],
+                "chunks": 1,
+            }
+
+        json_body = FetchedBody(
+            text='{"answer": 42, "email": "user@example.com"}',
+            media_type="application/json",
+        )
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _content),
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=json_body,
+            ),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 1
+        url.assert_not_called()  # non-HTML did NOT go through ingest_url
+        # The refetch call carried the body prefixed with the mime marker AND
+        # ran through the scrub choke point (parity with the HTML branch).
+        refetch_call = content_kwargs[-1]
+        assert "<!-- media_type: application/json -->" in str(refetch_call["content"])
+        scrub = cast("Callable[[str], str]", refetch_call["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach user@example.com")
+
+    def test_refetch_fetch_body_failure_returns_zero_chunks_no_traceback(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G4/bug-class 2: a network failure during refetch is a clean skip.
+
+        Any of OSError/ValueError/TimeoutError from fetch_body must surface as
+        a WARN + zero-chunks return, not a stack trace in the daemon log.  The
+        WARN must not leak the raw source_url (userinfo/query can carry
+        secrets — CWE-532); the exception's ``str`` is dropped in favour of
+        its class name for the same reason.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        raw_url = "https://user:pass@example.com/p?api_key=secret123"
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                side_effect=OSError(f"boom fetching {raw_url}"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html></html>",
+                    "document_name": "example.com/p",
+                    "source_url": raw_url,
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"] == {"chunks": 0, "sections": 0}
+        assert "refetch" in caplog.text
+        assert "secret123" not in caplog.text
+        assert "user:pass" not in caplog.text
+        assert "OSError" in caplog.text
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
         """A page that extracts to >=1 chunk stores inline and never re-fetches."""
