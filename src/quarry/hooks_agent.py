@@ -140,13 +140,19 @@ class HookAgent:
         """Emit the WARN line when WebSearchPayload yields no digest.
 
         Upgraded from DEBUG so a silent-skip is visible at production
-        INFO — the operator's "proof they are happening" gap.
+        INFO — the operator's "proof they are happening" gap.  Logs
+        shape metadata only (presence + length + tool_response type)
+        because an operator's search box may hold tokens the same as
+        any other free-text input; CWE-532 forbids persisting that to
+        ``quarry.log`` (parity with :meth:`_debug_search_shape`).
         """
         parsed = WebSearchPayload(payload)
         logger.warning(
-            "post-web-search: no result digest in payload (query=%r, "
-            "tool_response type=%s); skipping capture",
-            parsed.query,
+            "post-web-search: no result digest in payload "
+            "(query_present=%s, query_len=%d, tool_response type=%s); "
+            "skipping capture",
+            parsed.query is not None,
+            len(parsed.query or ""),
             type(payload.get("tool_response")).__name__,
         )
 

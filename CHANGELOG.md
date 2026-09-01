@@ -14,6 +14,33 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- `tool`: G6 — per-hook-invocation breadcrumb line in `quarry.log`. Every
+  `PostToolUse:*`/`SessionEnd`/`SubagentStop`/`PreCompact` handler emits one
+  `quarry.hooks: <name>: entered (config=..., payload_ok=...) → capture|skip|error`
+  at INFO, so a silent-skip is visible on every exit path — including the
+  `PostToolUse:WebFetch` happy paths that previously went dark. (quarry-38qs)
+
+### Fixed
+
+- `tool`: G5 — WebSearch captures were silently dropped when Claude Code
+  emitted its rendered markdown summary instead of the pre-2026-05 JSON list;
+  the extractor now falls back to the plain-text digest and the missing-digest
+  log upgraded from DEBUG to WARN so operators can see the skip. The WARN
+  logs shape metadata only (presence, length, tool_response type) — never the
+  query text, which may hold tokens or secrets (CWE-532). (quarry-38qs)
+- `tool`: G4 — `PostToolUse:WebFetch` on a non-HTML URL (`application/json`,
+  `text/plain`, XML, …) no longer raises `ValueError` and drops the capture.
+  `WebFetcher.fetch_body` returns the body plus its declared media type; the
+  daemon routes HTML through the extractor and non-HTML through the text
+  pipeline (prefixed with a `<!-- media_type: … -->` marker) so the shape
+  survives into the stored document, still through the PII/secret scrub choke
+  point. A network failure during the refetch logs a WARN with a redacted URL
+  (via `CaptureUrl.for_web_fetch`) and the exception class only — never the
+  raw URL or exception text — and returns cleanly with zero chunks (CWE-532).
+  (quarry-38qs)
+
 ## [3.1.0] - 2026-08-31
 
 ### Added

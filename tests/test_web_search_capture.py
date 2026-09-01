@@ -109,6 +109,30 @@ class TestDigest:
         payload = WebSearchPayload({"tool_input": {"query": "x"}, "tool_response": 42})
         assert payload.digest is None
 
+    def test_text_fallback_declines_string_json_container(self) -> None:
+        """A JSON string that decodes to a container is left to the structured
+        path.
+
+        The isinstance check inside ``_text_fallback`` must accept both a
+        JSON list AND a JSON dict, and it must not raise on either.  The
+        two-arg tuple form is the only shape guaranteed to work under
+        ``isinstance`` for every Python; the PEP 604 union form is a
+        recurring copy-paste hazard.
+        """
+        # JSON that decodes to a list — the structured path owns this
+        payload = WebSearchPayload(
+            {"tool_input": {"query": "x"}, "tool_response": "[]"}
+        )
+        assert payload.digest is None
+        # JSON that decodes to a dict WITHOUT ``results``/``result`` keys
+        payload = WebSearchPayload(
+            {
+                "tool_input": {"query": "x"},
+                "tool_response": '{"unrelated": "value"}',
+            }
+        )
+        assert payload.digest is None
+
     def test_skips_non_dict_items(self) -> None:
         payload = WebSearchPayload(
             {

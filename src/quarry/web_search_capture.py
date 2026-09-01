@@ -102,7 +102,7 @@ class WebSearchPayload:
             parsed = json.loads(stripped)
         except (ValueError, TypeError):
             return stripped
-        if isinstance(parsed, dict | list):
+        if isinstance(parsed, (dict, list)):
             return ""
         return stripped
 

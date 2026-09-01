@@ -87,7 +87,9 @@ class WebFetcher:
         Raises:
             ValueError: If the URL is not HTTP(S), the response is not HTML, or
                 the body exceeds the size cap.
-            OSError: On network errors or once the total-time deadline passes.
+            OSError: On network errors.
+            TimeoutError: Total-time deadline exceeded (propagated from
+                :meth:`fetch_body`).
         """
         body = self.fetch_body(url)
         if not body.is_html:
