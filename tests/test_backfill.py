@@ -63,11 +63,11 @@ class TestBackfillConfig:
 
 class TestEncodeProjectPath:
     def test_simple_path(self) -> None:
-        assert encode_project_path("/Users/jfreeman/code") == "-Users-jfreeman-code"
+        assert encode_project_path("/Users/jdoe/code") == "-Users-jdoe-code"
 
     def test_path_with_hyphens(self) -> None:
-        result = encode_project_path("/Users/jfreeman/Coding/punt-labs/quarry")
-        assert result == "-Users-jfreeman-Coding-punt-labs-quarry"
+        result = encode_project_path("/Users/jdoe/Coding/punt-labs/quarry")
+        assert result == "-Users-jdoe-Coding-punt-labs-quarry"
 
     def test_root_path(self) -> None:
         assert encode_project_path("/") == "-"
@@ -84,11 +84,11 @@ class TestEncodeProjectPath:
 class TestBuildProjectMappings:
     def test_matches_registration_to_directory(self, tmp_path: Path) -> None:
         projects_dir = tmp_path / ".claude" / "projects"
-        encoded = "-Users-jfreeman-Coding-punt-labs-quarry"
+        encoded = "-Users-jdoe-Coding-punt-labs-quarry"
         (projects_dir / encoded).mkdir(parents=True)
 
         reg = DirectoryRegistration(
-            directory="/Users/jfreeman/Coding/punt-labs/quarry",
+            directory="/Users/jdoe/Coding/punt-labs/quarry",
             collection="quarry",
             registered_at="2025-01-01T00:00:00",
         )
@@ -581,7 +581,7 @@ class TestBackfillCaptureRedaction:
 
     def test_capture_file_has_zero_pii(self, tmp_path: Path) -> None:
         capture = self._write(
-            tmp_path, "ran /Users/jfreeman/x and emailed jmf@pobox.com"
+            tmp_path, "ran /Users/jdoe/x and emailed jdoe@example.com"
         )
         content = capture.read_text(encoding="utf-8")
         assert "/Users/" not in content
@@ -618,7 +618,7 @@ class TestBackfillCaptureRedaction:
                 branch_names=(),
                 bead_ids=(),
             ),
-            text="ran /Users/jfreeman/x here",
+            text="ran /Users/jdoe/x here",
         )
 
         captures = tmp_path / ".punt-labs" / "quarry" / "captures"

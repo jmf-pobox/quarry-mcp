@@ -22,8 +22,37 @@ across `transform`, `index`, and `connector`).
   at INFO, so a silent-skip is visible on every exit path — including the
   `PostToolUse:WebFetch` happy paths that previously went dark. (quarry-38qs)
 
+### Changed
+
+- `tool`: `plugin/skills/recall/SKILL.md` — the auto-loaded recall skill now
+  differentiates all four capture verbs (`find`, `remember`, `ingest`, `learn`)
+  in its frontmatter description and body, including a worked `learn` example.
+  A "When not to use it" bullet points repo-internal architecture questions to
+  `DESIGN.md` directly. Also corrects `/ingest` documentation to reflect the
+  URL-only contract (local files/directories route through
+  `register_directory` + `sync_all_registrations`). (quarry-wdhi)
+
 ### Fixed
 
+- `tool`: slash-command MCP tool references repaired (quarry-ydym). The
+  seven tool-dispatching quarry slash commands (`/find`, `/ingest`,
+  `/remember`, `/learn`, `/explain`, `/source`, `/quarry`) — and their
+  seven `-dev` twins — still named the disconnected proxy namespace
+  (`mcp__plugin_quarry_quarry__*` / `mcp__plugin_quarry-dev_quarry__*`).
+  The native quarry MCP server now exposes tools as `mcp__quarry__*`
+  and its dev variant as `mcp__quarry-dev__*`; the released 3.1.0
+  plugin worked only because a capable assistant inferred the new
+  names. Cheaper models would hard-fail. All 26 references now name
+  the live tools directly.
+- `tool`: the compact panel summary for `list documents`, `list collections`,
+  `list databases`, and `list registrations` now reports the correct row
+  count. `plugin/hooks/suppress-output.sh` previously derived the count via
+  `wc -l` on the rendered table body, which over-counted continuation lines
+  from wrapped variable-width columns (a 2-row table with one wrapped row
+  displayed as "3 documents"). List formatters now emit an authoritative
+  `▶ N <noun>` on line 1 via a shared `_Listing` renderer in
+  `src/quarry/formatting.py`, and the hook reads that line as the panel
+  summary. (quarry-wdhi)
 - `tool`: G5 — WebSearch captures were silently dropped when Claude Code
   emitted its rendered markdown summary instead of the pre-2026-05 JSON list;
   the extractor now falls back to the plain-text digest and the missing-digest

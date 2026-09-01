@@ -1768,14 +1768,14 @@
     "future_annotations": 1.0
   },
   "src/quarry/formatting.py": {
-    "method_ratio": 0.0,
+    "method_ratio": 0.05,
     "encapsulation_ratio": 1.0,
-    "avg_params": 1.89,
+    "avg_params": 1.85,
     "max_complexity": 10.0,
-    "avg_complexity": 3.26,
-    "module_size": 313.0,
-    "classes_per_module": 1.0,
-    "class_to_func_ratio": 0.05,
+    "avg_complexity": 3.15,
+    "module_size": 345.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 0.095,
     "init_violations": 0.0,
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
