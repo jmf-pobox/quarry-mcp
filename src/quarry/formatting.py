@@ -27,7 +27,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # Column specification ────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ColumnSpec:
     """One column in a constrained-width table.
 
@@ -164,7 +164,7 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
 # JSON-like structures with no single typed schema at this formatting boundary.
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Listing:
     """A count-headed table listing (documents, collections, ...).
 
@@ -175,14 +175,14 @@ class _Listing:
     input length, not the output layout.
     """
 
-    noun: str
-    specs: list[ColumnSpec]
+    _noun: str
+    _specs: list[ColumnSpec]
 
     def render(self, rows: list[list[str]]) -> str:
         """Return ``▶  N noun(s)\\n<table>`` for *rows*."""
         n = len(rows)
-        plural = self.noun if n == 1 else self.noun + "s"
-        return f"▶  {n} {plural}\n{format_table(self.specs, rows)}"
+        plural = self._noun if n == 1 else self._noun + "s"
+        return f"▶  {n} {plural}\n{format_table(self._specs, rows)}"
 
 
 def format_search_results(query: str, results: Sequence[Mapping[str, Any]]) -> str:
@@ -216,8 +216,8 @@ def format_documents(docs: Sequence[Mapping[str, Any]]) -> str:
     if not docs:
         return "No documents"
     listing = _Listing(
-        noun="document",
-        specs=[
+        "document",
+        [
             ColumnSpec("DOCUMENT", 8, fixed=False),
             ColumnSpec("COLLECTION", 8),
             ColumnSpec("PAGES", 5, align="right"),
@@ -256,8 +256,8 @@ def format_collections(cols: Sequence[Mapping[str, Any]]) -> str:
     if not cols:
         return "No collections"
     listing = _Listing(
-        noun="collection",
-        specs=[
+        "collection",
+        [
             ColumnSpec("COLLECTION", 8, fixed=False),
             ColumnSpec("DOCUMENTS", 9, align="right"),
             ColumnSpec("CHUNKS", 6, align="right"),
@@ -283,8 +283,8 @@ def format_databases(
     if not databases:
         return "No databases"
     listing = _Listing(
-        noun="database",
-        specs=[
+        "database",
+        [
             ColumnSpec("DATABASE", 8, fixed=False),
             ColumnSpec("DOCUMENTS", 9, align="right"),
         ],
@@ -307,8 +307,8 @@ def format_registrations(regs: Sequence[Mapping[str, Any]]) -> str:
     if not regs:
         return "No registered directories"
     listing = _Listing(
-        noun="registration",
-        specs=[
+        "registration",
+        [
             ColumnSpec("COLLECTION", 8),
             ColumnSpec("DIRECTORY", 8, fixed=False),
             ColumnSpec("REGISTERED", 10),

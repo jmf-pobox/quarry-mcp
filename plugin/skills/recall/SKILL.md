@@ -32,8 +32,9 @@ WebSearch or WebFetch call re-discovering something already found.
   are distinct on purpose:
   - `remember` — a specific durable fact (a URL, an ID, an address, a
     version pin). Small, factual, retrievable by its literal content.
-  - `ingest` — a URL or a file whose contents you want indexed as-is. The
-    canonical form of an external document.
+  - `ingest` — a URL. Fetches the page with smart sitemap discovery and
+    single-page fallback. For local files or directories, use
+    `register_directory` + `sync_all_registrations` instead.
   - `learn` — a distilled lesson: the rule you'd tell a teammate ("when X,
     do Y, because Z"). Lessons route to the repo's `-lessons` collection
     and get retrieval preference over transcripts and general docs, so a
@@ -58,7 +59,9 @@ WebSearch or WebFetch call re-discovering something already found.
 - `/remember <name>` — persist inline text as a named memory (a durable fact).
 - `/learn <lesson>` — save a distilled lesson that gets retrieval preference
   over general docs and transcripts.
-- `/ingest <url, directory, or file>` — index new content.
+- `/ingest <url>` — fetch and index a URL (sitemap discovery with single-page
+  fallback). For local files or directories, use `register_directory` +
+  `sync_all_registrations` instead.
 - `/explain <document or topic>` — search and synthesize an explanation.
 - `/source <claim or text>` — find which document a claim came from.
 - MCP tools (same operations, callable directly): `find`, `remember`, `learn`,
