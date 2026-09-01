@@ -1,4 +1,4 @@
-.PHONY: help test test-slow lint lint-docs lint-slash-mcp type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
+.PHONY: help test test-slow lint lint-docs lint-slash-mcp lint-hook-mcp-matcher type check check-full check-oo audit-oo update-oo check-coupling update-coupling check-suppressions update-suppressions check-imports check-openapi openapi report format install build test-wheel test-install-clean clean depot bench-cuda docs docs-clean metrics coverage eval eval-baseline logs-errors logs-tail
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -29,7 +29,7 @@ test-slow: ## Run the slow tier (real-TLS/live-server smokes)
 #
 # When adding a target, the test is not "is this a gate" but "does this command
 # name a binary from the dev extra".  If it does, it takes the flag.
-lint: lint-docs lint-slash-mcp ## Lint and format check
+lint: lint-docs lint-slash-mcp lint-hook-mcp-matcher ## Lint and format check
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
 
@@ -44,6 +44,18 @@ lint-slash-mcp: ## Fail if slash commands name the disconnected plugin_quarry na
 	@if grep -rE 'mcp__plugin_quarry(-dev)?_quarry__' plugin/commands/ >/dev/null 2>&1; then \
 		echo "plugin/commands/ references disconnected plugin_quarry namespace; use mcp__quarry__* / mcp__quarry-dev__*" >&2; \
 		grep -rnE 'mcp__plugin_quarry(-dev)?_quarry__' plugin/commands/ >&2; \
+		exit 1; \
+	fi
+
+# Guards against the PostToolUse matcher in plugin/hooks/hooks.json losing
+# coverage of the native mcp__quarry__ / mcp__quarry-dev__ namespace during
+# a rename. A matcher that only admits the retired plugin_quarry proxy
+# would silently skip suppress-output.sh for every native tool call. See
+# quarry-ydym.
+lint-hook-mcp-matcher: ## Fail if hooks.json's PostToolUse matcher drops mcp__quarry(-dev)?__ coverage
+	@if ! grep -E '"matcher":.*mcp__.*quarry\(-proxy\|-dev\)\?__' plugin/hooks/hooks.json >/dev/null 2>&1; then \
+		echo "plugin/hooks/hooks.json PostToolUse matcher does not admit mcp__quarry__ / mcp__quarry-dev__; native tool calls will bypass suppress-output.sh" >&2; \
+		grep -n '"matcher"' plugin/hooks/hooks.json >&2; \
 		exit 1; \
 	fi
 
