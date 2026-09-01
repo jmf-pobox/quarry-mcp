@@ -213,7 +213,7 @@ def test_env_secret_does_not_match_unrelated_assignments() -> None:
 def test_env_secret_command_substitution_redacted() -> None:
     line = (
         "export GH_TOKEN=$(security find-generic-password"
-        ' -a "jfreeman" -s "GITHUB_CLAUDE_PAT" -w)'
+        ' -a "jdoe" -s "GITHUB_CLAUDE_PAT" -w)'
     )
     out, counts = _scrub(line)
     assert "[REDACTED:env-secret]" in out
@@ -609,7 +609,7 @@ def test_path_vox_corpus_style_home_redacts_to_tilde() -> None:
     """The vox capture case: ``/Users/jdoe/x`` collapses to ``~/x``."""
     out, counts = _pii_scrub("/Users/jdoe/x")
     assert out == "~/x"
-    assert "jfreeman" not in out
+    assert "jdoe" not in out
     assert counts.get("path", 0) == 1
 
 
