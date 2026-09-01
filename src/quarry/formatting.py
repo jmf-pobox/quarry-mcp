@@ -165,7 +165,7 @@ def format_table(specs: list[ColumnSpec], rows: list[list[str]]) -> str:
 
 
 @dataclass(frozen=True)
-class Listing:
+class _Listing:
     """A count-headed table listing (documents, collections, ...).
 
     The first line of the rendered output is an authoritative ``▶  N noun``
@@ -215,7 +215,7 @@ def format_documents(docs: Sequence[Mapping[str, Any]]) -> str:
     """Format document listing as a count header followed by a table."""
     if not docs:
         return "No documents"
-    listing = Listing(
+    listing = _Listing(
         noun="document",
         specs=[
             ColumnSpec("DOCUMENT", 8, fixed=False),
@@ -255,7 +255,7 @@ def format_collections(cols: Sequence[Mapping[str, Any]]) -> str:
     """Format collection listing as a count header followed by a table."""
     if not cols:
         return "No collections"
-    listing = Listing(
+    listing = _Listing(
         noun="collection",
         specs=[
             ColumnSpec("COLLECTION", 8, fixed=False),
@@ -282,7 +282,7 @@ def format_databases(
     """Format database listing as a count header followed by a table."""
     if not databases:
         return "No databases"
-    listing = Listing(
+    listing = _Listing(
         noun="database",
         specs=[
             ColumnSpec("DATABASE", 8, fixed=False),
@@ -306,7 +306,7 @@ def format_registrations(regs: Sequence[Mapping[str, Any]]) -> str:
     """Format registration listing as a count header followed by a table."""
     if not regs:
         return "No registered directories"
-    listing = Listing(
+    listing = _Listing(
         noun="registration",
         specs=[
             ColumnSpec("COLLECTION", 8),
