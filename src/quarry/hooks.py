@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
 
+from quarry._hook_trace import HookTrace
 from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
@@ -271,22 +272,25 @@ def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
       registry is never mutated because neither door is safe to pick
       automatically.
     """
+    trace = HookTrace("session-start")
     cwd = _as_dir(payload.get("cwd"))
     if not cwd:
-        logger.debug("session-start: no cwd in payload, skipping")
+        trace.skip("cwd")
         return {}
-
-    config = load_hook_config(cwd)
-    if not config.session_sync:
-        logger.debug("session-start: disabled by config")
+    on = load_hook_config(cwd).session_sync
+    trace.mark_config(on=on)
+    if not on:
+        trace.skip("config")
         return {}
-
     directory = Path(cwd).resolve()
     if not directory.is_dir():
         logger.warning("session-start: cwd is not a directory: %s", directory)
+        trace.skip("not-a-dir")
         return {}
-
-    return _SessionStartContext.open(directory).dispatch()
+    trace.mark_payload(ok=True)
+    result = _SessionStartContext.open(directory).dispatch()
+    trace.capture()
+    return result
 
 
 @final
@@ -607,18 +611,22 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     — after the (unconditional) send would always match — via
     :class:`~quarry.web_fetch_loop_closer.WebFetchLoopCloser`.
     """
+    trace = HookTrace("post-web-fetch")
     cwd = _as_dir(payload.get("cwd"))
     if cwd:
-        config = load_hook_config(cwd)
-        if not config.web_fetch:
-            logger.debug("post-web-fetch: disabled by config")
+        on = load_hook_config(cwd).web_fetch
+        trace.mark_config(on=on)
+        if not on:
+            trace.skip("config")
             return {}
 
     parsed = WebFetchPayload(payload)
     url = parsed.url
     if not url:
-        logger.debug("post-web-fetch: no valid URL in payload, skipping")
+        trace.mark_payload(ok=False)
+        trace.skip("no-url")
         return {}
+    trace.mark_payload(ok=True)
 
     from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
     from quarry.capture_url import CaptureUrl  # noqa: PLC0415
@@ -727,10 +735,13 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Returns the systemMessage immediately so compaction is never blocked, and a
     down daemon still leaves the durable local copies for ``backfill-sessions``.
     """
+    trace = HookTrace("pre-compact")
     target = _precompact_target(payload)
     if target is None:
+        trace.skip("payload")
         return {}
     cwd, session_id, tp = target
+    trace.mark_payload(ok=True)
 
     outcome = SessionTranscriptCapture(
         cwd=cwd,
@@ -741,9 +752,11 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     ).capture()
 
     if not outcome.text_captured:
+        trace.skip("empty-transcript")
         return {}
 
     if not outcome.sent:
+        trace.error("daemon-unreachable")
         return {
             "systemMessage": (
                 "Warning: quarryd is not reachable, so this session was not "
@@ -752,6 +765,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
             ),
         }
 
+    trace.capture()
     return {
         "systemMessage": (
             "Capturing this session's conversation (background). "
