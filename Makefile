@@ -50,14 +50,13 @@ lint-slash-mcp: ## Fail if slash commands name the disconnected plugin_quarry na
 # Guards against the PostToolUse matcher in plugin/hooks/hooks.json losing
 # coverage of the native mcp__quarry__ / mcp__quarry-dev__ namespace during
 # a rename. A matcher that only admits the retired plugin_quarry proxy
-# would silently skip suppress-output.sh for every native tool call. See
+# would silently skip suppress-output.sh for every native tool call. The
+# guard parses hooks.json, compiles the matcher regex, and asserts it
+# admits concrete sample tool names — a substring lint could not tell an
+# augmented matcher from one that requires the retired prefix. See
 # quarry-ydym.
 lint-hook-mcp-matcher: ## Fail if hooks.json's PostToolUse matcher drops mcp__quarry(-dev)?__ coverage
-	@if ! grep -E '"matcher":.*mcp__.*quarry\(-proxy\|-dev\)\?__' plugin/hooks/hooks.json >/dev/null 2>&1; then \
-		echo "plugin/hooks/hooks.json PostToolUse matcher does not admit mcp__quarry__ / mcp__quarry-dev__; native tool calls will bypass suppress-output.sh" >&2; \
-		grep -n '"matcher"' plugin/hooks/hooks.json >&2; \
-		exit 1; \
-	fi
+	@uv run python tools/lint_hook_matcher.py
 
 # Pin the node-pyright binary to the uv.lock-pinned wrapper version so `make
 # type` catches exactly what CI catches. The pyright-python wrapper can reuse a
