@@ -1715,7 +1715,7 @@ class TestCapture:
             resp = tc.post(
                 "/v1/capture",
                 json={
-                    "content": "reach me at jmf@pobox.com",
+                    "content": "reach me at jdoe@example.com",
                     "document_name": "note",
                     "cwd": str(tmp_path),
                 },
@@ -1724,8 +1724,8 @@ class TestCapture:
 
         assert collections == ["default-captures"]
         assert scrubbers
-        redacted = scrubbers[0]("reach me at jmf@pobox.com")
-        assert "jmf@pobox.com" not in redacted
+        redacted = scrubbers[0]("reach me at jdoe@example.com")
+        assert "jdoe@example.com" not in redacted
         assert "[REDACTED:email]" in redacted
 
     def test_scrub_failure_marks_task_failed_and_stores_nothing(
@@ -1748,7 +1748,7 @@ class TestCapture:
             resp = tc.post(
                 "/v1/capture",
                 json={
-                    "content": "secret jmf@pobox.com",
+                    "content": "secret jdoe@example.com",
                     "document_name": "note",
                     "cwd": str(tmp_path),
                     "overwrite": True,
@@ -1794,7 +1794,7 @@ class TestCapture:
                     "content": "<html><body></body></html>",
                     "document_name": "example.com/p",
                     "source_url": "https://example.com/p",
-                    "summary": "see jmf@pobox.com",
+                    "summary": "see jdoe@example.com",
                     "format_hint": "html",
                 },
             )
@@ -1809,7 +1809,7 @@ class TestCapture:
         # (the choke point) redacts summary+name — see test_pipeline's
         # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
-        assert "[REDACTED:email]" in scrub("reach jmf@pobox.com")
+        assert "[REDACTED:email]" in scrub("reach jdoe@example.com")
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
         """A page that extracts to >=1 chunk stores inline and never re-fetches."""
@@ -1980,16 +1980,16 @@ class TestRemember:
             resp = tc.post(
                 "/v1/remember",
                 json={
-                    "name": "note jmf@pobox.com",
+                    "name": "note jdoe@example.com",
                     "content": "body",
-                    "summary": "contact jmf@pobox.com",
+                    "summary": "contact jdoe@example.com",
                 },
             )
             _poll_task_done(tc, resp.json()["task_id"])
 
-        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "jdoe@example.com" not in str(seen["name"])
         assert "[REDACTED:email]" in str(seen["name"])
-        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_invalid_json_returns_400(self, client: TestClient) -> None:
@@ -2235,7 +2235,7 @@ class TestIngest:
         assert url_kwargs
         assert url_kwargs[0]["collection"] == "default-captures"
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
-        assert "[REDACTED:email]" in scrub("reach me at jmf@pobox.com")
+        assert "[REDACTED:email]" in scrub("reach me at jdoe@example.com")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
         resp = client.post("/v1/ingest", json={})

@@ -371,7 +371,7 @@ class TestRemember:
 
     def test_scrubs_via_daemon(self, harness: _ToolHarness) -> None:
         """The daemon owns scrubbing; a 202 comes back before any indexing."""
-        result = harness.tools.remember("reach me at jmf@pobox.com", "note.md")
+        result = harness.tools.remember("reach me at jdoe@example.com", "note.md")
         assert "note.md" in result
         assert "task" in result
 

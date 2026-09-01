@@ -614,7 +614,7 @@ class TestIngestUrlScrubbing:
     none, so a deliberately ingested document is stored byte-for-byte.
     """
 
-    _RAW = "contact jmf@pobox.com now"
+    _RAW = "contact jdoe@example.com now"
 
     def _patch_fetch_and_extract(self, monkeypatch: pytest.MonkeyPatch) -> None:
         pages = [PageContent("u", "u", 1, 1, self._RAW, PageType.TEXT)]
@@ -661,7 +661,7 @@ class TestIngestUrlScrubbing:
         )
 
         assert captured
-        assert "jmf@pobox.com" not in captured[0].text
+        assert "jdoe@example.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
 
     def test_scrubber_redacts_document_name_and_summary(
@@ -693,14 +693,14 @@ class TestIngestUrlScrubbing:
             Database(MagicMock()),
             _settings(),
             collection="c",
-            document_name="note jmf@pobox.com",
+            document_name="note jdoe@example.com",
             content_scrubber=lambda t: scrub_and_log(t, "web-fetch"),
-            summary="contact jmf@pobox.com",
+            summary="contact jdoe@example.com",
         )
 
-        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "jdoe@example.com" not in str(seen["name"])
         assert "[REDACTED:email]" in str(seen["name"])
-        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_empty_extraction_keeps_prior_and_stores_nothing(
@@ -794,7 +794,7 @@ class TestIngestContentScrubbing:
     extractor rather than storing tags verbatim.
     """
 
-    _RAW = "reach me at jmf@pobox.com"
+    _RAW = "reach me at jdoe@example.com"
 
     def _capture_stored_pages(
         self, monkeypatch: pytest.MonkeyPatch
@@ -828,7 +828,7 @@ class TestIngestContentScrubbing:
         )
 
         assert captured
-        assert "jmf@pobox.com" not in captured[0].text
+        assert "jdoe@example.com" not in captured[0].text
         assert "[REDACTED:email]" in captured[0].text
 
     def _capture_stored_metadata(
@@ -864,16 +864,16 @@ class TestIngestContentScrubbing:
         seen = self._capture_stored_metadata(monkeypatch)
         ingest_content(
             "body",
-            "note jmf@pobox.com",
+            "note jdoe@example.com",
             Database(MagicMock()),
             _settings(),
             content_scrubber=lambda t: scrub_and_log(t, "remember"),
-            summary="contact jmf@pobox.com",
+            summary="contact jdoe@example.com",
         )
 
-        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "jdoe@example.com" not in str(seen["name"])
         assert "[REDACTED:email]" in str(seen["name"])
-        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_no_scrubber_keeps_document_name_and_summary(
@@ -885,14 +885,14 @@ class TestIngestContentScrubbing:
         seen = self._capture_stored_metadata(monkeypatch)
         ingest_content(
             "body",
-            "note jmf@pobox.com",
+            "note jdoe@example.com",
             Database(MagicMock()),
             _settings(),
-            summary="contact jmf@pobox.com",
+            summary="contact jdoe@example.com",
         )
 
-        assert seen["name"] == "note jmf@pobox.com"
-        assert seen["summary"] == "contact jmf@pobox.com"
+        assert seen["name"] == "note jdoe@example.com"
+        assert seen["summary"] == "contact jdoe@example.com"
 
     def test_failed_scrub_writes_zero_chunks_and_keeps_prior(
         self, monkeypatch: pytest.MonkeyPatch
