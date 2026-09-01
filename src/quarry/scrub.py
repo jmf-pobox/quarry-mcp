@@ -102,10 +102,10 @@ _PATH_RE = re.compile(r"(?<!\w)(?<!:/)(?:/Users|/home)/[^/\s]+")
 
 # RFC-shaped email. The lookbehind keeps the match from starting inside a longer
 # token; the trailing ``(?!\w)`` only rejects a match that would continue into
-# another word character, so a sentence-final ``jmf@pobox.com.`` still redacts
+# another word character, so a sentence-final ``jdoe@example.com.`` still redacts
 # (the ``.`` is not ``\w``) — excluding ``.``/``-`` from the trailing set here
 # was a leak, since a period follows an address in the most common prose context.
-# Multi-label TLDs (``jmf@pobox.co.uk``) still match: the engine backtracks the
+# Multi-label TLDs (``jdoe@example.co.uk``) still match: the engine backtracks the
 # greedy domain so ``\.[A-Za-z]{2,}`` lands on the final label. The
 # ``[REDACTED:email]`` marker has no ``@``, so a scrubbed address cannot re-match.
 # Accepted limit: the ASCII character classes do not match unicode/IDN addresses

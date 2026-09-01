@@ -225,7 +225,7 @@ gets the same twenty lines twice. No code in `src/` writes this fence —
 grepped. It appears to be a legacy artifact from the pre-`@`-import model.
 
 **(c) The workspace and global blocks** —
-`/home/jfreeman/Coding/punt-labs/CLAUDE.md:424-439` and
+`~/Coding/punt-labs/CLAUDE.md:424-439` and
 `~/.claude/CLAUDE.md:506-521`, fenced `<!-- quarry:capabilities -->`. These
 are the *degraded* version:
 

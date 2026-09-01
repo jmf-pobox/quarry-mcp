@@ -2127,7 +2127,7 @@ class TestPreCompactCaptureRedaction:
             branch_names=(),
             bead_ids=(),
         )
-        text = "worked in /Users/jfreeman/repo and pinged jmf@pobox.com"
+        text = "worked in /Users/jdoe/repo and pinged jdoe@example.com"
         CaptureWriter().write(
             CaptureRequest(
                 project_dir=tmp_path,
