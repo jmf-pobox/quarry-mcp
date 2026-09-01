@@ -652,7 +652,7 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
             ),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
-        detail = "capture"
+        detail = "inline"
     else:
         # Fallback: no usable content — the daemon re-fetches through the
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.

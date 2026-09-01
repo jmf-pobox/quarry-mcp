@@ -18,7 +18,7 @@ across `transform`, `index`, and `connector`).
 
 - `tool`: G6 — per-hook-invocation breadcrumb line in `quarry.log`. Every
   `PostToolUse:*`/`SessionEnd`/`SubagentStop`/`PreCompact` handler emits one
-  `quarry.hooks: <name>: entered (config=..., payload_ok=...) → capture|skip|error`
+  `quarry.hooks: <name>: entered (config=..., payload_ok=...) -> capture|skip|error`
   at INFO, so a silent-skip is visible on every exit path — including the
   `PostToolUse:WebFetch` happy paths that previously went dark. (quarry-38qs)
 

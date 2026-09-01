@@ -279,6 +279,9 @@ class CaptureIngestJob:
                     agent_handle=self.inline.agent_handle,
                     memory_type=self.inline.memory_type,
                     summary=self.inline.summary,
+                    # Already have the body from fetch_body above — reusing it
+                    # here avoids fetching self.source_url a second time.
+                    prefetched_html=body.text,
                 )
             )
 
