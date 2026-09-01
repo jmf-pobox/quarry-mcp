@@ -222,6 +222,38 @@ class TestHandleSessionEnd:
         )
         assert result == {}
 
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: an unreachable daemon must not read as ``capture`` in the trace."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        project = tmp_path / "project"
+        project.mkdir()
+        transcript = _make_transcript(tmp_path, "work discussed today")
+        with (
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.session_end(
+                {
+                    "cwd": str(project),
+                    "transcript_path": str(transcript),
+                    "session_id": "abc12345",
+                    "reason": "clear",
+                }
+            )
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
+
 
 class TestHandlePostWebSearch:
     def _mk_payload(self, *, cwd: str = "") -> dict[str, object]:
@@ -273,6 +305,22 @@ class TestHandlePostWebSearch:
     def test_malformed_payload_survives(self) -> None:
         result = HookAgent.post_web_search({"tool_input": None, "tool_response": 42})
         assert result == {}
+
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a false send_capture return must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        with patch(
+            "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+            return_value=False,
+        ):
+            HookAgent.post_web_search(self._mk_payload(cwd=str(tmp_path)))
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
 
 
 class TestHandlePostReadFilterBranches:
@@ -387,6 +435,34 @@ class TestHandlePostRead:
     def test_malformed_payload_survives(self) -> None:
         result = HookAgent.post_read({"tool_input": 42, "tool_response": None})
         assert result == {}
+
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a false send_capture return must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        _write_config(tmp_path, "---\nauto_capture:\n  read: true\n---\n")
+        payload: dict[str, object] = {
+            "cwd": str(tmp_path),
+            "tool_input": {"file_path": "/external/vendor-spec.pdf"},
+            "tool_response": "the file content",
+        }
+        with (
+            patch(
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
+                return_value=None,
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.post_read(payload)
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line
 
 
 _CONFIRMED_SUBAGENT_PAYLOAD: dict[str, object] = {
@@ -535,3 +611,33 @@ class TestHandleSubagentStop:
             {"cwd": 42, "agent_id": None, "agent_transcript_path": 3.14}
         )
         assert result == {}
+
+    def test_daemon_unreachable_traces_error_not_capture(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G6: a subagent transcript send that fails must trace error, not capture."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        subagent = _make_transcript(tmp_path, "sub work")
+        subagent.rename(tmp_path / "sub.jsonl")
+        payload: dict[str, object] = {
+            "cwd": str(tmp_path),
+            "agent_id": "sub-1",
+            "agent_type": "general-purpose",
+            "agent_transcript_path": str(tmp_path / "sub.jsonl"),
+        }
+        with (
+            patch(
+                "quarry.session_transcript.Path.home",
+                return_value=tmp_path / "home",
+            ),
+            patch(
+                "quarry.daemon_capture.DaemonCaptureSender.send_capture",
+                return_value=False,
+            ),
+        ):
+            HookAgent.subagent_stop(payload)
+        line = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "-> error:daemon-unreachable" in line
+        assert "-> capture" not in line

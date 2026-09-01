@@ -22,7 +22,7 @@ from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.read_capture import ReadCaptureFilter, ReadPayload
-from quarry.session_transcript import SessionTranscriptCapture
+from quarry.session_transcript import SessionTranscriptCapture, TranscriptCaptureOutcome
 from quarry.web_search_capture import WebSearchPayload
 
 logger = logging.getLogger(__name__)
@@ -68,15 +68,33 @@ class HookAgent:
             trace.skip("payload")
             return {}
         trace.mark_payload(ok=True)
-        SessionTranscriptCapture(
+        outcome = SessionTranscriptCapture(
             cwd=cwd,
             session_id=session_id,
             transcript_path=tp,
             label="session-end",
             agent_handle=EthosConfig.agent_handle_at(cwd),
         ).capture()
-        trace.capture()
+        HookAgent._trace_transcript_outcome(trace, outcome)
         return {}
+
+    @staticmethod
+    def _trace_transcript_outcome(
+        trace: HookTrace, outcome: TranscriptCaptureOutcome
+    ) -> None:
+        """Emit the breadcrumb that matches the actual transcript-send outcome.
+
+        A silent-skip is only visible when the trace tells the truth: an
+        unreachable daemon must not read as ``capture``, and an empty
+        transcript is a skip, not a send failure (parity with the
+        ``handle_pre_compact`` branching in :mod:`quarry.hooks`).
+        """
+        if not outcome.text_captured:
+            trace.skip("empty-transcript")
+        elif outcome.sent:
+            trace.capture()
+        else:
+            trace.error("daemon-unreachable")
 
     @staticmethod
     def post_web_search(payload: dict[str, object]) -> dict[str, object]:
@@ -109,7 +127,7 @@ class HookAgent:
 
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
-        DaemonCaptureSender().send_capture(
+        sent = DaemonCaptureSender().send_capture(
             CaptureIngestRequest(
                 content=digest,
                 cwd=cwd,
@@ -118,7 +136,10 @@ class HookAgent:
             ),
             unreachable_log=_WEB_SEARCH_UNREACHABLE,
         )
-        trace.capture()
+        if sent:
+            trace.capture()
+        else:
+            trace.error("daemon-unreachable")
         return {}
 
     @staticmethod
@@ -187,6 +208,8 @@ class HookAgent:
         trace.mark_payload(ok=outcome != "payload")
         if outcome == "captured":
             trace.capture()
+        elif outcome == "unreachable":
+            trace.error("daemon-unreachable")
         else:
             trace.skip(outcome)
         return {}
@@ -196,9 +219,10 @@ class HookAgent:
         """Apply the four admission checks and send on pass; return the outcome.
 
         Return values classify the outcome for the trace: ``"captured"``,
-        ``"payload"`` (missing/empty inputs), ``"filter"`` (rejected by an
-        admission check), ``"size"`` (byte cap exceeded), or ``"secret"``
-        (client-side secret pattern hit).
+        ``"unreachable"`` (send attempted but the daemon rejected or was
+        down), ``"payload"`` (missing/empty inputs), ``"filter"`` (rejected
+        by an admission check), ``"size"`` (byte cap exceeded), or
+        ``"secret"`` (client-side secret pattern hit).
         """
         cwd = HookPayload.as_dir(payload.get("cwd"))
         parsed = ReadPayload(payload)
@@ -220,7 +244,7 @@ class HookAgent:
 
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
-        DaemonCaptureSender().send_capture(
+        sent = DaemonCaptureSender().send_capture(
             CaptureIngestRequest(
                 content=content,
                 cwd=cwd,
@@ -229,7 +253,7 @@ class HookAgent:
             ),
             unreachable_log=_READ_UNREACHABLE,
         )
-        return "captured"
+        return "captured" if sent else "unreachable"
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:
@@ -271,12 +295,12 @@ class HookAgent:
             return {}
         trace.mark_payload(ok=True)
         agent_type = HookPayload.as_str(payload.get("agent_type"))
-        SessionTranscriptCapture(
+        outcome = SessionTranscriptCapture(
             cwd=cwd,
             session_id=agent_id,
             transcript_path=tp,
             label="subagent-stop",
             agent_handle=agent_type or EthosConfig.agent_handle_at(cwd),
         ).capture()
-        trace.capture()
+        HookAgent._trace_transcript_outcome(trace, outcome)
         return {}
