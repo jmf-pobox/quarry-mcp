@@ -85,11 +85,25 @@ class TestDigest:
         )
         assert payload.digest is None
 
-    def test_returns_none_for_invalid_json(self) -> None:
+    def test_falls_back_to_raw_text_for_non_json_response(self) -> None:
+        """A plain string tool_response is the newer Claude Code shape — use it.
+
+        The old contract returned ``None`` on any JSON parse failure, but
+        Claude Code's post-2026-05 WebSearch handler emits a rendered
+        markdown summary directly rather than a JSON list.  A silent
+        skip on that shape is the G5 bug — treat unparseable strings as
+        text so the capture still lands.
+        """
         payload = WebSearchPayload(
-            {"tool_input": {"query": "x"}, "tool_response": "{not-json"}
+            {
+                "tool_input": {"query": "x"},
+                "tool_response": "The rendered search summary.",
+            }
         )
-        assert payload.digest is None
+        digest = payload.digest
+        assert digest is not None
+        assert "rendered search summary" in digest
+        assert "Web search: x" in digest
 
     def test_returns_none_for_non_string_response(self) -> None:
         payload = WebSearchPayload({"tool_input": {"query": "x"}, "tool_response": 42})
