@@ -65,15 +65,12 @@ if [[ "$TOOL_NAME" == "list" ]]; then
       }
     }'
   else
-    COUNT=$(printf '%s\n' "$RESULT" | tail -n +2 | wc -l | tr -d ' ')
-    # Detect kind from unique column names in header
-    LABEL="items"
-    if [[ "$FIRST_LINE" == *"REGISTERED"* ]]; then LABEL="registrations"
-    elif [[ "$FIRST_LINE" == *"DATABASE"* ]]; then LABEL="databases"
-    elif [[ "$FIRST_LINE" == *"PAGES"* ]]; then LABEL="documents"
-    elif [[ "$FIRST_LINE" == *"COLLECTION"* ]]; then LABEL="collections"
-    fi
-    jq -n --arg summary "${COUNT} ${LABEL}" --arg ctx "$RESULT" '{
+    # The formatter's first line is an authoritative "▶  N <noun>" summary;
+    # strip the leading marker so the panel shows plain "N <noun>". Deriving
+    # the count from wc -l here would over-count wrapped rows (a variable
+    # column that overflows produces continuation lines).
+    SUMMARY="${FIRST_LINE#▶  }"
+    jq -n --arg summary "$SUMMARY" --arg ctx "$RESULT" '{
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         updatedMCPToolOutput: $summary,
