@@ -10,9 +10,12 @@
 # We must parse it twice: once to extract the string, once to
 # read the .result field inside it.
 #
-# Supports both prod (mcp__plugin_quarry_quarry__*) and dev
-# (mcp__plugin_quarry-dev_quarry__*) tool prefixes by extracting the
-# bare tool name via ${TOOL##*__}.
+# Supports all four namespace variants — native prod
+# (mcp__quarry__*), native dev (mcp__quarry-dev__*), and the legacy
+# proxy prefixes (mcp__plugin_quarry_quarry__*,
+# mcp__plugin_quarry-dev_quarry__*) — by extracting the bare tool
+# name via ${TOOL##*__}. The PostToolUse matcher in hooks.json
+# admits all four; see lint-hook-mcp-matcher.
 #
 # Note: no `set -euo pipefail` — hooks must degrade gracefully on
 # malformed input rather than failing the tool call. Matches biff's
