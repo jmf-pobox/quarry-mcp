@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-08-31
+
 ### Added
 
 - `query`: `POST /v1/captures/lookup` (JSON body `{url, cwd}`) answers whether
