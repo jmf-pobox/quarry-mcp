@@ -14,6 +14,19 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `tool`: slash-command MCP tool references repaired (quarry-ydym). The
+  seven tool-dispatching quarry slash commands (`/find`, `/ingest`,
+  `/remember`, `/learn`, `/explain`, `/source`, `/quarry`) — and their
+  seven `-dev` twins — still named the disconnected proxy namespace
+  (`mcp__plugin_quarry_quarry__*` / `mcp__plugin_quarry-dev_quarry__*`).
+  The native quarry MCP server now exposes tools as `mcp__quarry__*`
+  and its dev variant as `mcp__quarry-dev__*`; the released 3.1.0
+  plugin worked only because a capable assistant inferred the new
+  names. Cheaper models would hard-fail. All 26 references now name
+  the live tools directly.
+
 ## [3.1.0] - 2026-08-31
 
 ### Added
