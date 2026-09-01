@@ -27,8 +27,8 @@ _REQUIRED: tuple[str, ...] = (
     "mcp__quarry-dev__find",
 )
 
-# Legacy proxy spellings the matcher SHOULD still admit — defence-in-depth for
-# any consumer that has not yet upgraded past the plugin_quarry namespace.
+# Legacy proxy spellings the matcher MAY still admit — the plugin_quarry
+# namespace has been retired, so their absence is a soft note, not a failure.
 _LEGACY: tuple[str, ...] = (
     "mcp__plugin_quarry_quarry__status",
     "mcp__plugin_quarry-dev_quarry__status",
@@ -90,10 +90,10 @@ def main(argv: list[str]) -> int:
     if legacy_missed:
         print(
             f"plugin/hooks/hooks.json PostToolUse matcher {matcher.raw!r} no longer "
-            f"admits legacy proxy tool names: {', '.join(legacy_missed)}",
+            f"admits retired legacy proxy tool names: {', '.join(legacy_missed)} "
+            f"(informational; the plugin_quarry namespace is retired)",
             file=sys.stderr,
         )
-        return 1
     return 0
 
 
