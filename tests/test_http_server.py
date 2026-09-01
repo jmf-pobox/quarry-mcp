@@ -32,6 +32,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.ingestion.web_fetch import FetchedBody
 from quarry.results import SearchResult
 
 # Bound on how long fixture teardown waits for a background job to finish for
@@ -1783,10 +1784,21 @@ class TestCapture:
             }
 
         empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        # G4: _refetch now calls WebFetcher.fetch_body first to route HTML
+        # through ingest_url (this test's path) vs. non-HTML through
+        # ingest_content-as-text. Stub the network fetch as HTML so the
+        # existing refetch-via-ingest_url expectations hold.
+        html_body = FetchedBody(
+            text="<html><body>refetched</body></html>", media_type="text/html"
+        )
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=html_body,
+            ),
         ):
             resp = tc.post(
                 "/v1/capture",
