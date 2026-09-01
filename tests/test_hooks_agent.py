@@ -13,10 +13,99 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry.hooks_agent import HookAgent
 
 if TYPE_CHECKING:
     import pytest
+
+
+class TestHookPayload:
+    """HookPayload parses untrusted payload fields defensively."""
+
+    def test_as_str_returns_string_value(self) -> None:
+        assert HookPayload.as_str("hello") == "hello"
+
+    def test_as_str_rejects_non_string(self) -> None:
+        assert HookPayload.as_str(None) == ""
+        assert HookPayload.as_str(42) == ""
+        assert HookPayload.as_str([]) == ""
+
+    def test_as_dir_accepts_absolute_path(self, tmp_path: Path) -> None:
+        assert HookPayload.as_dir(str(tmp_path)) == str(tmp_path)
+
+    def test_as_dir_rejects_relative(self) -> None:
+        assert HookPayload.as_dir("relative/path") == ""
+
+    def test_as_dir_rejects_non_string(self) -> None:
+        assert HookPayload.as_dir(None) == ""
+        assert HookPayload.as_dir(123) == ""
+
+    def test_resolve_jsonl_returns_resolved_path(self, tmp_path: Path) -> None:
+        jsonl = tmp_path / "t.jsonl"
+        jsonl.write_text("{}")
+        resolved = HookPayload.resolve_jsonl(str(jsonl), label="test")
+        assert resolved is not None
+        assert resolved.suffix == ".jsonl"
+
+    def test_resolve_jsonl_rejects_non_jsonl_suffix(self, tmp_path: Path) -> None:
+        assert HookPayload.resolve_jsonl(str(tmp_path / "t.txt"), label="test") is None
+
+
+class TestHookTrace:
+    """HookTrace emits one INFO line per outcome for grep-ability."""
+
+    def test_skip_emits_expected_shape(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        trace = HookTrace("post-web-search")
+        trace.mark_config(on=True)
+        trace.mark_payload(ok=False)
+        trace.skip("no-digest")
+        records = [r for r in caplog.records if r.name == "quarry.hooks"]
+        assert len(records) == 1
+        msg = records[0].getMessage()
+        assert "post-web-search" in msg
+        assert "config=on" in msg
+        assert "payload_ok=N" in msg
+        assert "-> skip:no-digest" in msg
+
+    def test_capture_emits_expected_shape(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        trace = HookTrace("post-web-fetch")
+        trace.mark_config(on=True)
+        trace.mark_payload(ok=True)
+        trace.capture()
+        records = [r for r in caplog.records if r.name == "quarry.hooks"]
+        assert len(records) == 1
+        assert "-> capture" in records[0].getMessage()
+
+    def test_unknown_state_renders_as_question_mark(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Emitting before marks resolves the unknown dimension to ``?``."""
+        import logging as _logging
+
+        caplog.set_level(_logging.INFO, logger="quarry.hooks")
+        HookTrace("session-start").skip("cwd")
+        msg = next(r for r in caplog.records if r.name == "quarry.hooks").getMessage()
+        assert "config=?" in msg
+        assert "payload_ok=?" in msg
+
+
+class TestReadAdmission:
+    """ReadAdmission groups Read-specific admission helpers."""
+
+    def test_content_has_secret_flags_pat(self) -> None:
+        assert ReadAdmission.content_has_secret("ghp_" + "a" * 36) is True
+
+    def test_content_has_secret_ignores_clean_text(self) -> None:
+        assert ReadAdmission.content_has_secret("just a plain note") is False
 
 
 def _make_transcript(tmp_path: Path, text: str = "hello world") -> Path:
