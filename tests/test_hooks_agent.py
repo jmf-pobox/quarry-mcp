@@ -233,7 +233,7 @@ class TestHandlePostReadFilterBranches:
         (tmp_path / "docs" / "readme.md").write_text("hi")
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=_FakeResolver(),
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
@@ -249,7 +249,7 @@ class TestHandlePostReadFilterBranches:
         payload["tool_response"] = "ghp_" + "a" * 36
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=None,
             ),
             patch("quarry.daemon_capture.DaemonCaptureSender.send_capture") as cap,
@@ -262,7 +262,7 @@ class TestHandlePostReadFilterBranches:
         payload = self._payload(tmp_path, "/external/vendor-spec.pdf")
         with (
             patch(
-                "quarry.hooks_agent.HookAgent._collection_resolver_for",
+                "quarry._hook_trace.ReadAdmission.collection_resolver_for",
                 return_value=None,
             ),
             patch(

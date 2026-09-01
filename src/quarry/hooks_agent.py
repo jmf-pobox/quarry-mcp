@@ -16,20 +16,14 @@ handler tests assert this under crafted-adversarial payloads.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import TYPE_CHECKING
 
+from quarry._hook_trace import HookPayload, HookTrace, ReadAdmission
 from quarry._stdlib import load_hook_config
 from quarry.daemon_capture import DaemonCaptureSender
 from quarry.ethos_handle import EthosConfig
 from quarry.read_capture import ReadCaptureFilter, ReadPayload
-from quarry.scrub import Scrubber, ScrubConfig
 from quarry.session_transcript import SessionTranscriptCapture
 from quarry.web_search_capture import WebSearchPayload
-
-if TYPE_CHECKING:
-    from quarry.collection_resolver import CollectionResolver
-    from quarry.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +31,6 @@ _WEB_SEARCH_UNREACHABLE = (
     "web-search: daemon unreachable; digest not indexed (re-run to retry)"
 )
 _READ_UNREACHABLE = "post-read: daemon unreachable; file not indexed"
-
-# Secrets-only scrubber, built once: a client-side defense-in-depth check on
-# Read content ahead of the daemon's own scrub, relevant when QUARRY_URL
-# points at a remote daemon.  PII/profanity passes are off — those aren't
-# reasons to withhold a capture, only genuine secrets are.
-_SECRET_SCRUBBER = Scrubber(ScrubConfig(scrub_pii=False, scrub_profanity=False))
 
 
 class HookAgent:
@@ -58,22 +46,28 @@ class HookAgent:
         is already ending, there is no live user to surface a systemMessage
         to.
         """
-        cwd = HookAgent._as_dir(payload.get("cwd"))
+        trace = HookTrace("post-session-end")
+        cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            logger.debug("session-end: missing or relative cwd, skipping")
+            trace.skip("cwd")
             return {}
-        if not load_hook_config(cwd).session_end:
-            logger.debug("session-end: disabled by config")
+        on = load_hook_config(cwd).session_end
+        trace.mark_config(on=on)
+        if not on:
+            trace.skip("config")
             return {}
-        transcript_path = HookAgent._as_str(payload.get("transcript_path"))
-        session_id = HookAgent._as_str(payload.get("session_id"))
-        if not transcript_path or not session_id:
-            logger.debug("session-end: missing transcript_path or session_id")
-            return {}
-        tp = HookAgent._resolve_jsonl(transcript_path, label="session-end")
+        transcript_path = HookPayload.as_str(payload.get("transcript_path"))
+        session_id = HookPayload.as_str(payload.get("session_id"))
+        tp = (
+            HookPayload.resolve_jsonl(transcript_path, label="session-end")
+            if (transcript_path and session_id)
+            else None
+        )
         if tp is None:
+            trace.mark_payload(ok=False)
+            trace.skip("payload")
             return {}
-
+        trace.mark_payload(ok=True)
         SessionTranscriptCapture(
             cwd=cwd,
             session_id=session_id,
@@ -81,6 +75,7 @@ class HookAgent:
             label="session-end",
             agent_handle=EthosConfig.agent_handle_at(cwd),
         ).capture()
+        trace.capture()
         return {}
 
     @staticmethod
@@ -93,30 +88,72 @@ class HookAgent:
         ``ScrubbedIngestJob`` choke point, so no client-side scrub is needed
         here.
         """
-        cwd = HookAgent._as_dir(payload.get("cwd"))
-        if cwd and not load_hook_config(cwd).web_search:
-            logger.debug("post-web-search: disabled by config")
-            return {}
+        trace = HookTrace("post-web-search")
+        cwd = HookPayload.as_dir(payload.get("cwd"))
+        if cwd:
+            on = load_hook_config(cwd).web_search
+            trace.mark_config(on=on)
+            if not on:
+                trace.skip("config")
+                return {}
 
+        HookAgent._debug_search_shape(payload)
         parsed = WebSearchPayload(payload)
         digest = parsed.digest
         if digest is None:
-            logger.debug("post-web-search: no result digest in payload, skipping")
+            trace.mark_payload(ok=False)
+            HookAgent._warn_no_search_digest(payload)
+            trace.skip("no-digest")
             return {}
+        trace.mark_payload(ok=True)
 
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
-        doc_name = f"search: {parsed.query or '(no query)'}"
         DaemonCaptureSender().send_capture(
             CaptureIngestRequest(
                 content=digest,
                 cwd=cwd,
-                document_name=doc_name,
+                document_name=HookAgent._search_doc_name(parsed.query),
                 format_hint="markdown",
             ),
             unreachable_log=_WEB_SEARCH_UNREACHABLE,
         )
+        trace.capture()
         return {}
+
+    @staticmethod
+    def _debug_search_shape(payload: dict[str, object]) -> None:
+        """Emit the DEBUG payload-shape probe used to diagnose G5 drift.
+
+        Keys + tool_response type only — never contents, which may hold
+        secrets.  The WARN in the caller fires on every silent skip, so
+        the pair together makes the shape visible at production INFO.
+        """
+        logger.debug(
+            "post-web-search: payload keys=%s tool_response_type=%s",
+            sorted(payload.keys()),
+            type(payload.get("tool_response")).__name__,
+        )
+
+    @staticmethod
+    def _warn_no_search_digest(payload: dict[str, object]) -> None:
+        """Emit the WARN line when WebSearchPayload yields no digest.
+
+        Upgraded from DEBUG so a silent-skip is visible at production
+        INFO — the operator's "proof they are happening" gap.
+        """
+        parsed = WebSearchPayload(payload)
+        logger.warning(
+            "post-web-search: no result digest in payload (query=%r, "
+            "tool_response type=%s); skipping capture",
+            parsed.query,
+            type(payload.get("tool_response")).__name__,
+        )
+
+    @staticmethod
+    def _search_doc_name(query: str | None) -> str:
+        """Return the ``search: <query>`` document name, or a stable placeholder."""
+        return f"search: {query or '(no query)'}"
 
     @staticmethod
     def post_read(payload: dict[str, object]) -> dict[str, object]:
@@ -130,37 +167,50 @@ class HookAgent:
         both the content and the document name (a raw filesystem path)
         server-side.
         """
-        cwd = HookAgent._as_dir(payload.get("cwd"))
-        if not cwd or not load_hook_config(cwd).read:
-            logger.debug("post-read: disabled by config or missing cwd")
+        trace = HookTrace("post-read")
+        cwd = HookPayload.as_dir(payload.get("cwd"))
+        if not cwd:
+            trace.skip("cwd")
             return {}
+        on = load_hook_config(cwd).read
+        trace.mark_config(on=on)
+        if not on:
+            trace.skip("config")
+            return {}
+        outcome = HookAgent._filter_and_send_read(payload)
+        trace.mark_payload(ok=outcome != "payload")
+        if outcome == "captured":
+            trace.capture()
+        else:
+            trace.skip(outcome)
+        return {}
 
+    @staticmethod
+    def _filter_and_send_read(payload: dict[str, object]) -> str:
+        """Apply the four admission checks and send on pass; return the outcome.
+
+        Return values classify the outcome for the trace: ``"captured"``,
+        ``"payload"`` (missing/empty inputs), ``"filter"`` (rejected by an
+        admission check), ``"size"`` (byte cap exceeded), or ``"secret"``
+        (client-side secret pattern hit).
+        """
+        cwd = HookPayload.as_dir(payload.get("cwd"))
         parsed = ReadPayload(payload)
         file_path = parsed.file_path
-        if not file_path:
-            logger.debug("post-read: no file_path in payload, skipping")
-            return {}
-
         content = parsed.content
-        if not content:
-            logger.debug("post-read: no content in payload, skipping")
-            return {}
+        if not file_path or not content:
+            return "payload"
 
         # Fast checks (in-tree/denylist/extension) run before the content is
         # ever encoded — most rejections never need the byte length at all.
-        filter_ = ReadCaptureFilter(resolver=HookAgent._collection_resolver_for(cwd))
+        filter_ = ReadCaptureFilter(resolver=ReadAdmission.collection_resolver_for(cwd))
         if not filter_.should_capture(file_path, cwd=cwd):
-            logger.debug("post-read: filter rejected %s", file_path)
-            return {}
-        # avoid UnicodeEncodeError on lone surrogates; handler must fail open
+            return "filter"
         content_bytes = len(content.encode("utf-8", errors="replace"))
         if not filter_.should_capture(file_path, cwd=cwd, content_bytes=content_bytes):
-            logger.debug("post-read: content too large for %s", file_path)
-            return {}
-
-        if HookAgent._content_has_secret(content):
-            logger.debug("post-read: secret pattern matched, skipping %s", file_path)
-            return {}
+            return "size"
+        if ReadAdmission.content_has_secret(content):
+            return "secret"
 
         from quarry.api import CaptureIngestRequest  # noqa: PLC0415
 
@@ -173,7 +223,7 @@ class HookAgent:
             ),
             unreachable_log=_READ_UNREACHABLE,
         )
-        return {}
+        return "captured"
 
     @staticmethod
     def subagent_stop(payload: dict[str, object]) -> dict[str, object]:
@@ -191,26 +241,30 @@ class HookAgent:
         Identity carrier is ``agent_id``, not ``session_id`` (which is the
         parent's).
         """
-        cwd = HookAgent._as_dir(payload.get("cwd"))
+        trace = HookTrace("post-subagent-stop")
+        cwd = HookPayload.as_dir(payload.get("cwd"))
         if not cwd:
-            logger.debug("subagent-stop: missing or relative cwd, skipping")
+            trace.skip("cwd")
             return {}
-        if not load_hook_config(cwd).subagent_stop:
-            logger.debug("subagent-stop: disabled by config")
+        on = load_hook_config(cwd).subagent_stop
+        trace.mark_config(on=on)
+        if not on:
+            trace.skip("config")
             return {}
 
-        agent_transcript_path = HookAgent._as_str(payload.get("agent_transcript_path"))
-        agent_id = HookAgent._as_str(payload.get("agent_id"))
-        if not agent_transcript_path or not agent_id:
-            logger.debug(
-                "subagent-stop: missing agent_transcript_path or agent_id, skipping"
-            )
-            return {}
-        tp = HookAgent._resolve_jsonl(agent_transcript_path, label="subagent-stop")
+        transcript_path = HookPayload.as_str(payload.get("agent_transcript_path"))
+        agent_id = HookPayload.as_str(payload.get("agent_id"))
+        tp = (
+            HookPayload.resolve_jsonl(transcript_path, label="subagent-stop")
+            if (transcript_path and agent_id)
+            else None
+        )
         if tp is None:
+            trace.mark_payload(ok=False)
+            trace.skip("payload")
             return {}
-
-        agent_type = HookAgent._as_str(payload.get("agent_type"))
+        trace.mark_payload(ok=True)
+        agent_type = HookPayload.as_str(payload.get("agent_type"))
         SessionTranscriptCapture(
             cwd=cwd,
             session_id=agent_id,
@@ -218,75 +272,5 @@ class HookAgent:
             label="subagent-stop",
             agent_handle=agent_type or EthosConfig.agent_handle_at(cwd),
         ).capture()
+        trace.capture()
         return {}
-
-    @staticmethod
-    def _content_has_secret(content: str) -> bool:
-        """Return whether *content* matches a secret pattern (PEM/env/PAT/etc).
-
-        Defense-in-depth ahead of the daemon's own scrub — catches an obvious
-        secret before it leaves the machine, which matters when ``QUARRY_URL``
-        points at a remote daemon.
-        """
-        _, redactions = _SECRET_SCRUBBER.scrub(content)
-        return bool(redactions)
-
-    @staticmethod
-    def _as_str(value: object) -> str:
-        """Return *value* when it is a ``str``, else ``""`` (treated as absent)."""
-        return value if isinstance(value, str) else ""
-
-    @staticmethod
-    def _as_dir(value: object) -> str:
-        """Return *value* as a ``str`` naming an ABSOLUTE path, else ``""``."""
-        cwd = HookAgent._as_str(value)
-        return cwd if cwd and Path(cwd).is_absolute() else ""
-
-    @staticmethod
-    def _resolve_jsonl(path_str: str, *, label: str) -> Path | None:
-        """Resolve *path_str* to a JSONL transcript path, or ``None`` on skip.
-
-        Skip conditions match ``_precompact_target``'s contract: an OS-invalid
-        path or a non-``.jsonl`` suffix returns ``None`` per the no-op
-        contract, never crashes the hook.
-        """
-        try:
-            resolved = Path(path_str).resolve()
-        except (OSError, ValueError):
-            logger.warning("%s: unresolvable transcript_path", label, exc_info=True)
-            return None
-        if resolved.suffix != ".jsonl":
-            logger.warning("%s: unexpected suffix %s", label, resolved.suffix)
-            return None
-        return resolved
-
-    @staticmethod
-    def _collection_resolver_for(cwd: str) -> CollectionResolver | None:
-        """Open a CollectionResolver over the settings registry, or ``None`` on failure.
-
-        Read fires often; a settings-load failure must never crash the
-        handler.  ``None`` is the documented "no in-tree exclusion possible"
-        contract — :class:`ReadCaptureFilter` treats it as "resolver
-        unavailable" and skips the first check while running the remaining
-        three.
-        """
-        del cwd  # resolver is settings-scoped; cwd flows to should_capture below
-        try:
-            settings = HookAgent._resolve_settings()
-        except (OSError, ValueError):
-            return None
-        try:
-            from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-            from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
-            conn = SyncRegistry(settings.registry_path)
-        except (OSError, ValueError):
-            return None
-        return CollectionResolver(conn)
-
-    @staticmethod
-    def _resolve_settings() -> Settings:
-        """Load settings resolved for the default database."""
-        from quarry.config import Settings  # noqa: PLC0415
-
-        return Settings.load().resolve_db_paths(None)
