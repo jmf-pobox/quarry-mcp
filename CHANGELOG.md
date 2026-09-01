@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-09-01
+
 ### Added
 
 - `tool`: G6 — per-hook-invocation breadcrumb line in `quarry.log`. Every
