@@ -14,7 +14,7 @@ The arguments are the name for this memory, not a filename.
 
 Ask the user for the content to remember (or accept it from the conversation context if already provided).
 
-Call `mcp__plugin_quarry_quarry__remember` with:
+Call `mcp__quarry__remember` with:
 
 - `content` set to the text content
 - `document_name` set to the arguments (the memory's name)
