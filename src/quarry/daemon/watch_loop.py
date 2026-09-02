@@ -149,6 +149,13 @@ class WatchLoop:
             self._safety_task = self._loop.create_task(
                 self._reconciler.run_safety_loop()
             )
+        else:
+            logger.warning(
+                "watch: watch_safety_scan_s=0 disables the periodic reconcile "
+                "backstop; a missed/shed live-watch event, a kernel inotify "
+                "queue overflow, or a watch degraded to scan-only will go "
+                "undetected until the next daemon restart"
+            )
 
     async def stop(self) -> None:
         """Tear down the observer + roster before the queue drain (any watch state)."""

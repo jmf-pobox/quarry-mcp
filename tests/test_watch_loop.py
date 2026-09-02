@@ -11,6 +11,7 @@ would hand to the real DES-042 queue.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,6 +178,7 @@ def _build(
     bulk: int = 5,
     enabled: bool = True,
     optimize_interval: float = 30.0,
+    safety_scan_s: float = 0.0,  # drive _reconcile directly; no background timer
 ) -> tuple[DaemonContext, Path]:
     """Return a fake daemon context and the resolved watched root for 'col'."""
     data = tmp_path / "data"
@@ -191,7 +193,7 @@ def _build(
         watch_debounce_s=0.03,
         watch_max_delay_s=0.3,
         watch_bulk_threshold=bulk,
-        watch_safety_scan_s=0.0,  # drive _reconcile directly; no background timer
+        watch_safety_scan_s=safety_scan_s,
         watch_optimize_min_interval_s=optimize_interval,
     )
     _register(settings, watched.resolve(), "col")
@@ -231,6 +233,47 @@ def test_start_submits_initial_scan_and_finalize_per_collection(tmp_path: Path) 
         await loop.stop()
 
     asyncio.run(_run())
+
+
+def test_start_warns_when_the_safety_scan_backstop_is_disabled(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``watch_safety_scan_s=0`` removes the only backstop for a missed
+    live-watch event -- start() must log that loudly, not just document it
+    in a comment on the settings field.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, safety_scan_s=0.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        with caplog.at_level(logging.WARNING):
+            await loop.start()
+        await loop.stop()
+
+    asyncio.run(_run())
+    assert any("watch_safety_scan_s=0" in record.message for record in caplog.records)
+
+
+def test_start_does_not_warn_when_the_safety_scan_backstop_is_enabled(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A positive ``watch_safety_scan_s`` runs the backstop silently."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, safety_scan_s=300.0)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        with caplog.at_level(logging.WARNING):
+            await loop.start()
+        await loop.stop()
+
+    asyncio.run(_run())
+    assert not any(
+        "watch_safety_scan_s=0" in record.message for record in caplog.records
+    )
 
 
 def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
