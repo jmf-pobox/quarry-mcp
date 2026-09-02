@@ -97,13 +97,6 @@ _EVENT_CASES: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "quarry-ridg: _hook_entry.main never configures LoggingConfig, so "
-        "quarry.log is never opened and HookTrace breadcrumbs are dropped."
-    ),
-    strict=True,
-)
 @pytest.mark.parametrize(
     ("event", "payload_fixture", "expected_substr", "expectation_note"),
     _EVENT_CASES,
@@ -135,6 +128,5 @@ def test_quarry_hook_writes_expected_log_line(
         f"  log_exists={run.log_path.exists()}\n"
         f"  log_line_count={len(run.log_lines)}\n"
         f"  exit_code={run.exit_code}\n"
-        f"  stderr[:400]={run.stderr[:400]!r}\n"
-        "  remove the @pytest.mark.xfail marker when this passes"
+        f"  stderr[:400]={run.stderr[:400]!r}"
     )

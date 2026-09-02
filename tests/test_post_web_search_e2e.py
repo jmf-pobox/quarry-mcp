@@ -126,13 +126,6 @@ def _hits(payload: object) -> list[dict[str, object]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "quarry-871u: the live daemon receives no capture from "
-        "quarry-hook post-web-search for known payload shapes."
-    ),
-    strict=True,
-)
 @pytest.mark.parametrize(
     ("payload_fixture", "query_substr", "doc_name_substr"),
     _KNOWN_SHAPE_CASES,
@@ -170,19 +163,10 @@ def test_post_web_search_lands_in_captures(
         f"  expected document name to contain: {doc_name_substr!r}\n"
         f"  hook exit_code={run.exit_code}\n"
         f"  hook stderr[:200]={run.stderr[:200]!r}\n"
-        f"  log lines written: {len(run.log_lines)}\n"
-        "  remove the @pytest.mark.xfail marker when this passes"
+        f"  log lines written: {len(run.log_lines)}"
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "quarry-871u + quarry-ridg: unknown-shape WebSearch payload is not "
-        "captured and its shape-metadata WARN is dropped because logging is "
-        "never configured at the quarry-hook entry point."
-    ),
-    strict=True,
-)
 def test_unknown_shape_logs_warn_with_metadata(
     ephemeral_daemon: EphemeralDaemon,
     hook_subprocess: HookInvoker,
@@ -215,14 +199,12 @@ def test_unknown_shape_logs_warn_with_metadata(
         "'tool_response type=' — the operator's only diagnostic that an "
         "unknown-shape payload arrived and was skipped.\n"
         f"  log_path={run.log_path}\n"
-        f"  log_line_count={len(run.log_lines)}\n"
-        "  remove the @pytest.mark.xfail marker when this passes"
+        f"  log_line_count={len(run.log_lines)}"
     )
     joined = "\n".join(warn_lines)
     assert "query_present=" in joined and "query_len=" in joined, (
         f"{_QUARRY_871U_SUMMARY}\n"
         "  WARN line missing the shape-metadata fields "
         "(query_present / query_len).\n"
-        f"  lines={warn_lines}\n"
-        "  remove the @pytest.mark.xfail marker when this passes"
+        f"  lines={warn_lines}"
     )
