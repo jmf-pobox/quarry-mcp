@@ -20,9 +20,11 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, final
 
 from quarry._frontmatter import Frontmatter
+from quarry._hook_trace import HookTrace
+from quarry.logging_config import LoggingConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -157,8 +159,18 @@ def read_hook_stdin() -> str:
 
 
 def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
-    """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open."""
+    """Read stdin JSON, call *handler*, write stdout JSON.  Fail-open.
+
+    Installs :class:`LoggingConfig` on entry so every handler's INFO-level
+    breadcrumb (``quarry.hooks: <event>: entered ...``) actually lands in
+    ``$QUARRY_LOG_DIR/quarry.log``.  The ``quarry-hook`` entry point never
+    passes through the CLI's ``main`` — without this call the root logger has
+    no file handler and every ``HookTrace`` line is discarded by
+    :data:`logging.lastResort`, leaving the operator unable to answer
+    "did my hook run?" from the file.
+    """
     try:
+        LoggingConfig.configure(stderr_level="WARNING")
         raw = read_hook_stdin()
         payload: dict[str, object] = json.loads(raw) if raw.strip() else {}
         result = handler(payload)
@@ -172,65 +184,85 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
 # ── Session setup (plugin bootstrap) ─────────────────────────────────
 
 # Commands removed or renamed — add old filenames here to auto-retire.
-_RETIRED_COMMANDS: list[str] = ["use", "use-dev"]
+_RETIRED_COMMANDS: tuple[str, ...] = ("use", "use-dev")
 
 
-def _read_plugin_name(plugin_root: Path) -> str:
-    """Read the plugin name from ``.claude-plugin/plugin.json``."""
-    plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
-    with plugin_json.open() as f:
-        data = json.load(f)
-    name: str = data["name"]
-    return name
+@final
+class _SessionSetup:
+    """Deploy plugin commands and allow-list its MCP + Skill permissions.
 
-
-def _retire_old_commands(commands_dir: Path) -> list[str]:
-    """Remove commands listed in ``_RETIRED_COMMANDS`` from the user's directory."""
-    actions: list[str] = []
-    for old_name in _RETIRED_COMMANDS:
-        dest = commands_dir / f"{old_name}.md"
-        if dest.is_file():
-            dest.unlink()
-            actions.append(f"Retired /{old_name}")
-    return actions
-
-
-def _should_deploy(name: str, *, is_dev: bool) -> bool:
-    """Return whether a command file should be deployed for this plugin variant."""
-    if is_dev:
-        return name.endswith("-dev.md")
-    return not name.endswith("-dev.md")
-
-
-def _deploy_commands(
-    plugin_root: Path,
-    plugin_name: str,
-    commands_dir: Path,
-) -> list[str]:
-    """Deploy or update slash commands from the plugin's commands/ directory.
-
-    Dev plugins (name ends with ``-dev``) only deploy ``*-dev.md`` commands;
-    prod plugins skip ``*-dev.md`` files.
-
-    Returns a list of human-readable action strings.
+    Owns the vocabulary the former free helpers shared as parameters
+    (``plugin_root``, ``plugin_name``, ``commands_dir``, ``settings_path``).
+    Constructed by :meth:`open` after a successful plugin-name read; call
+    :meth:`dispatch` to run the bootstrap and collect human-readable actions.
     """
-    source_dir = plugin_root / "commands"
-    if not source_dir.is_dir():
-        return []
 
-    actions = _retire_old_commands(commands_dir)
-    is_dev = plugin_name.endswith("-dev")
-    deployed: list[str] = []
-    updated: list[str] = []
+    __slots__ = (
+        "_commands_dir",
+        "_is_dev",
+        "_plugin_name",
+        "_plugin_root",
+        "_settings_path",
+    )
 
-    for cmd_file in sorted(source_dir.glob("*.md")):
-        if not _should_deploy(cmd_file.name, is_dev=is_dev):
-            continue
+    _commands_dir: Path
+    _is_dev: bool
+    _plugin_name: str
+    _plugin_root: Path
+    _settings_path: Path
 
-        commands_dir.mkdir(parents=True, exist_ok=True)
-        dest = commands_dir / cmd_file.name
+    def __new__(cls, plugin_root: Path, plugin_name: str) -> Self:
+        self = super().__new__(cls)
+        self._plugin_root = plugin_root
+        self._plugin_name = plugin_name
+        self._is_dev = plugin_name.endswith("-dev")
+        self._commands_dir = Path.home() / ".claude" / "commands"
+        self._settings_path = Path.home() / ".claude" / "settings.json"
+        return self
+
+    @classmethod
+    def open(cls, plugin_root: Path) -> Self | None:
+        """Read the plugin name and construct; return ``None`` on failure."""
+        try:
+            plugin_name = cls._read_plugin_name(plugin_root)
+        except (OSError, KeyError, ValueError):
+            return None
+        return cls(plugin_root, plugin_name)
+
+    def dispatch(self) -> list[str]:
+        """Deploy commands and allow-list permissions; return action lines."""
+        actions = self._deploy_commands()
+        if action := self._allow_mcp_tools():
+            actions.append(action)
+        if action := self._allow_skill_permissions():
+            actions.append(action)
+        return actions
+
+    def _deploy_commands(self) -> list[str]:
+        """Deploy or update slash commands from the plugin's ``commands/``."""
+        source_dir = self._plugin_root / "commands"
+        if not source_dir.is_dir():
+            return []
+        actions = self._retire_old_commands()
+        deployed: list[str] = []
+        updated: list[str] = []
+        for cmd_file in sorted(source_dir.glob("*.md")):
+            if not self._should_deploy(cmd_file.name):
+                continue
+            self._install_command(cmd_file, deployed=deployed, updated=updated)
+        if deployed:
+            actions.append(f"Deployed commands: {' '.join(deployed)}")
+        if updated:
+            actions.append(f"Updated commands: {' '.join(updated)}")
+        return actions
+
+    def _install_command(
+        self, cmd_file: Path, *, deployed: list[str], updated: list[str]
+    ) -> None:
+        """Copy *cmd_file* into ``commands_dir``; record slug on the matching list."""
+        self._commands_dir.mkdir(parents=True, exist_ok=True)
+        dest = self._commands_dir / cmd_file.name
         slug = f"/{cmd_file.name.removesuffix('.md')}"
-
         if not dest.is_file():
             shutil.copy2(cmd_file, dest)
             deployed.append(slug)
@@ -238,174 +270,143 @@ def _deploy_commands(
             shutil.copy2(cmd_file, dest)
             updated.append(slug)
 
-    if deployed:
-        actions.append(f"Deployed commands: {' '.join(deployed)}")
-    if updated:
-        actions.append(f"Updated commands: {' '.join(updated)}")
+    def _retire_old_commands(self) -> list[str]:
+        """Remove commands listed in :data:`_RETIRED_COMMANDS`."""
+        actions: list[str] = []
+        for old_name in _RETIRED_COMMANDS:
+            dest = self._commands_dir / f"{old_name}.md"
+            if dest.is_file():
+                dest.unlink()
+                actions.append(f"Retired /{old_name}")
+        return actions
 
-    return actions
+    def _should_deploy(self, name: str) -> bool:
+        """Return whether a command file matches this variant (dev vs prod)."""
+        if self._is_dev:
+            return name.endswith("-dev.md")
+        return not name.endswith("-dev.md")
 
+    def _list_deployable_commands(self) -> list[str]:
+        """Return command stems from ``commands/*.md`` for this variant."""
+        source_dir = self._plugin_root / "commands"
+        if not source_dir.is_dir():
+            return []
+        return [
+            cmd_file.stem
+            for cmd_file in sorted(source_dir.glob("*.md"))
+            if self._should_deploy(cmd_file.name)
+        ]
 
-def _allow_mcp_tools(plugin_name: str, settings_path: Path) -> str | None:
-    """Add the plugin's MCP tool pattern to ``permissions.allow`` if missing.
-
-    Returns an action string if the permission was added, None otherwise.
-    """
-    if not settings_path.is_file():
-        return None
-
-    try:
-        text = settings_path.read_text()
-        settings = json.loads(text)
-    except (OSError, ValueError):
-        return None
-
-    tool_pattern = f"mcp__plugin_{plugin_name}_quarry__*"
-    allow_list = _ensure_allow_list(settings)
-
-    # Check if any existing entry already covers this plugin's tools.
-    tool_prefix = f"mcp__plugin_{plugin_name}_quarry__"
-    for entry in allow_list:
-        if isinstance(entry, str) and tool_prefix in entry:
+    def _allow_mcp_tools(self) -> str | None:
+        """Add this plugin's MCP tool pattern to ``permissions.allow``."""
+        settings = self._load_settings()
+        if settings is None:
             return None
+        tool_prefix = f"mcp__plugin_{self._plugin_name}_quarry__"
+        allow_list = self._ensure_allow_list(settings)
+        for entry in allow_list:
+            if isinstance(entry, str) and tool_prefix in entry:
+                return None
+        allow_list.append(f"{tool_prefix}*")
+        if not self._write_settings(settings):
+            return None
+        return f"Auto-allowed {self._plugin_name} MCP tools in permissions"
 
-    allow_list.append(tool_pattern)
-    tmp_path = settings_path.with_suffix(".json.tmp")
-    try:
-        tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
-        tmp_path.replace(settings_path)
-    except OSError:
-        tmp_path.unlink(missing_ok=True)
-        return None
+    def _allow_skill_permissions(self) -> str | None:
+        """Add ``Skill(<cmd>)`` rules for each deployable command."""
+        command_names = self._list_deployable_commands()
+        if not command_names:
+            return None
+        settings = self._load_settings()
+        if settings is None:
+            return None
+        allow_list = self._ensure_allow_list(settings)
+        existing = {
+            entry
+            for entry in allow_list
+            if isinstance(entry, str) and entry.startswith("Skill(")
+        }
+        added = [name for name in command_names if f"Skill({name})" not in existing]
+        if not added:
+            return None
+        allow_list.extend(f"Skill({name})" for name in added)
+        if not self._write_settings(settings):
+            return None
+        return f"Auto-allowed Skill() permissions for: {', '.join(added)}"
 
-    return f"Auto-allowed {plugin_name} MCP tools in permissions"
+    def _load_settings(self) -> dict[str, object] | None:
+        """Return parsed ``settings.json``, or ``None`` when unavailable."""
+        if not self._settings_path.is_file():
+            return None
+        try:
+            data: object = json.loads(self._settings_path.read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
+    def _write_settings(self, settings: dict[str, object]) -> bool:
+        """Atomically write settings back; return whether the write succeeded."""
+        tmp_path = self._settings_path.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
+            tmp_path.replace(self._settings_path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            return False
+        return True
 
-def _list_deployable_commands(plugin_root: Path, plugin_name: str) -> list[str]:
-    """Return command names from ``commands/*.md`` for this plugin variant."""
-    commands_dir = plugin_root / "commands"
-    if not commands_dir.is_dir():
-        return []
-    is_dev = plugin_name.endswith("-dev")
-    names: list[str] = []
-    for cmd_file in sorted(commands_dir.glob("*.md")):
-        if not _should_deploy(cmd_file.name, is_dev=is_dev):
-            continue
-        names.append(cmd_file.stem)
-    return names
+    @staticmethod
+    def _read_plugin_name(plugin_root: Path) -> str:
+        """Read the plugin name from ``.claude-plugin/plugin.json``."""
+        plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
+        with plugin_json.open() as f:
+            data = json.load(f)
+        name: str = data["name"]
+        return name
 
-
-def _allow_skill_permissions(
-    plugin_root: Path, plugin_name: str, settings_path: Path
-) -> str | None:
-    """Add ``Skill(<cmd>)`` rules for each deployed command.
-
-    Returns an action string if any permissions were added, None otherwise.
-    """
-    command_names = _list_deployable_commands(plugin_root, plugin_name)
-    if not command_names:
-        return None
-
-    if not settings_path.is_file():
-        return None
-
-    try:
-        text = settings_path.read_text()
-        settings = json.loads(text)
-    except (OSError, ValueError):
-        return None
-
-    allow_list = _ensure_allow_list(settings)
-    existing_skills = {
-        entry
-        for entry in allow_list
-        if isinstance(entry, str) and entry.startswith("Skill(")
-    }
-
-    added: list[str] = []
-    for name in command_names:
-        rule = f"Skill({name})"
-        if rule not in existing_skills:
-            allow_list.append(rule)
-            added.append(name)
-
-    if not added:
-        return None
-
-    return _write_settings(settings, settings_path, added)
-
-
-def _ensure_allow_list(settings: dict[str, object]) -> list[object]:
-    """Return the ``permissions.allow`` list, creating it if absent."""
-    permissions = settings.get("permissions")
-    if not isinstance(permissions, dict):
-        permissions = {}
-        settings["permissions"] = permissions
-    allow_list = permissions.get("allow")
-    if not isinstance(allow_list, list):
-        allow_list = []
-        permissions["allow"] = allow_list
-    return allow_list
-
-
-def _write_settings(
-    settings: dict[str, object], path: Path, added: list[str]
-) -> str | None:
-    """Atomically write settings and return action string."""
-    tmp_path = path.with_suffix(".json.tmp")
-    try:
-        tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
-        tmp_path.replace(path)
-    except OSError:
-        tmp_path.unlink(missing_ok=True)
-        return None
-    return f"Auto-allowed Skill() permissions for: {', '.join(added)}"
+    @staticmethod
+    def _ensure_allow_list(settings: dict[str, object]) -> list[object]:
+        """Return ``permissions.allow``, creating the nested containers if absent."""
+        permissions = settings.get("permissions")
+        if not isinstance(permissions, dict):
+            permissions = {}
+            settings["permissions"] = permissions
+        allow_list = permissions.get("allow")
+        if not isinstance(allow_list, list):
+            allow_list = []
+            permissions["allow"] = allow_list
+        return allow_list
 
 
 def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     """Handle session-setup hook: deploy commands and allow MCP tools.
 
-    This is the Python replacement for the former ``session-start.sh``
-    shell script.  It reads the plugin root from ``CLAUDE_PLUGIN_ROOT``,
-    deploys slash commands to ``~/.claude/commands/``, and ensures the
-    plugin's MCP tools are in the user's ``settings.json`` allow list.
-
-    Returns ``additionalContext`` when actions were taken.
+    Emits one INFO breadcrumb (``quarry.hooks: session-setup: entered ...``)
+    on every path — no-plugin-root, unreadable manifest, nothing-to-do, or a
+    real capture — so the operator can see the hook fired from ``quarry.log``
+    (G6).  Setup uses env vars (``CLAUDE_PLUGIN_ROOT``), not payload fields.
     """
-    _ = payload  # Signature required by run_hook; setup uses env vars.
+    del payload
+    trace = HookTrace("session-setup")
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     if not plugin_root_env:
-        logger.debug("session-setup: CLAUDE_PLUGIN_ROOT not set, skipping")
+        trace.skip("no-CLAUDE_PLUGIN_ROOT")
         return {}
-
     plugin_root = Path(plugin_root_env)
     if not plugin_root.is_dir():
-        logger.debug("session-setup: plugin root not a directory: %s", plugin_root)
+        trace.skip("not-a-dir")
         return {}
-
-    try:
-        plugin_name = _read_plugin_name(plugin_root)
-    except (OSError, KeyError, ValueError):
-        logger.debug("session-setup: could not read plugin name")
+    setup = _SessionSetup.open(plugin_root)
+    if setup is None:
+        trace.skip("plugin-name-unreadable")
         return {}
-
-    actions: list[str] = []
-
-    commands_dir = Path.home() / ".claude" / "commands"
-    actions.extend(_deploy_commands(plugin_root, plugin_name, commands_dir))
-
-    settings_path = Path.home() / ".claude" / "settings.json"
-    mcp_action = _allow_mcp_tools(plugin_name, settings_path)
-    if mcp_action:
-        actions.append(mcp_action)
-
-    skill_action = _allow_skill_permissions(plugin_root, plugin_name, settings_path)
-    if skill_action:
-        actions.append(skill_action)
-
+    trace.mark_config(on=True)
+    trace.mark_payload(ok=True)
+    actions = setup.dispatch()
     if not actions:
+        trace.skip("nothing-to-do")
         return {}
-
+    trace.capture(f"actions={len(actions)}")
     msg = "Quarry plugin first-run setup complete. " + " ".join(
         f"{a}." for a in actions
     )
