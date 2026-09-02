@@ -9,9 +9,13 @@ tests pin the class's own contract directly so it stays correct even if
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from quarry.ignore_spec import _DEFAULT_IGNORE_PATTERNS, IgnoreRules
 from quarry.scratch_paths import ScratchGuard
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestRootSpec:
@@ -38,6 +42,35 @@ class TestRootSpec:
         spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()
         assert spec.match_file("debug.log")
         assert not spec.match_file("# comment")
+
+    def test_a_malformed_line_is_skipped_not_raised(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A bare '!' is an invalid gitignore pattern (pathspec's
+        GitIgnorePatternError, a ValueError) -- construction must not
+        crash the daemon over one bad line, and every OTHER pattern in the
+        same file must still compile and match (djb/rev-silent finding).
+        """
+        (tmp_path / ".gitignore").write_text("*.log\n!\ndata/\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()  # must not raise
+        assert spec.match_file("debug.log")
+        assert spec.match_file("data/")
+        assert any(
+            "Skipping invalid ignore pattern" in r.message for r in caplog.records
+        )
+
+    def test_a_trailing_bare_backslash_is_skipped_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / ".gitignore").write_text("*.log\ntrailing\\\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()  # must not raise
+        assert spec.match_file("debug.log")
+
+    def test_a_non_utf8_gitignore_is_skipped_not_raised(self, tmp_path: Path) -> None:
+        (tmp_path / ".gitignore").write_bytes(b"\xff\xfe*.log\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()  # must not raise
+        assert not spec.match_file("debug.log")  # the whole file was skipped
+        assert spec.match_file("module.pyc")  # built-in defaults still apply
 
 
 class TestRootSpecCaching:
@@ -78,6 +111,22 @@ class TestLocalSpec:
         assert spec is not None
         assert spec.match_file("scratch.tmp")
         assert not spec.match_file("keep.py")
+
+    def test_a_malformed_nested_gitignore_line_is_skipped_not_raised(
+        self, tmp_path: Path
+    ) -> None:
+        """A bad line in a NESTED .gitignore, compiled lazily by
+        ``local_spec`` on whatever thread first asks for it (the watchdog
+        buffer thread, via ``PrunedInotify._add_watch``), must not raise --
+        that thread has no reader to recover it (djb/rev-silent finding).
+        """
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.tmp\n!\nkeep_out/\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).local_spec(sub)  # must not raise
+        assert spec is not None
+        assert spec.match_file("scratch.tmp")
+        assert spec.match_file("keep_out/")
 
 
 class TestLocalSpecCaching:

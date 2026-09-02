@@ -93,7 +93,7 @@ class IgnoreRules:
         if dirpath not in self._local_spec_cache:
             lines = self._read_ignore_lines(dirpath / ".gitignore")
             self._local_spec_cache[dirpath] = (
-                pathspec.PathSpec.from_lines("gitignore", lines) if lines else None
+                self._compile_lines(lines) if lines else None
             )
         return self._local_spec_cache[dirpath]
 
@@ -158,7 +158,40 @@ class IgnoreRules:
         lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
         for name in (".gitignore", ".quarryignore"):
             lines.extend(self._read_ignore_lines(self._directory / name))
-        return pathspec.PathSpec.from_lines("gitignore", lines)
+        return self._compile_lines(lines)
+
+    @staticmethod
+    def _compile_lines(lines: list[str]) -> IgnoreSpec:
+        """Compile *lines* into a PathSpec, skipping any invalid pattern.
+
+        A malformed gitignore line (a bare ``!``, a trailing unescaped
+        ``\\``) raises ``pathspec``'s ``GitIgnorePatternError`` — a
+        ``ValueError``, not an ``OSError`` — from the pattern factory
+        itself, not from any file I/O :meth:`_read_ignore_lines` already
+        guards.  Left to propagate, this crashes ``IgnoreRules``
+        construction: at daemon-register time
+        (:meth:`~quarry.daemon.fs_watchdog.WatchdogSource.schedule`, whose
+        ``except OSError`` does not catch it) or, worse, on the watchdog
+        buffer thread when a NESTED ``.gitignore`` written mid-session is
+        lazily compiled by :meth:`~quarry.daemon.inotify_prune.
+        PrunedInotify._add_watch` (whose callers, all inherited from
+        vanilla watchdog, also tolerate only ``OSError``) — permanently
+        killing that thread while ``watch_state`` keeps reporting
+        "watched".  Compiling line by line and skipping the bad one
+        (logged, not silent) keeps every OTHER pattern in the file
+        working instead of losing the whole spec, or the whole daemon, to
+        one typo.
+        """
+        factory = pathspec.lookup_pattern("gitignore")
+        patterns: list[pathspec.pattern.Pattern] = []
+        for line in lines:
+            if not line:
+                continue
+            try:
+                patterns.append(factory(line))
+            except ValueError as exc:
+                logger.warning("Skipping invalid ignore pattern %r: %s", line, exc)
+        return pathspec.PathSpec(patterns)
 
     @staticmethod
     def _read_ignore_lines(path: Path) -> list[str]:
@@ -168,7 +201,8 @@ class IgnoreRules:
         to a character device named ``.gitignore`` from blocking ``read_text()``
         forever, while the ``OSError`` guard keeps a raced deletion — present at
         the check, gone at the read — from aborting the whole caller's walk
-        (bug class 1/2).
+        (bug class 1/2).  ``UnicodeDecodeError`` (a non-UTF-8 ignore file) is a
+        ``ValueError``, not an ``OSError`` — caught here for the same reason.
         """
         try:
             if not path.is_file():
@@ -178,4 +212,7 @@ class IgnoreRules:
             return []
         except OSError as exc:
             logger.warning("Skipping unreadable ignore file %s: %s", path, exc)
+            return []
+        except UnicodeDecodeError as exc:
+            logger.warning("Skipping non-UTF-8 ignore file %s: %s", path, exc)
             return []
