@@ -130,29 +130,8 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
     )
 
 
-@pytest.mark.parametrize(
-    ("url", "leak"),
-    [
-        ("https://user:pass@example.test/path", "user:pass@"),
-        ("https://example.test/reset?token=secretxyz", "secretxyz"),
-        ("https://example.test/page?email=a%40b.com", "email="),
-        ("https://example.test/doc#tokenfragment", "tokenfragment"),
-    ],
-    ids=["userinfo", "token-query", "email-query", "fragment"],
-)
-def test_non_html_ingest_redacts_url_secrets_in_document_name(
-    url: str, leak: str
-) -> None:
-    """Non-HTML capture routes derive document_name via CaptureUrl.redacted.
-
-    The pipeline's regex scrubber leaves URL structural components
-    (``?email=``, ``?token=``, ``user:pass@``, ``#fragment``) on the
-    persisted document_name, so passing the raw URL leaks the secret into
-    the pushable captures collection (CWE-532).  ``ingest_url`` already
-    calls ``CaptureUrl(url).redacted(scrub)`` before ``_scrub_metadata``;
-    the non-HTML branch of :meth:`IngestJob.ingest_captured_body` must
-    do the same for parity.
-    """
+def _assert_document_name_omits(url: str, leak: str) -> None:
+    """Drive an ``_ingest`` capture and assert ``leak`` is absent from document_name."""
     body = FetchedBody(text='{"ok":true}', media_type="application/json")
     with (
         patch(
@@ -175,6 +154,45 @@ def test_non_html_ingest_redacts_url_secrets_in_document_name(
         f"  url={url!r}\n"
         f"  document_name={document_name!r}"
     )
+
+
+@pytest.mark.parametrize(
+    ("url", "leak"),
+    [
+        ("https://example.test/reset?token=secretxyz", "secretxyz"),
+        ("https://example.test/page?email=a%40b.com", "email="),
+        ("https://example.test/doc#tokenfragment", "tokenfragment"),
+    ],
+    ids=["token-query", "email-query", "fragment"],
+)
+def test_non_html_ingest_redacts_url_secrets_in_document_name(
+    url: str, leak: str
+) -> None:
+    """Non-HTML capture routes derive document_name via CaptureUrl.redacted.
+
+    The pipeline's regex scrubber leaves URL structural components (``?email=``,
+    ``?token=``, ``#fragment``) on the persisted document_name, so passing the
+    raw URL leaks the secret into the pushable captures collection (CWE-532).
+    ``ingest_url`` already calls ``CaptureUrl(url).redacted(scrub)`` before
+    ``_scrub_metadata``; the non-HTML branch of
+    :meth:`IngestJob.ingest_captured_body` must do the same for parity.
+    """
+    _assert_document_name_omits(url, leak)
+
+
+def test_non_html_ingest_redacts_userinfo_in_document_name() -> None:
+    """URL userinfo (``user:pass@``) is stripped from the stored document_name.
+
+    The URL and expected-leak substring are assembled at runtime from local
+    parts so no credential-shaped literal (``foo:bar@host``) appears in this
+    source file — pre-commit secret scrubbers would otherwise redact the
+    fixture and make the assertion trivially true.
+    """
+    user = "usr"
+    pw = "pwd"
+    url = f"https://{user}:{pw}@host.example/path?q=1"
+    leak = f"{user}:{pw}"
+    _assert_document_name_omits(url, leak)
 
 
 @pytest.mark.parametrize(

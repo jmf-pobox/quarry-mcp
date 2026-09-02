@@ -194,13 +194,13 @@ class IngestJob:
     def fetch_and_route(self, ctx: DaemonContext) -> dict[str, object]:
         """Fetch ``self.source`` and route via :meth:`ingest_captured_body`.
 
-        Shared by :meth:`_ingest` (primary capture) and
-        :meth:`CaptureIngestJob._refetch` (empty-inline fallback) so both
-        paths have identical fetch-failure semantics — the fix landed on the
-        fallback path first (PR #496); this method extends it to the primary.
-        Failure handling lives in :meth:`safe_fetch_body` — the exception
-        text quotes the raw URL and would leak ``?token=`` or ``user:pass@``
-        secrets into the persistent quarry.log (CWE-532).
+        Sole caller is :meth:`_ingest` (the primary scrubbed capture path).
+        :meth:`CaptureIngestJob._refetch` does not route through this method —
+        it calls :meth:`safe_fetch_body` and :meth:`ingest_captured_body`
+        directly, so both paths share fetch-failure and media-type semantics
+        without a mutual call.  Failure handling lives in
+        :meth:`safe_fetch_body` — the exception text quotes the raw URL and
+        would leak query tokens or userinfo credentials (CWE-532).
         """
         body = self.safe_fetch_body(self.source, "ingest: fetch")
         if body is None:
