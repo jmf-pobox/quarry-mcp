@@ -201,6 +201,13 @@ watch (debounced, ~1s) that reacts to changes as they happen, backed by a
 the search index). `quarry sync` triggers an immediate
 one-shot pass on top of that; you don't need to run it after every edit.
 
+The watch honors ignore rules the way git does: `.gitignore` (at every level),
+a root-level `.quarryignore`, and built-in scratch/VCS defaults all prune both
+what gets indexed and which directories consume OS watch resources — a giant
+`node_modules` or `.venv` costs nothing. `quarry list registrations` shows each
+collection's live watch state (`watched`, `degraded`, or `scan-only`); a
+`scan-only` collection still stays current via the periodic sweep.
+
 ## Setup
 
 Quarry works with zero configuration. For environment variables and running
