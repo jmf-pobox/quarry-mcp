@@ -32,6 +32,7 @@ import watchdog.observers.inotify_c as inotify_c
 from watchdog.observers.inotify_c import InotifyConstants
 
 from quarry.daemon.inotify_prune import PrunedDirectoryError, PrunedInotify
+from quarry.sync_discovery import FileDiscovery
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -402,5 +403,101 @@ def test_read_events_renaming_a_pruned_directory_does_not_corrupt_state(
 
         assert old_path not in inst._wd_for_path
         assert inst._wd_for_path[new_path] == _PRUNED_WD
+    finally:
+        _close_inotify(inst)
+
+
+def test_construction_survives_a_malformed_root_gitignore(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """A malformed root .gitignore must not crash PrunedInotify construction
+    (djb/rev-silent finding, daemon-start path) -- ignore_spec.IgnoreRules
+    now compiles line-tolerantly, so this closes at the source rather than
+    needing a try/except wrapper at every construction site.
+    """
+    del fake_kernel
+    (tmp_path / ".gitignore").write_text("*.log\n!\ndata/\n")
+    (tmp_path / "src").mkdir()
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        assert str(tmp_path / "src") in _watched_paths(inst)
+    finally:
+        _close_inotify(inst)
+
+
+def test_initial_walk_survives_a_malformed_nested_gitignore(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """A malformed NESTED .gitignore, compiled lazily while the INITIAL walk
+    decides whether to watch a child directory, must not abort construction
+    -- the exact 'mid-session nested bad .gitignore' scenario (djb/
+    rev-silent), but hit here at construction time rather than via a later
+    live create event.
+    """
+    del fake_kernel
+    sub = tmp_path / "sub"
+    (sub / "child").mkdir(parents=True)
+    (sub / ".gitignore").write_text("*.tmp\n!\nkeep_out/\n")
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        assert str(sub / "child") in _watched_paths(inst)
+    finally:
+        _close_inotify(inst)
+
+
+def test_read_events_survives_a_malformed_nested_gitignore_written_mid_session(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """The exact mid-session crash site (djb/rev-silent finding): a nested
+    .gitignore written AFTER construction, compiled lazily by
+    ``_add_watch``'s live auto-add path when a new child directory arrives
+    -- NOT the initial-walk path :func:`test_initial_walk_survives_a_
+    malformed_nested_gitignore` covers. Without the ignore-spec fix this
+    kills the watchdog buffer thread permanently (no reader recovers a
+    raised exception there) while ``watch_state`` keeps reporting
+    "watched"; ``read_events()`` is the exact call a real buffer thread's
+    run loop makes, so this pins the SAME code path deterministically.
+    """
+    del fake_kernel
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        sub_wd = inst._wd_for_path[os.fsencode(sub)]
+
+        # Mid-session: a bad nested .gitignore lands alongside a live create.
+        (sub / ".gitignore").write_text("*.tmp\n!\nkeep_out/\n")
+        (sub / "child").mkdir()
+
+        name = b"child"
+        mask = InotifyConstants.IN_CREATE | InotifyConstants.IN_ISDIR
+        raw_event = struct.pack("iIII", sub_wd, mask, 0, len(name)) + name
+
+        inst._check_inotify_fd = lambda: True  # skip the real select.poll()
+        with patch.object(os, "read", return_value=raw_event):
+            inst.read_events()  # must not raise
+    finally:
+        _close_inotify(inst)
+
+
+def test_add_watch_fails_open_when_the_ignore_spec_raises_unexpectedly(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """Defense-in-depth beyond the ignore-spec compile fix: if
+    FileDiscovery.is_watchable_dir ever raises for a reason THAT layer's
+    own contract does not cover, _add_watch must fail OPEN (watch it)
+    rather than let the exception kill the watchdog buffer thread
+    permanently while watch_state keeps reporting "watched".
+    """
+    del fake_kernel
+    (tmp_path / "sub").mkdir()
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=False, event_mask=None)
+    try:
+        with patch.object(
+            FileDiscovery, "is_watchable_dir", side_effect=RuntimeError("boom")
+        ):
+            wd = inst._add_watch(os.fsencode(tmp_path / "sub"), 0)
+        assert wd != _PRUNED_WD
+        assert str(tmp_path / "sub") in _watched_paths(inst)
     finally:
         _close_inotify(inst)

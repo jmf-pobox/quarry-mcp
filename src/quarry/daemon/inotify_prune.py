@@ -138,7 +138,7 @@ class PrunedInotify(Inotify):
                 full_path = dirpath / dirname
                 if full_path.is_symlink():
                     continue
-                if not self._discovery.is_watchable_dir(full_path):
+                if not self._is_watchable_or_fail_open(full_path):
                     continue
                 kept.append(dirname)
                 self._try_add_watch(os.fsencode(full_path), mask)
@@ -150,6 +150,14 @@ class PrunedInotify(Inotify):
             self._add_watch(full_path, mask)
         except OSError as exc:
             if exc.errno in {errno.ENOSPC, errno.EMFILE}:
+                # Known and accepted: vanilla Inotify.__init__ has no try/finally
+                # around this call, so a re-raise here leaks the 3 fds it already
+                # opened (the inotify fd, the kill pipe's two ends) -- this
+                # construction attempt is simply abandoned. Bounded: the caller
+                # (WatchdogSource.schedule) catches this as a degraded/unwatched
+                # tree and the daemon's reconciler never retries scheduling a
+                # degraded key, so the leak is at most once per registered tree
+                # per daemon lifetime, not a retry loop.
                 raise
             logger.warning("watch: skipping %s during initial walk: %s", full_path, exc)
 
@@ -189,8 +197,34 @@ class PrunedInotify(Inotify):
         in ``tests/test_inotify_prune.py``.
         """
         decoded = Path(os.fsdecode(path))
-        if decoded != self._root and not self._discovery.is_watchable_dir(decoded):
+        if decoded != self._root and not self._is_watchable_or_fail_open(decoded):
             self._wd_for_path[path] = _PRUNED_WD
             msg = f"directory pruned by the shared ignore spec: {decoded}"
             raise PrunedDirectoryError(msg)
         return super()._add_watch(path, mask)
+
+    def _is_watchable_or_fail_open(self, decoded: Path) -> bool:
+        """Evaluate the ignore spec for *decoded*; treat "cannot tell" as watchable.
+
+        This method runs on the watchdog buffer thread, which has no reader
+        to recover it: an unhandled exception here kills the thread
+        PERMANENTLY while :meth:`~quarry.daemon.watch_loop.WatchLoop.
+        watch_state` keeps reporting "watched" (djb/rev-silent finding). The
+        ignore-spec layer is written to never raise for malformed ignore
+        FILES (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`
+        already skips invalid lines), so this is defense-in-depth against
+        anything that layer's contract does not cover -- a future pathspec
+        release, an unreadable filesystem object under a raced path, etc.
+        Failing OPEN (watch it) is deliberate: an over-broad watch costs a
+        few extra descriptors from the large ``max_user_watches`` budget;
+        losing the buffer thread costs every watch on the whole tree.
+        """
+        try:
+            return self._discovery.is_watchable_dir(decoded)
+        except Exception:
+            logger.exception(
+                "watch: ignore-spec evaluation failed for %s; watching it "
+                "rather than risking the buffer thread",
+                decoded,
+            )
+            return True
