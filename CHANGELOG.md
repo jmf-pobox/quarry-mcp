@@ -16,6 +16,23 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- `index`: the daemon's filesystem watcher scheduled `observer.schedule(root,
+  recursive=True)` on the raw registered root, so inotify allocated a native
+  watch for every directory in the tree — including `.git`, `.venv`,
+  `node_modules`, and every other ignored subtree. On a real workspace this
+  blew the fixed inotify watch budget (206k directories observed vs. a
+  65,536 default limit), and a failed schedule leaked its partially-acquired
+  watches, starving smaller registrations sharing the same daemon
+  (`quarry-0bej`, `quarry-ndrj`). `WatchdogSource.schedule` now schedules one
+  non-recursive watch per directory yielded by `FileDiscovery
+  .iter_watchable_dirs()` — the same pruning seam (`.gitignore` at every
+  level, `.quarryignore`, the built-in scratch defaults, hidden-dir rules)
+  a bulk scan already used, so a live watch and a scan never disagree about
+  what is ignored. A directory created later under a watched tree is walked
+  and scheduled through the identical seam (and dropped from tracking when
+  it disappears); a mid-tree schedule failure (`ENOSPC` or any `OSError`)
+  releases every watch already acquired for that one tree before returning
+  `None`, so a failure on one registration no longer starves the others.
 - `tool`: README and `/ingest` (and `/ingest-dev`) described `ingest`/`quarry
   ingest` as accepting a local file path. It only ever accepts an `http(s)`
   URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the

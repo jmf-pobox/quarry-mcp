@@ -8,29 +8,15 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, final
 
-import pathspec
-
+from quarry.ignore_spec import IgnoreRules
 from quarry.scratch_paths import ScratchGuard
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-logger = logging.getLogger(__name__)
+    from quarry.ignore_spec import IgnoreSpec
 
-# Glob-style ignores the pathspec engine handles.  Scratch/VCS/build/cache
-# *directory names* (``node_modules``, ``.venv``, ``dist``, ``*.egg-info``…) are
-# NOT listed here: :class:`~quarry.scratch_paths.ScratchGuard` prunes them by
-# name in the walk, so keeping them here too would be duplicated bookkeeping.
-_DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
-    "*.pyc",
-    ".DS_Store",
-    # Defense-in-depth for the captures dir.  The walk already prunes every
-    # dot-prefixed directory (``.punt-labs``) before patterns are matched, so
-    # this entry is redundant belt-and-braces — it records the intent that
-    # scrubbed captures (the daemon's <repo>-captures) must never be folded into
-    # the project's MAIN collection by directory sync.
-    ".punt-labs/quarry/captures/",
-]
+logger = logging.getLogger(__name__)
 
 _HASH_CHUNK_SIZE: Final[int] = 1 << 20  # 1 MiB
 
@@ -44,12 +30,14 @@ class FileDiscovery:
         "_excluded",
         "_guard",
         "_root_resolved",
+        "_rules",
         "_walk_complete",
     )
 
     _directory: Path
     _root_resolved: Path | None
     _guard: ScratchGuard
+    _rules: IgnoreRules
     _excluded: bool
     _walk_complete: bool
 
@@ -57,6 +45,7 @@ class FileDiscovery:
         self = super().__new__(cls)
         self._directory = directory
         self._guard = ScratchGuard()
+        self._rules = IgnoreRules(directory, self._guard)
         try:
             self._root_resolved = directory.resolve(strict=True)
         except (OSError, RuntimeError):
@@ -73,10 +62,6 @@ class FileDiscovery:
             logger.debug("Skipping scratch/temp root: %s", self._root_resolved)
         self._walk_complete = True
         return self
-
-    @property
-    def directory(self) -> Path:
-        return self._directory
 
     @property
     def root_available(self) -> bool:
@@ -113,60 +98,107 @@ class FileDiscovery:
         """Recursively find files matching *extensions* under the directory.
 
         Respects ``.gitignore`` (at every level), ``.quarryignore``, the
-        :class:`ScratchGuard` always-skip names (``venv``, ``node_modules``,
-        ``htmlcov``…), and the glob patterns in ``_DEFAULT_IGNORE_PATTERNS``.
-        Skips dotfiles, macOS resource forks (``._*``), and files inside
-        hidden directories (``.Trash``, ``.git``, etc.).
+        :class:`~quarry.scratch_paths.ScratchGuard` always-skip names
+        (``venv``, ``node_modules``, ``htmlcov``…), and the built-in glob
+        defaults (:mod:`quarry.ignore_spec`). Skips dotfiles, macOS resource
+        forks (``._*``), and files inside hidden directories (``.Trash``,
+        ``.git``, etc.).
 
         Symlinks whose target resolves outside the directory are dropped and
         logged as a warning.
 
         Returns absolute paths, sorted for deterministic order.
         """
-        if self._root_resolved is None or self._excluded:
-            return []
-
         self._walk_complete = True
-        root_spec = self.load_ignore_spec()
         result: list[Path] = []
-        for dirpath_str, dirnames, filenames in os.walk(
-            self._directory, onerror=self._note_walk_error
+        for dirpath, filenames, root_spec, local_spec in self._pruned_walk(
+            self._directory
         ):
-            dirpath = Path(dirpath_str)
-            local_spec = (
-                self._read_local_ignore(dirpath) if dirpath != self._directory else None
-            )
-            dirnames[:] = self._keep_dirs(dirpath, dirnames, root_spec, local_spec)
             result.extend(
                 self._keep_files(dirpath, filenames, extensions, root_spec, local_spec)
             )
         return result
 
-    def _keep_dirs(
-        self,
-        dirpath: Path,
-        dirnames: list[str],
-        root_spec: pathspec.PathSpec[pathspec.pattern.Pattern],
-        local_spec: pathspec.PathSpec[pathspec.pattern.Pattern] | None,
-    ) -> list[str]:
-        """Return the child dirs to descend: not hidden, scratch, or ignored."""
-        rel_dir = dirpath.relative_to(self._directory)
-        return sorted(
-            d
-            for d in dirnames
-            if not d.startswith(".")
-            and not self._guard.is_skip_name(d)
-            and not root_spec.match_file(str(rel_dir / d) + "/")
-            and (local_spec is None or not local_spec.match_file(d + "/"))
+    def iter_watchable_dirs(self, start: Path | None = None) -> Iterator[Path]:
+        """Yield every directory under *start* (default: the root) surviving pruning.
+
+        The watch scheduler (:mod:`~quarry.daemon.fs_watchdog`) consumes this
+        to enumerate the directories worth a native per-directory watch
+        handle: the SAME hidden/scratch/``.gitignore``/``.quarryignore`` rules
+        :meth:`discover` applies to a bulk scan, so a live watch and a bulk
+        scan never disagree about what is ignored — one pruning seam, not
+        two.  Directories are yielded in ``os.walk``'s topdown order (a
+        directory always precedes its children), so a caller scheduling
+        parent-before-child never misses a directory that appears mid-walk.
+        *start* lets a caller re-run the SAME ignore-spec context (this
+        instance's root ignore spec, not a freshly reloaded one scoped to
+        *start*) over a subtree — e.g. a directory that appeared after the
+        initial walk.
+        """
+        base = self._directory if start is None else start
+        for dirpath, _filenames, _root_spec, _local_spec in self._pruned_walk(base):
+            yield dirpath
+
+    def is_watchable_dir(self, dirpath: Path) -> bool:
+        """Return whether *dirpath* (a directory under the root) survives pruning.
+
+        Checks *dirpath* against its immediate parent's rules only — the same
+        check :meth:`_pruned_walk` applies when deciding whether to descend
+        into one child during a walk.  A directory whose ancestor was already
+        pruned is unreachable here: the watcher never receives a live create
+        event from inside a subtree it never watched, so a single-level check
+        (not a full ancestor walk) is sufficient — unlike :meth:`is_indexable`,
+        whose :meth:`_nested_ignored` must check every ancestor because a
+        *file* path can name any depth directly.
+        """
+        if self._root_resolved is None or self._excluded:
+            return False
+        try:
+            rel_parent = dirpath.parent.relative_to(self._directory)
+        except ValueError:
+            return False
+        local_spec = self._rules.local_spec(dirpath.parent)
+        return self._rules.keeps_dir(
+            rel_parent, dirpath.name, self._rules.root_spec(), local_spec
         )
+
+    def _pruned_walk(
+        self, start: Path
+    ) -> Iterator[tuple[Path, list[str], IgnoreSpec, IgnoreSpec | None]]:
+        """Walk *start*, pruning ignored directories in place — the ONE walk seam.
+
+        Every consumer of the ignore/pruning rules — :meth:`discover` and
+        :meth:`iter_watchable_dirs` — descends through this single generator,
+        so there is exactly one place that decides which directories a walk
+        enters.  Yields ``(dirpath, filenames, root_spec, local_spec)`` for
+        every directory that survives pruning; ``dirnames`` is mutated in
+        place (the documented ``os.walk`` contract) so a pruned subtree is
+        never entered, regardless of which consumer is walking.  The ONE
+        unresolvable/excluded-root guard both callers rely on lives here too.
+        """
+        if self._root_resolved is None or self._excluded:
+            return
+        root_spec = self._rules.root_spec()
+        for dirpath_str, dirnames, filenames in os.walk(
+            start, onerror=self._note_walk_error
+        ):
+            dirpath = Path(dirpath_str)
+            local_spec = self._rules.local_spec(dirpath)
+            rel_dir = dirpath.relative_to(self._directory)
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if self._rules.keeps_dir(rel_dir, name, root_spec, local_spec)
+            )
+            yield dirpath, filenames, root_spec, local_spec
 
     def _keep_files(
         self,
         dirpath: Path,
         filenames: list[str],
         extensions: frozenset[str],
-        root_spec: pathspec.PathSpec[pathspec.pattern.Pattern],
-        local_spec: pathspec.PathSpec[pathspec.pattern.Pattern] | None,
+        root_spec: IgnoreSpec,
+        local_spec: IgnoreSpec | None,
     ) -> Iterator[Path]:
         """Yield the absolute path of each indexable file directly in *dirpath*."""
         for filename in sorted(filenames):
@@ -208,7 +240,7 @@ class FileDiscovery:
             return False
         if self._guard.skips_below_root(rel):
             return False
-        if self.load_ignore_spec().match_file(str(rel)):
+        if self._rules.root_spec().match_file(str(rel)):
             return False
         return not self._nested_ignored(parts)
 
@@ -230,14 +262,14 @@ class FileDiscovery:
 
         Mirrors :meth:`discover`'s walk: each intermediate directory's own
         ``.gitignore`` governs its direct child (a trailing ``/`` for a
-        subdirectory, none for the final file).  The root is covered by
-        :meth:`load_ignore_spec`, so it is skipped here.
+        subdirectory, none for the final file).  The root is covered by the
+        root ignore spec, so it is skipped here.
         """
         current = self._directory
         last = len(parts) - 1
         for index, segment in enumerate(parts):
             if current != self._directory:
-                local = self._read_local_ignore(current)
+                local = self._rules.local_spec(current)
                 marker = "" if index == last else "/"
                 if local is not None and local.match_file(segment + marker):
                     return True
@@ -278,42 +310,9 @@ class FileDiscovery:
                 h.update(chunk)
         return h.hexdigest()
 
-    def load_ignore_spec(self) -> pathspec.PathSpec[pathspec.pattern.Pattern]:
+    def load_ignore_spec(self) -> IgnoreSpec:
         """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
-        lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
-        for name in (".gitignore", ".quarryignore"):
-            lines.extend(self._read_ignore_lines(self._directory / name))
-        return pathspec.PathSpec.from_lines("gitignore", lines)
-
-    @staticmethod
-    def _read_ignore_lines(path: Path) -> list[str]:
-        """Return an ignore file's lines, or ``[]`` when absent/non-regular/unreadable.
-
-        ``is_file()`` inside the ``try`` (not before it) keeps a FIFO or a symlink
-        to a character device named ``.gitignore`` from blocking ``read_text()``
-        forever, while the ``OSError`` guard keeps a raced deletion — present at
-        the check, gone at the read — from aborting the whole ``discover()`` walk
-        (bug class 1/2).
-        """
-        try:
-            if not path.is_file():
-                return []
-            return path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            return []
-        except OSError as exc:
-            logger.warning("Skipping unreadable ignore file %s: %s", path, exc)
-            return []
-
-    @staticmethod
-    def _read_local_ignore(
-        dirpath: Path,
-    ) -> pathspec.PathSpec[pathspec.pattern.Pattern] | None:
-        """Read ``.gitignore`` from *dirpath*, returning a PathSpec or None."""
-        lines = FileDiscovery._read_ignore_lines(dirpath / ".gitignore")
-        if not lines:
-            return None
-        return pathspec.PathSpec.from_lines("gitignore", lines)
+        return self._rules.root_spec()
 
     def _symlink_inside_root(self, link: Path) -> bool:
         """Return True iff *link*'s target resolves inside the root."""
