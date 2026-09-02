@@ -342,6 +342,51 @@ def test_read_events_survives_a_deep_create_burst_under_a_pruned_directory(
         _close_inotify(inst)
 
 
+def test_read_events_survives_a_deep_create_burst_under_a_nested_gitignore(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """Copilot finding, PR #503: a burst-created directory two levels below
+    a NESTED (not root) ``.gitignore`` match must not get a real watch.
+
+    ``x/.gitignore`` names ``logs/``; a burst creates ``x/logs/deep``
+    already populated. The live auto-add event for "logs" (a direct child
+    of the already-watched ``x``) must be rejected by consulting ``x``'s
+    own local spec during the ancestor walk -- checking only ``x/logs``'s
+    immediate parent (``x/logs`` itself, which has no ``.gitignore``) is
+    not enough; ``_recursive_simulate`` is never reached for "logs" once
+    ``_add_watch`` rejects it, so "deep" gets no watch either.
+    """
+    del fake_kernel
+    x = tmp_path / "x"
+    x.mkdir()
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        (x / ".gitignore").write_text("logs/\n")
+        (x / "logs" / "deep").mkdir(parents=True)
+
+        x_wd = inst._wd_for_path[os.fsencode(x)]
+        name = b"logs"
+        mask = InotifyConstants.IN_CREATE | InotifyConstants.IN_ISDIR
+        raw_event = struct.pack("iIII", x_wd, mask, 0, len(name)) + name
+
+        inst._check_inotify_fd = lambda: True  # skip the real select.poll()
+        with patch.object(os, "read", return_value=raw_event):
+            inst.read_events()  # must not raise
+
+        pruned_prefix = str(x / "logs") + "/"
+        real_watches_below_pruned = {
+            path.decode(): wd
+            for path, wd in inst._wd_for_path.items()
+            if path.decode().startswith(pruned_prefix) and wd != _PRUNED_WD
+        }
+        assert not real_watches_below_pruned, (
+            f"a real watch was installed below the nested-gitignore-matched "
+            f"directory: {real_watches_below_pruned}"
+        )
+    finally:
+        _close_inotify(inst)
+
+
 def test_read_events_renaming_a_pruned_directory_does_not_corrupt_state(
     tmp_path: Path, fake_kernel: _FakeKernel
 ) -> None:

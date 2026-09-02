@@ -598,6 +598,23 @@ class TestIsWatchableDir:
         (parent / ".gitignore").write_text("logs/\n")
         assert FileDiscovery(root).is_watchable_dir(parent / "logs") is False
 
+    def test_descendant_of_a_nested_gitignore_match_is_not_watchable(
+        self, tmp_path: Path
+    ):
+        """Copilot finding, PR #503: a burst-created grandchild of a
+        NESTED-gitignore-matched directory must stay unwatched too --
+        checking only the immediate parent's local spec (project/logs's
+        own local_spec(project) covers "logs", but project/logs/deep's
+        own immediate parent is project/logs, which has no .gitignore of
+        its own) let a directory two levels below the match through.
+        """
+        root = tmp_path / "root"
+        parent = root / "project"
+        deep = parent / "logs" / "deep"
+        deep.mkdir(parents=True)
+        (parent / ".gitignore").write_text("logs/\n")
+        assert FileDiscovery(root).is_watchable_dir(deep) is False
+
     def test_quarryignored_directory_is_not_watchable(self, tmp_path: Path):
         root = tmp_path / "root"
         root.mkdir()
@@ -605,6 +622,18 @@ class TestIsWatchableDir:
         sub = root / "archive"
         sub.mkdir()
         assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_sibling_of_a_nested_gitignore_match_stays_watchable(self, tmp_path: Path):
+        """The nested-spec ancestor walk must not over-reject an unrelated
+        sibling directory under the SAME parent as the matched one.
+        """
+        root = tmp_path / "root"
+        parent = root / "project"
+        (parent / "logs" / "deep").mkdir(parents=True)
+        watchable = parent / "src" / "deep"
+        watchable.mkdir(parents=True)
+        (parent / ".gitignore").write_text("logs/\n")
+        assert FileDiscovery(root).is_watchable_dir(watchable) is True
 
     def test_sibling_of_a_pruned_directory_stays_watchable(self, tmp_path: Path):
         """The ancestor-aware check must not over-reject an unrelated sibling."""

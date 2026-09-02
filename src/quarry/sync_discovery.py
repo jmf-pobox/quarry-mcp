@@ -126,20 +126,21 @@ class FileDiscovery:
         pruned ancestor whose own rejection does not stop that walk from
         continuing to list -- and descend into -- its children on disk.  A
         single-level check (only the immediate parent's rules) would wrongly
-        accept such a descendant: a :class:`~quarry.scratch_paths.
-        ScratchGuard` skip-name or the hidden-dot rule does not cascade to
-        descendants the way a ``.gitignore`` DIRECTORY pattern does (gitignore
-        semantics already make an ignored directory imply its whole subtree,
-        and :attr:`~quarry.ignore_spec.IgnoreRules.root_spec` inherits that
-        for free). So every path segment from the root down is checked for a
-        scratch-guard skip-name or a hidden-dot prefix — lexical,
-        :meth:`~quarry.scratch_paths.ScratchGuard.skips_below_root`, no extra
-        disk I/O — in addition to the cached root spec matched against the
-        FULL relative path and the immediate parent's own local
-        ``.gitignore``.  Nested per-directory ``.gitignore`` files below the
-        immediate parent are deliberately NOT re-read here (that would add
-        disk I/O to this observer-thread hot path); only name-based and
-        root-spec exclusions are ancestor-aware.
+        accept such a descendant. Every path segment from the root down is
+        checked (lexical first, cheapest, no disk I/O): a
+        :class:`~quarry.scratch_paths.ScratchGuard` skip-name or a
+        hidden-dot prefix (neither cascades to descendants the way a
+        ``.gitignore`` DIRECTORY pattern does — gitignore semantics already
+        make an ignored directory imply its whole subtree, so the cached
+        root spec matched against the FULL relative path gets that for
+        free). Only THEN does :meth:`_nested_local_spec_excludes` consult
+        each intermediate ancestor's own ``.gitignore`` (:meth:`~quarry.
+        ignore_spec.IgnoreRules.local_spec` caches per directory, so this is
+        O(depth) with each ancestor's file read at most once per
+        :class:`FileDiscovery` instance, not per call) — a burst-created
+        ``x/logs/deep`` must be pruned when ``x/.gitignore`` contains
+        ``logs/``, even though only ``x``, not ``x/logs/deep``'s own
+        immediate parent, names the pattern (Copilot finding, PR #503).
         """
         if self._root_resolved is None or self._excluded:
             return False
@@ -154,22 +155,26 @@ class FileDiscovery:
         return self._rules.keeps_dir(rel.parent, dirpath.name, root_spec, local_spec)
 
     def _ancestor_excluded(self, rel: Path, root_spec: IgnoreSpec) -> bool:
-        """Return whether any ANCESTOR segment of *rel* excludes it (lexical).
+        """Return whether any ANCESTOR segment of *rel* excludes it.
 
         The ancestor-aware half of :meth:`is_watchable_dir`'s check, split
-        out so that method stays a single-level dispatcher: a hidden-dot
-        prefix or a :class:`~quarry.scratch_paths.ScratchGuard` skip-name at
-        any segment, or a root-spec match against the FULL relative path
-        (gitignore directory-pattern semantics already cascade to
-        descendants). No disk I/O -- see the caller's docstring for why
-        nested per-directory ``.gitignore`` files are deliberately excluded
-        from this ancestor scan.
+        out so that method stays a single-level dispatcher. Cheapest checks
+        first: a hidden-dot prefix or a
+        :class:`~quarry.scratch_paths.ScratchGuard` skip-name at any
+        segment (lexical, no disk I/O), then a root-spec match against the
+        FULL relative path (gitignore directory-pattern semantics already
+        cascade to descendants, still no disk I/O — the root spec is
+        compiled once at construction), and finally each ancestor's own
+        NESTED ``.gitignore`` via :meth:`_nested_local_spec_excludes` (one
+        cached read per ancestor directory, not re-read per call).
         """
         if any(part.startswith(".") for part in rel.parts):
             return True
         if self._guard.skips_below_root(rel):
             return True
-        return self._rules.excludes(root_spec, str(rel), is_dir=True)
+        if self._rules.excludes(root_spec, str(rel), is_dir=True):
+            return True
+        return self._nested_local_spec_excludes(rel.parts, last_is_dir=True)
 
     def _pruned_walk(
         self,
@@ -244,7 +249,7 @@ class FileDiscovery:
             return False
         if self._rules.excludes(self._rules.root_spec(), str(rel), is_dir=False):
             return False
-        return not self._nested_ignored(rel.parts)
+        return not self._nested_local_spec_excludes(rel.parts, last_is_dir=False)
 
     def _hidden_or_skipped(self, rel: Path) -> bool:
         """Whether any segment of *rel* is hidden or a ScratchGuard skip-name.
@@ -272,20 +277,30 @@ class FileDiscovery:
             return False
         return True
 
-    def _nested_ignored(self, parts: tuple[str, ...]) -> bool:
-        """Whether a per-directory ``.gitignore`` along *parts* excludes the file.
+    def _nested_local_spec_excludes(
+        self, parts: tuple[str, ...], *, last_is_dir: bool
+    ) -> bool:
+        """Whether a per-directory ``.gitignore`` along *parts* excludes it.
 
         Mirrors :meth:`discover`'s walk: each intermediate directory's own
-        ``.gitignore`` governs its direct child (a trailing ``/`` for a
-        subdirectory, none for the final file).  The root is covered by the
-        root ignore spec, so it is skipped here.
+        ``.gitignore`` governs its direct child. Shared by
+        :meth:`is_indexable` (*parts* names a FILE — only the final segment
+        is a file, ``last_is_dir=False``) and :meth:`_ancestor_excluded`
+        (*parts* names a DIRECTORY — every segment, including the last, is
+        itself a directory, ``last_is_dir=True``). The root is covered by
+        the root ignore spec, so it is skipped here; every other ancestor's
+        :meth:`~quarry.ignore_spec.IgnoreRules.local_spec` is read from
+        disk at most once per :class:`FileDiscovery` instance (cached
+        there per directory), regardless of how many descendants this
+        method is later called for.
         """
         current = self._directory
         last = len(parts) - 1
         for index, segment in enumerate(parts):
             if current != self._directory:
                 local = self._rules.local_spec(current)
-                if self._rules.excludes(local, segment, is_dir=index != last):
+                is_dir = last_is_dir or index != last
+                if self._rules.excludes(local, segment, is_dir=is_dir):
                     return True
             current = current / segment
         return False
