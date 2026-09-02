@@ -40,6 +40,25 @@ class TestRootSpec:
         assert not spec.match_file("# comment")
 
 
+class TestRootSpecCaching:
+    """``root_spec`` is computed ONCE, at construction, and never re-read."""
+
+    def test_root_spec_is_the_same_object_across_calls(self, tmp_path: Path):
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        assert rules.root_spec() is rules.root_spec()
+
+    def test_a_gitignore_written_after_construction_is_not_picked_up(
+        self, tmp_path: Path
+    ):
+        """Next-session-only semantics: mid-session ignore-file edits are inert
+        until the next registration/daemon restart rebuilds ``IgnoreRules``.
+        """
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        assert not rules.root_spec().match_file("debug.log")
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        assert not rules.root_spec().match_file("debug.log")
+
+
 class TestLocalSpec:
     def test_root_directory_has_no_local_spec(self, tmp_path: Path):
         """The root's own .gitignore is folded into root_spec, not local_spec."""
@@ -59,6 +78,49 @@ class TestLocalSpec:
         assert spec is not None
         assert spec.match_file("scratch.tmp")
         assert not spec.match_file("keep.py")
+
+
+class TestLocalSpecCaching:
+    """``local_spec`` is cached per directory the first time it is asked for,
+    including a NEGATIVE (``None``) result -- a directory found to have no
+    ``.gitignore`` on the first call must not be re-read on a later call.
+    """
+
+    def test_result_is_cached_across_calls(self, tmp_path: Path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.tmp\n")
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        assert rules.local_spec(sub) is rules.local_spec(sub)
+
+    def test_a_gitignore_written_after_the_first_call_is_not_picked_up(
+        self, tmp_path: Path
+    ):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.tmp\n")
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        first = rules.local_spec(sub)
+        assert first is not None
+        assert first.match_file("scratch.tmp")
+        (sub / ".gitignore").write_text("*.other\n")
+        second = rules.local_spec(sub)
+        assert second is not None
+        assert second is first
+        assert second.match_file("scratch.tmp")
+        assert not second.match_file("scratch.other")
+
+    def test_a_none_result_is_cached_negatively(self, tmp_path: Path):
+        """A directory with no .gitignore caches None -- a .gitignore written
+        afterward is not picked up until the next session (same rule as the
+        positive case, just the absent-file branch of the same cache).
+        """
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        assert rules.local_spec(sub) is None
+        (sub / ".gitignore").write_text("*.tmp\n")
+        assert rules.local_spec(sub) is None
 
 
 class TestKeepsDir:
@@ -92,6 +154,68 @@ class TestKeepsDir:
         local_spec = rules.local_spec(sub)
         assert local_spec is not None
         assert rules.keeps_dir(Path("sub"), "logs", root_spec, local_spec) is False
+
+
+class TestKeepsFile:
+    def test_plain_name_is_kept(self, tmp_path: Path):
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        root_spec = rules.root_spec()
+        assert rules.keeps_file(Path(), "app.py", root_spec, None) is True
+
+    def test_root_spec_match_prunes_the_name(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        root_spec = rules.root_spec()
+        assert rules.keeps_file(Path(), "debug.log", root_spec, None) is False
+
+    def test_local_spec_match_prunes_the_name(self, tmp_path: Path):
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        root_spec = rules.root_spec()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.tmp\n")
+        local_spec = rules.local_spec(sub)
+        assert local_spec is not None
+        assert rules.keeps_file(Path("sub"), "scratch.tmp", root_spec, local_spec) is (
+            False
+        )
+
+    def test_hidden_name_is_kept_unlike_keeps_dir(self, tmp_path: Path):
+        """Unlike keeps_dir, keeps_file applies no hidden-name rule of its
+        own -- that decision is left to each caller (module docstring).
+        """
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        root_spec = rules.root_spec()
+        assert rules.keeps_file(Path(), ".env", root_spec, None) is True
+
+    def test_scratch_guard_name_is_kept_unlike_keeps_dir(self, tmp_path: Path):
+        """keeps_file applies no ScratchGuard skip-name rule either -- that
+        rule only prunes DIRECTORIES a walk would otherwise descend into.
+        """
+        rules = IgnoreRules(tmp_path, ScratchGuard())
+        root_spec = rules.root_spec()
+        assert rules.keeps_file(Path(), "node_modules", root_spec, None) is True
+
+
+class TestExcludes:
+    def test_none_spec_never_excludes(self) -> None:
+        assert IgnoreRules.excludes(None, "anything", is_dir=False) is False
+        assert IgnoreRules.excludes(None, "anything", is_dir=True) is False
+
+    def test_directory_match_needs_the_trailing_slash_convention(self, tmp_path: Path):
+        """A gitignore ``build/`` pattern only matches when is_dir=True appends
+        the trailing slash -- the same name passed as a file never matches.
+        """
+        (tmp_path / ".gitignore").write_text("build/\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()
+        assert IgnoreRules.excludes(spec, "build", is_dir=True) is True
+        assert IgnoreRules.excludes(spec, "build", is_dir=False) is False
+
+    def test_glob_pattern_matches_either_way(self, tmp_path: Path):
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        spec = IgnoreRules(tmp_path, ScratchGuard()).root_spec()
+        assert IgnoreRules.excludes(spec, "debug.log", is_dir=False) is True
+        assert IgnoreRules.excludes(spec, "debug.log", is_dir=True) is True
 
 
 class TestReadIgnoreLines:

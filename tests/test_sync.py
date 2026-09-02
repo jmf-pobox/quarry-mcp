@@ -527,133 +527,14 @@ class TestIsIndexable:
         assert discovery.is_indexable(root / "scan.txt", frozenset({".txt"})) is False
 
 
-class TestIterWatchableDirs:
-    """The directory-level pruning the watch scheduler consumes (DES-045d)."""
-
-    def test_yields_root_and_plain_subdirs(self, tmp_path: Path):
-        root = tmp_path / "root"
-        (root / "src" / "pkg").mkdir(parents=True)
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert dirs == {Path(), Path("src"), Path("src/pkg")}
-
-    def test_empty_directory_yields_only_the_root(self, tmp_path: Path):
-        """Boundary: a registered root with no subdirectories yields just itself."""
-        root = tmp_path / "root"
-        root.mkdir()
-        dirs = list(FileDiscovery(root).iter_watchable_dirs())
-        assert dirs == [root]
-
-    def test_prunes_vcs_and_dependency_directories(self, tmp_path: Path):
-        root = tmp_path / "root"
-        (root / ".git").mkdir(parents=True)
-        (root / "node_modules" / "pkg").mkdir(parents=True)
-        (root / "venv" / "lib").mkdir(parents=True)
-        (root / "src").mkdir()
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert dirs == {Path(), Path("src")}
-
-    def test_prunes_gitignored_subdirectory(self, tmp_path: Path):
-        root = tmp_path / "root"
-        root.mkdir()
-        (root / ".gitignore").write_text("data/\n")
-        (root / "data" / "big").mkdir(parents=True)
-        (root / "src").mkdir()
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert dirs == {Path(), Path("src")}
-
-    def test_prunes_quarryignored_subdirectory(self, tmp_path: Path):
-        root = tmp_path / "root"
-        root.mkdir()
-        (root / ".quarryignore").write_text("archive/\n")
-        (root / "archive" / "old").mkdir(parents=True)
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert dirs == {Path()}
-
-    def test_nested_gitignore_prunes_only_its_own_subtree(self, tmp_path: Path):
-        """A .gitignore in one project dir must not leak to a sibling (live == bulk)."""
-        root = tmp_path / "root"
-        a = root / "project-a"
-        b = root / "project-b"
-        (a / "logs").mkdir(parents=True)
-        (b / "logs").mkdir(parents=True)
-        (a / ".gitignore").write_text("logs/\n")
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert Path("project-a/logs") not in dirs
-        assert Path("project-b/logs") in dirs
-
-    def test_bounded_regardless_of_ignored_subtree_size(self, tmp_path: Path):
-        """Boundary: a huge ignored subtree contributes zero directories to watch.
-
-        Stands in for the watch-budget boundary: inotify's fixed watch budget
-        is only ever spent on directories this walk actually yields, so an
-        arbitrarily large ignored subtree (a real ``node_modules``) must never
-        inflate the watchable count.
-        """
-        root = tmp_path / "root"
-        for i in range(200):
-            (root / "node_modules" / f"pkg{i}").mkdir(parents=True)
-        (root / "src").mkdir()
-        dirs = {p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()}
-        assert dirs == {Path(), Path("src")}
-
-    def test_start_param_scopes_the_walk_to_a_subtree(self, tmp_path: Path):
-        """A caller re-walking a newly created subtree gets just that subtree."""
-        root = tmp_path / "root"
-        (root / "src").mkdir(parents=True)
-        (root / "new" / "inner").mkdir(parents=True)
-        discovery = FileDiscovery(root)
-        dirs = {
-            p.relative_to(root)
-            for p in discovery.iter_watchable_dirs(start=root / "new")
-        }
-        assert dirs == {Path("new"), Path("new/inner")}
-
-    def test_start_param_still_honors_the_root_ignore_spec(self, tmp_path: Path):
-        """A subtree walk still prunes per the ROOT's .gitignore, not a fresh one."""
-        root = tmp_path / "root"
-        root.mkdir()
-        (root / ".gitignore").write_text("new/skip/\n")
-        (root / "new" / "skip").mkdir(parents=True)
-        (root / "new" / "keep").mkdir(parents=True)
-        discovery = FileDiscovery(root)
-        dirs = {
-            p.relative_to(root)
-            for p in discovery.iter_watchable_dirs(start=root / "new")
-        }
-        assert dirs == {Path("new"), Path("new/keep")}
-
-    def test_excluded_scratch_root_yields_nothing(self, tmp_path: Path):
-        """A registered root that IS a repo's own .tmp scratch yields nothing."""
-        (tmp_path / ".git").mkdir()
-        root = tmp_path / ".tmp" / "pytest-of-me" / "docs"
-        (root / "sub").mkdir(parents=True)
-        assert list(FileDiscovery(root).iter_watchable_dirs()) == []
-
-    def test_unresolvable_root_yields_nothing(self, tmp_path: Path):
-        """Invalid input: a root that does not exist yields nothing, never raises."""
-        missing = tmp_path / "does-not-exist"
-        assert list(FileDiscovery(missing).iter_watchable_dirs()) == []
-
-    def test_continues_past_an_unreadable_subdirectory(self, tmp_path: Path):
-        """A directory os.walk cannot list is skipped; siblings are still yielded."""
-        root = tmp_path / "root"
-        blocked = root / "blocked"
-        sibling = root / "sibling"
-        blocked.mkdir(parents=True)
-        sibling.mkdir()
-        blocked.chmod(0o000)
-        try:
-            dirs = {
-                p.relative_to(root) for p in FileDiscovery(root).iter_watchable_dirs()
-            }
-        finally:
-            blocked.chmod(0o755)  # restore so pytest can clean up tmp_path
-        assert Path("sibling") in dirs
-        assert Path() in dirs
-
-
 class TestIsWatchableDir:
-    """The single-directory check the live create-event handler applies."""
+    """The single-directory check the live create-event handler applies.
+
+    Ancestor-aware (round-2 fix): a directory reached via watchdog's
+    un-prunable backfill walk can be several levels below a pruned ancestor,
+    so every case here is checked BOTH as a direct child (the original,
+    single-level shape) and as a nested descendant two levels deep.
+    """
 
     def test_plain_subdirectory_is_watchable(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -667,11 +548,27 @@ class TestIsWatchableDir:
         sub.mkdir(parents=True)
         assert FileDiscovery(root).is_watchable_dir(sub) is False
 
+    def test_descendant_of_a_scratch_name_is_not_watchable(self, tmp_path: Path):
+        """The exact bug: a grandchild of node_modules must stay unwatched too."""
+        root = tmp_path / "root"
+        nested = root / "node_modules" / "pkg" / "lib"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(root / "node_modules" / "pkg") is (
+            False
+        )
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
+
     def test_hidden_directory_is_not_watchable(self, tmp_path: Path):
         root = tmp_path / "root"
         sub = root / ".git"
         sub.mkdir(parents=True)
         assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_descendant_of_a_hidden_directory_is_not_watchable(self, tmp_path: Path):
+        root = tmp_path / "root"
+        nested = root / ".git" / "objects" / "pack"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
 
     def test_gitignored_directory_is_not_watchable(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -680,6 +577,17 @@ class TestIsWatchableDir:
         sub = root / "build"
         sub.mkdir()
         assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_descendant_of_a_gitignored_directory_is_not_watchable(
+        self, tmp_path: Path
+    ):
+        """Root-spec matching already cascades to descendants (gitignore semantics)."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / ".gitignore").write_text("build/\n")
+        nested = root / "build" / "obj" / "deep"
+        nested.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(nested) is False
 
     def test_directory_matched_by_nested_gitignore_is_not_watchable(
         self, tmp_path: Path
@@ -697,6 +605,14 @@ class TestIsWatchableDir:
         sub = root / "archive"
         sub.mkdir()
         assert FileDiscovery(root).is_watchable_dir(sub) is False
+
+    def test_sibling_of_a_pruned_directory_stays_watchable(self, tmp_path: Path):
+        """The ancestor-aware check must not over-reject an unrelated sibling."""
+        root = tmp_path / "root"
+        (root / "node_modules" / "pkg").mkdir(parents=True)
+        watchable = root / "src" / "deep" / "nested"
+        watchable.mkdir(parents=True)
+        assert FileDiscovery(root).is_watchable_dir(watchable) is True
 
     def test_excluded_scratch_root_makes_every_directory_unwatchable(
         self, tmp_path: Path

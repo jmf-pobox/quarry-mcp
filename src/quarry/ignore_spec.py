@@ -1,9 +1,9 @@
 """The gitignore-dialect ignore/prune rules shared by discovery and watch scheduling.
 
 Both a bulk directory scan (:class:`~quarry.sync_discovery.FileDiscovery`) and
-the live watch scheduler (:mod:`~quarry.daemon.fs_watchdog`, by way of
-``FileDiscovery.iter_watchable_dirs``/``is_watchable_dir``) must agree on
-which directories and files are ignored — ``.gitignore`` at every level,
+the live Linux watch scheduler (:mod:`~quarry.daemon.inotify_prune`, by way of
+``FileDiscovery.is_watchable_dir``) must agree on which directories and files
+are ignored — ``.gitignore`` at every level,
 ``.quarryignore`` at the root, the built-in scratch defaults, and hidden-dir
 skipping.  :class:`FileDiscovery` composes ONE :class:`IgnoreRules` per
 registered root rather than re-reading ignore files and re-matching glob
