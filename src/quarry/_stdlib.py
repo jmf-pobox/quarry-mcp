@@ -15,6 +15,7 @@ import filecmp
 import json
 import logging
 import os
+import re
 import select
 import shutil
 import sys
@@ -185,6 +186,12 @@ def run_hook(handler: Callable[[dict[str, object]], dict[str, object]]) -> None:
 
 # Commands removed or renamed — add old filenames here to auto-retire.
 _RETIRED_COMMANDS: tuple[str, ...] = ("use", "use-dev")
+
+# Plugin names flow into ``settings.json`` as ``mcp__<name>__*`` wildcard
+# permission grants; any character outside a conservative slug alphabet could
+# broaden the grant (``*`` in the name), inject a rule separator, or malform
+# the entry so it never matches.  RFC-3986 unreserved minus ``.`` and ``~``.
+_PLUGIN_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 @final
@@ -366,10 +373,12 @@ class _SessionSetup:
         """Read the plugin name from ``.claude-plugin/plugin.json``.
 
         Raise ``ValueError`` on any structural violation (top-level not a
-        dict, ``name`` missing/non-string) so :meth:`open` can catch and
-        return ``None`` cleanly, honoring the fail-open contract.  Without
-        this, a null or list-shaped manifest raises ``AttributeError`` or
-        ``TypeError`` and propagates past ``open``.
+        dict, ``name`` missing/non-string, or name outside the safe-slug
+        alphabet) so :meth:`open` can catch and return ``None`` cleanly,
+        honoring the fail-open contract.  The slug check bounds the name
+        before it is spliced into an ``mcp__<name>__*`` wildcard: a ``*``
+        or whitespace or path separator in a hostile manifest could
+        broaden the permission grant beyond the plugin's own tools.
         """
         plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
         with plugin_json.open() as f:
@@ -380,6 +389,9 @@ class _SessionSetup:
         name = data.get("name")
         if not isinstance(name, str):
             msg = f"plugin.json 'name' is not a string: {plugin_json}"
+            raise ValueError(msg)
+        if not _PLUGIN_NAME_PATTERN.fullmatch(name):
+            msg = f"plugin.json 'name' is not a safe slug: {name!r}"
             raise ValueError(msg)
         return name
 

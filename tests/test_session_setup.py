@@ -1,6 +1,6 @@
 """Session-setup regression tests (quarry-ridg round-2 Copilot findings).
 
-Three separately failing behaviors:
+Four separately failing behaviors:
 
 * ``_allow_mcp_tools`` used to write ``mcp__plugin_quarry_quarry__*`` — the
   retired proxy namespace disconnected in quarry-ydym (PR #493).  The native
@@ -15,6 +15,10 @@ Three separately failing behaviors:
   after the ``CLAUDE_PLUGIN_ROOT`` and ``open`` checks, so early-skip
   breadcrumbs rendered ``config=?, payload_ok=?`` instead of the honest
   ``config=on, payload_ok=Y`` those paths deserve.
+* ``_read_plugin_name`` accepted the plugin name verbatim into a
+  ``mcp__<name>__*`` wildcard grant.  A hostile ``plugin.json`` carrying
+  ``*``, whitespace, ``/``, or ``.`` in the name could broaden the grant
+  beyond the plugin's own tools or malform the entry so it never matches.
 """
 
 from __future__ import annotations
@@ -139,6 +143,73 @@ class TestOpenFailOpen:
         plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
         setup = _SessionSetup.open(plugin_root)
         assert setup is not None
+
+
+class TestPluginNameSlugValidation:
+    """``_read_plugin_name`` accepts only conservative-slug names.
+
+    Names flow into ``settings.json`` as ``mcp__<name>__*`` wildcard grants;
+    an unsafe character (``*``, ``/``, ``.``, whitespace, newline, ``[``, etc.)
+    could broaden the grant beyond the plugin's own tools or malform the
+    entry so it never matches.  ``open`` catches the ``ValueError`` and
+    returns ``None`` — the fail-open path already exercised in round 2.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        ["quarry", "quarry-dev", "my_tool_v42", "A", "abc123", "x" * 64],
+    )
+    def test_accepts_safe_slugs(self, tmp_path: Path, name: str) -> None:
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": name})
+        setup = _SessionSetup.open(plugin_root)
+        assert setup is not None
+        assert setup._plugin_name == name
+
+    @pytest.mark.parametrize(
+        ("name", "reason"),
+        [
+            ("*", "wildcard"),
+            ("foo/bar", "path separator"),
+            ("foo bar", "internal whitespace"),
+            ("foo.bar", "dot"),
+            ("foo\tbar", "tab"),
+            ("foo\nbar", "newline"),
+            ("[foo]", "brackets"),
+            ("", "empty"),
+            ("-foo", "leading hyphen"),
+            ("_foo", "leading underscore"),
+            ("x" * 65, "65 chars, over the 64 cap"),
+            ("foo bar*", "wildcard hidden after whitespace"),
+        ],
+    )
+    def test_rejects_unsafe_slugs_via_open(
+        self, tmp_path: Path, name: str, reason: str
+    ) -> None:
+        del reason
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": name})
+        assert _SessionSetup.open(plugin_root) is None
+
+    def test_read_plugin_name_raises_value_error_on_unsafe(
+        self, tmp_path: Path
+    ) -> None:
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "foo*"})
+        with pytest.raises(ValueError, match="safe slug"):
+            _SessionSetup._read_plugin_name(plugin_root)
+
+    def test_unsafe_name_leaves_settings_untouched(
+        self, fake_home: Path, tmp_path: Path
+    ) -> None:
+        """An unsafe manifest must not reach ``permissions.allow`` at all.
+
+        Guards against a slip where ``open`` returns a setup for an unsafe
+        name and ``dispatch`` writes ``mcp__foo*__*`` — the exact hostile
+        wildcard the slug validator exists to block.
+        """
+        settings_path = fake_home / ".claude" / "settings.json"
+        original = settings_path.read_text()
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "foo*"})
+        assert _SessionSetup.open(plugin_root) is None
+        assert settings_path.read_text() == original
 
 
 class TestSessionSetupBreadcrumb:
