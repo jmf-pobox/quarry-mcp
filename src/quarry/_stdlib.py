@@ -298,11 +298,18 @@ class _SessionSetup:
         ]
 
     def _allow_mcp_tools(self) -> str | None:
-        """Add this plugin's MCP tool pattern to ``permissions.allow``."""
+        """Add this plugin's MCP tool pattern to ``permissions.allow``.
+
+        The native quarry MCP server exposes tools under ``mcp__quarry__*``
+        (and ``mcp__quarry-dev__*`` for the dev twin).  The former
+        ``mcp__plugin_quarry_quarry__*`` proxy namespace was retired when the
+        native server shipped (quarry-ydym); allow-listing it grants no real
+        permission and leaves every native tool call subject to a prompt.
+        """
         settings = self._load_settings()
         if settings is None:
             return None
-        tool_prefix = f"mcp__plugin_{self._plugin_name}_quarry__"
+        tool_prefix = f"mcp__{self._plugin_name}__"
         allow_list = self._ensure_allow_list(settings)
         for entry in allow_list:
             if isinstance(entry, str) and tool_prefix in entry:
@@ -357,11 +364,24 @@ class _SessionSetup:
 
     @staticmethod
     def _read_plugin_name(plugin_root: Path) -> str:
-        """Read the plugin name from ``.claude-plugin/plugin.json``."""
+        """Read the plugin name from ``.claude-plugin/plugin.json``.
+
+        Raise ``ValueError`` on any structural violation (top-level not a
+        dict, ``name`` missing/non-string) so :meth:`open` can catch and
+        return ``None`` cleanly, honoring the fail-open contract.  Without
+        this, a null or list-shaped manifest raises ``AttributeError`` or
+        ``TypeError`` and propagates past ``open``.
+        """
         plugin_json = plugin_root / ".claude-plugin" / "plugin.json"
         with plugin_json.open() as f:
             data = json.load(f)
-        name: str = data["name"]
+        if not isinstance(data, dict):
+            msg = f"plugin.json top-level is not an object: {plugin_json}"
+            raise ValueError(msg)
+        name = data.get("name")
+        if not isinstance(name, str):
+            msg = f"plugin.json 'name' is not a string: {plugin_json}"
+            raise ValueError(msg)
         return name
 
     @staticmethod
@@ -388,6 +408,11 @@ def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     """
     del payload
     trace = HookTrace("session-setup")
+    # Session-setup has no per-repo config gate and no meaningful payload to
+    # validate; mark both up front so every skip/capture/error breadcrumb
+    # reads `config=on, payload_ok=Y` consistently, never `config=?`.
+    trace.mark_config(on=True)
+    trace.mark_payload(ok=True)
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     if not plugin_root_env:
         trace.skip("no-CLAUDE_PLUGIN_ROOT")
@@ -400,8 +425,6 @@ def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     if setup is None:
         trace.skip("plugin-name-unreadable")
         return {}
-    trace.mark_config(on=True)
-    trace.mark_payload(ok=True)
     actions = setup.dispatch()
     if not actions:
         trace.skip("nothing-to-do")
