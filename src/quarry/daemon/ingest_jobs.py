@@ -153,15 +153,16 @@ class IngestJob:
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Run the capture re-fetch (scrubbed, captures collection) or plain ingest.
 
-        The scrubbed branch fetches via :meth:`WebFetcher.fetch_body` first so a
-        JSON/plain-text/XML URL (a REST endpoint, a raw log) is captured as text
-        rather than raising ``ValueError`` from the HTML-only :meth:`fetch`.  The
-        HTML-vs-text routing then lives in :meth:`ingest_captured_body`, shared
-        with :meth:`CaptureIngestJob._refetch`.
+        The scrubbed branch delegates to :meth:`fetch_and_route`, which fetches
+        via :meth:`WebFetcher.fetch_body` so a JSON/plain-text/XML URL (a REST
+        endpoint, a raw log) is captured as text rather than raising
+        ``ValueError`` from the HTML-only :meth:`fetch`.  Network and safety
+        failures are converted to a redacted WARN + empty result there — the
+        exception text quotes the raw URL and would carry ``?token=`` or
+        ``user:pass@`` secrets into the persistent quarry.log (CWE-532).
         """
         if self.scrub:
-            body = WebFetcher().fetch_body(self.source)
-            return self.ingest_captured_body(ctx, body)
+            return self.fetch_and_route(ctx)
 
         from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
 
@@ -178,12 +179,39 @@ class IngestJob:
             )
         )
 
+    def fetch_and_route(self, ctx: DaemonContext) -> dict[str, object]:
+        """Fetch ``self.source`` and route via :meth:`ingest_captured_body`.
+
+        A network/safety failure logs the URL through the same normaliser
+        writes use (dropping userinfo/query/fragment) and returns an empty
+        result rather than propagating the exception, whose message quotes
+        the raw URL and would leak ``?token=`` or ``user:pass@`` secrets
+        into the persistent quarry.log (CWE-532).
+
+        Shared by :meth:`_ingest` (primary capture) and
+        :meth:`CaptureIngestJob._refetch` (empty-inline fallback) so both
+        paths have identical fetch-failure semantics — the fix landed on the
+        fallback path first (PR #496); this method extends it to the primary.
+        """
+        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
+
+        try:
+            body = WebFetcher().fetch_body(self.source)
+        except (OSError, ValueError, TimeoutError) as exc:
+            logger.warning(
+                "ingest: fetch of %s failed (%s); skipping",
+                CaptureUrl.for_web_fetch(self.source),
+                type(exc).__name__,
+            )
+            return {"chunks": 0, "sections": 0}
+        return self.ingest_captured_body(ctx, body)
+
     def ingest_captured_body(
         self, ctx: DaemonContext, body: FetchedBody
     ) -> dict[str, object]:
         """Route a fetched capture body: HTML via extractor, else text with mime marker.
 
-        Shared by :meth:`_ingest` (primary capture) and
+        Shared by :meth:`fetch_and_route` (primary capture) and
         :meth:`CaptureIngestJob._refetch` (empty-inline fallback) so both paths
         agree on the media-type contract: an HTML body flows through
         :func:`ingest_url` with the already-fetched text reused via
@@ -191,7 +219,16 @@ class IngestJob:
         :func:`ingest_content` with a leading ``<!-- media_type: X -->`` marker
         so a reader — and a downstream grep — knows the shape.  The marker is
         inert to the markdown extractor and to the scrub choke point.
+
+        The non-HTML branch derives its ``document_name`` from
+        :meth:`CaptureUrl.redacted` rather than passing the raw URL: the
+        pipeline's regex scrubber (``_scrub_metadata``) does not know URL
+        structure and leaves ``?email=``, ``?token=``, and ``user:pass@``
+        components on the persisted ``document_name`` (CWE-532).  The HTML
+        branch already routes through :func:`ingest_url`, which does the same
+        derivation internally, so the two branches now match.
         """
+        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
         from quarry.ingestion.pipeline import (  # noqa: PLC0415
             ingest_content,
             ingest_url,
@@ -219,10 +256,11 @@ class IngestJob:
 
         media_type = body.media_type or "unknown"
         content = f"<!-- media_type: {media_type} -->\n{body.text}"
+        name = self.document_name_override or CaptureUrl(self.source).redacted(scrub)
         return dict(
             ingest_content(
                 content,
-                self.document_name_override or self.source,
+                name,
                 ctx.database,
                 ctx.settings,
                 overwrite=self.overwrite,
