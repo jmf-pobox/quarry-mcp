@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -77,15 +78,34 @@ def _read_port_file(path: Path, timeout_s: float) -> int:
 
 
 def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
-    """Build the env for the daemon subprocess (hermetic, no operator paths)."""
+    """Build the env for the daemon subprocess.
+
+    Quarry paths are isolated to *root* (``QUARRY_ROOT`` + ``QUARRY_LOG_DIR``
+    override every home-derived path :mod:`quarry.config` resolves) but the
+    operator's HuggingFace cache is preserved via ``HF_HOME`` — otherwise
+    ``quarryd`` re-downloads the ~200 MB ONNX embedding model every session
+    and ``/health`` never reaches ``ready`` inside the 30s poll window.
+
+    ``pwd.getpwuid`` is the source of the real home: the rootdir hermetic
+    conftest overrides ``$HOME`` before any test runs, so a naive
+    ``os.environ["HOME"]`` here returns the sandbox home and the daemon
+    finds no cached model there.
+    """
     env = os.environ.copy()
     env["HOME"] = str(root)
     env["QUARRY_ROOT"] = str(root / "quarry")
     env["QUARRY_LOG_DIR"] = str(log_dir)
     env["QUARRY_API_KEY"] = api_key
     env["TMPDIR"] = str(root / "tmp")
+    hf_home = os.environ.get("HF_HOME") or str(_real_home() / ".cache" / "huggingface")
+    env["HF_HOME"] = hf_home
     (root / "tmp").mkdir(parents=True, exist_ok=True)
     return env
+
+
+def _real_home() -> Path:
+    """Return the operator's real home from the password DB, ignoring ``$HOME``."""
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 def _wait_ready(base_url: str, api_token: str, timeout_s: float) -> None:
@@ -263,10 +283,14 @@ class HookInvoker:
 
     @staticmethod
     def _resolve_command(event: str) -> list[str]:
-        """Return the argv for ``event`` — installed binary if present, else module."""
-        binary = shutil.which("quarry-hook")
-        if binary is not None:
-            return [binary, event]
+        """Return the argv for ``event`` — module path from the current interpreter.
+
+        Using ``[sys.executable, "-m", "quarry._hook_entry", event]`` guarantees
+        the tests exercise the ``quarry`` source under test (whichever venv or
+        PYTHONPATH resolves ``import quarry``), not whatever ``quarry-hook``
+        binary happens to sit on ``$PATH`` from a prior install.  The demo gate
+        exercises the installed binary; the test suite exercises the source.
+        """
         return [sys.executable, "-m", "quarry._hook_entry", event]
 
 

@@ -41,7 +41,14 @@ if TYPE_CHECKING:
 __all__ = ["ephemeral_daemon", "hook_subprocess"]
 
 
-pytestmark = pytest.mark.hook_integration
+pytestmark = [pytest.mark.hook_integration, pytest.mark.network]
+# ``network`` opts out of the autouse ``_fake_dns`` in ``tests/conftest.py`` —
+# that fixture patches ``socket.getaddrinfo`` globally via a ``socket_module``
+# alias, and its 5-tuple with ``None`` family/proto crashes ``httpx``'s socket
+# connect (TypeError, not HTTPError, so the except in ``_search_for_capture``
+# never catches it).  The daemon poll here uses the real resolver against
+# ``127.0.0.1``, so no DNS happens; the marker is only there to leave the
+# stdlib socket seam untouched.
 
 
 _QUARRY_871U_SUMMARY = (
@@ -93,7 +100,10 @@ def _search_for_capture(
     """
     headers = {"Authorization": f"Bearer {daemon.api_token}"}
     deadline = time.monotonic() + timeout_s
-    endpoint = f"{daemon.base_url}/search"
+    # Engine routes live under ``/v1`` (see ``quarry.daemon.route_table`` and
+    # ``_API_PREFIX`` in ``quarry.client.client``); hitting ``/search`` without
+    # the prefix returns 404 and the capture appears missing.
+    endpoint = f"{daemon.base_url}/v1/search"
     while time.monotonic() < deadline:
         with httpx.Client(headers=headers, timeout=5.0) as client:
             try:
@@ -110,7 +120,9 @@ def _search_for_capture(
                 continue
         if resp.status_code == 200:
             for hit in _hits(resp.json()):
-                if name_substr in str(hit.get("document", "")):
+                # ``SearchResult.to_dict`` emits ``document_name`` — no legacy
+                # ``document`` key on the wire (see :mod:`quarry.results`).
+                if name_substr in str(hit.get("document_name", "")):
                     return hit
         time.sleep(0.5)
     return None
