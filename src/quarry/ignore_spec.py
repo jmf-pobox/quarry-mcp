@@ -21,6 +21,7 @@ from typing import Final, Self, final
 
 import pathspec
 
+from quarry.gitignore import CAPTURES_GITIGNORE_ENTRY
 from quarry.scratch_paths import ScratchGuard
 
 logger = logging.getLogger(__name__)
@@ -38,35 +39,50 @@ _DEFAULT_IGNORE_PATTERNS: Final[list[str]] = [
     # dot-prefixed directory (``.punt-labs``) before patterns are matched, so
     # this entry is redundant belt-and-braces — it records the intent that
     # scrubbed captures (the daemon's <repo>-captures) must never be folded into
-    # the project's MAIN collection by directory sync.
-    ".punt-labs/quarry/captures/",
+    # the project's MAIN collection by directory sync.  Shared with
+    # quarry.gitignore's own ``.gitignore``-writing entry so the two never drift.
+    CAPTURES_GITIGNORE_ENTRY,
 ]
 
 
 @final
 class IgnoreRules:
-    """Load and apply one directory tree's ignore spec (gitignore dialect)."""
+    """Load and apply one directory tree's ignore spec (gitignore dialect).
 
-    __slots__ = ("_directory", "_guard")
+    ``root_spec`` is computed ONCE, at construction, and cached for the
+    instance's lifetime: the observer-thread hot path (a live watch's
+    auto-add for a newly created directory) must never re-read
+    ``.gitignore``/``.quarryignore`` from disk per event.  ``local_spec`` is
+    cached per directory the first time it is asked for, since the set of
+    directories a live watch or a bulk scan visits is not known up front.
+    Both caches are scoped to one ``IgnoreRules`` instance — one per
+    registered root per watch/scan session — so a change to an ignore file
+    is picked up on the NEXT session (daemon restart or re-registration),
+    not mid-session; this matches "the SAME loaded spec" every consumer of
+    this class already assumes.
+    """
+
+    __slots__ = ("_directory", "_guard", "_local_spec_cache", "_root_spec")
 
     _directory: Path
     _guard: ScratchGuard
+    _root_spec: IgnoreSpec
+    _local_spec_cache: dict[Path, IgnoreSpec | None]
 
     def __new__(cls, directory: Path, guard: ScratchGuard) -> Self:
         self = super().__new__(cls)
         self._directory = directory
         self._guard = guard
+        self._root_spec = self._build_root_spec()
+        self._local_spec_cache = {}
         return self
 
     def root_spec(self) -> IgnoreSpec:
-        """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
-        lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
-        for name in (".gitignore", ".quarryignore"):
-            lines.extend(self._read_ignore_lines(self._directory / name))
-        return pathspec.PathSpec.from_lines("gitignore", lines)
+        """Return the cached ``.gitignore``/``.quarryignore``/defaults PathSpec."""
+        return self._root_spec
 
     def local_spec(self, dirpath: Path) -> IgnoreSpec | None:
-        """Return *dirpath*'s own ``.gitignore`` as a spec, or ``None``.
+        """Return *dirpath*'s own ``.gitignore`` as a spec, or ``None`` (cached).
 
         ``None`` covers both "the tree root itself" (its ``.gitignore``
         already folds into :meth:`root_spec`) and "no per-directory override
@@ -74,10 +90,12 @@ class IgnoreRules:
         """
         if dirpath == self._directory:
             return None
-        lines = self._read_ignore_lines(dirpath / ".gitignore")
-        if not lines:
-            return None
-        return pathspec.PathSpec.from_lines("gitignore", lines)
+        if dirpath not in self._local_spec_cache:
+            lines = self._read_ignore_lines(dirpath / ".gitignore")
+            self._local_spec_cache[dirpath] = (
+                pathspec.PathSpec.from_lines("gitignore", lines) if lines else None
+            )
+        return self._local_spec_cache[dirpath]
 
     def keeps_dir(
         self,
@@ -89,16 +107,58 @@ class IgnoreRules:
         """Return whether child directory *name* of *rel_dir* survives pruning.
 
         The single predicate every consumer of the ignore rules applies to a
-        directory — the bulk walk's directory filter and the watch
-        scheduler's single-directory check both call this, never their own
-        copy of the same four conditions.
+        directory — the bulk walk's directory filter, the watch scheduler's
+        single-directory check, and the pruned inotify walk all call this,
+        never their own copy of the same four conditions.
         """
         return (
             not name.startswith(".")
             and not self._guard.is_skip_name(name)
-            and not root_spec.match_file(str(rel_dir / name) + "/")
-            and (local_spec is None or not local_spec.match_file(name + "/"))
+            and not self.excludes(root_spec, str(rel_dir / name), is_dir=True)
+            and not self.excludes(local_spec, name, is_dir=True)
         )
+
+    def keeps_file(
+        self,
+        rel_dir: Path,
+        name: str,
+        root_spec: IgnoreSpec,
+        local_spec: IgnoreSpec | None,
+    ) -> bool:
+        """Return whether file *name* in *rel_dir* survives pruning.
+
+        Hidden-name/resource-fork exclusion is deliberately NOT applied here
+        (unlike :meth:`keeps_dir`): ``discover()``'s bulk walk and
+        ``is_indexable``'s live check differ slightly on which dotfile
+        prefixes they reject, so that decision stays with the caller — this
+        method owns only the ignore-SPEC matching, the one piece every
+        caller must agree on.
+        """
+        rel_path = str(rel_dir / name) if str(rel_dir) != "." else name
+        return not self.excludes(
+            root_spec, rel_path, is_dir=False
+        ) and not self.excludes(local_spec, name, is_dir=False)
+
+    @staticmethod
+    def excludes(spec: IgnoreSpec | None, name: str, *, is_dir: bool) -> bool:
+        """Return whether *spec* matches *name* (a directory gets a trailing ``/``).
+
+        The ONE place a ``pathspec.PathSpec.match_file`` call is made —
+        every caller in this module and in
+        :class:`~quarry.sync_discovery.FileDiscovery` routes through this
+        rather than calling ``match_file`` directly, so there is exactly one
+        place that knows gitignore's directory-vs-file matching convention.
+        """
+        if spec is None:
+            return False
+        return spec.match_file(name + "/" if is_dir else name)
+
+    def _build_root_spec(self) -> IgnoreSpec:
+        """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
+        lines: list[str] = list(_DEFAULT_IGNORE_PATTERNS)
+        for name in (".gitignore", ".quarryignore"):
+            lines.extend(self._read_ignore_lines(self._directory / name))
+        return pathspec.PathSpec.from_lines("gitignore", lines)
 
     @staticmethod
     def _read_ignore_lines(path: Path) -> list[str]:

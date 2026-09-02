@@ -4,6 +4,10 @@ Everything else drives a synthetic source; this proves the one module that
 imports watchdog actually delivers create/modify/delete as :class:`FsEvent`s.
 The stat-walk ``PollingObserver`` is used deterministically (a short poll
 interval) so the test is not subject to native-watcher timing flakiness.
+Directory-level ignore pruning is Linux-inotify-specific (DES-045e) and is
+covered in ``tests/test_inotify_prune.py``; the ``PollingObserver`` and
+non-Linux paths here rely on the post-debounce submitter filter, same as
+before DES-045d.
 """
 
 from __future__ import annotations
@@ -11,7 +15,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
+from unittest.mock import patch
 
+from quarry.daemon import fs_watchdog
 from quarry.daemon.fs_watchdog import WatchdogSource
 
 if TYPE_CHECKING:
@@ -23,7 +29,6 @@ if TYPE_CHECKING:
 
 _DEADLINE_S = 5.0
 _POLL_S = 0.05
-_QUIET_WINDOW_S = 0.5
 
 
 @final
@@ -82,125 +87,40 @@ def test_watchdog_source_stop_is_idempotent_after_unschedule(tmp_path: Path) -> 
     source.stop()
 
 
-def test_schedule_prunes_ignored_directories(tmp_path: Path) -> None:
-    """A live edit inside a scratch/VCS directory never reaches the recorder.
-
-    Pruned scheduling means ``node_modules`` was never watched at all -- not
-    filtered post-hoc -- so an edit inside it produces no event, matching
-    what a bulk scan would find.
-    """
-    (tmp_path / "src").mkdir()
-    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
-    recorder = _Recorder()
-    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
-    handle = source.schedule(tmp_path, recorder)
-    try:
-        kept = tmp_path / "src" / "keep.md"
-        kept.write_text("watched")
-        assert recorder.wait_for(lambda e: e.path == kept and not e.deleted), (
-            "an edit in a non-ignored directory never arrived"
-        )
-        ignored = tmp_path / "node_modules" / "pkg" / "skip.md"
-        ignored.write_text("never watched")
-        assert not recorder.wait_for(
-            lambda e: e.path == ignored, deadline=_QUIET_WINDOW_S
-        ), "an edit inside node_modules/ reached the recorder — it was watched"
-    finally:
-        source.unschedule(handle)
-        source.stop()
-
-
-def test_schedule_watches_a_newly_created_subdirectory(tmp_path: Path) -> None:
-    """A directory created after scheduling is watched for its own new files."""
-    recorder = _Recorder()
-    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
-    handle = source.schedule(tmp_path, recorder)
-    try:
-        sub = tmp_path / "newdir"
-        sub.mkdir()
-        target = sub / "arrived.md"
-        # A short settle window lets the polling emitter notice the new
-        # directory before the file write races it.
-        time.sleep(0.2)
-        target.write_text("hello")
-        assert recorder.wait_for(lambda e: e.path == target and not e.deleted), (
-            "a file inside a newly created subdirectory was never watched"
-        )
-    finally:
-        source.unschedule(handle)
-        source.stop()
-
-
-def test_schedule_never_watches_a_newly_created_ignored_subdirectory(
-    tmp_path: Path,
-) -> None:
-    """A directory created after scheduling that is ignored stays unwatched."""
-    recorder = _Recorder()
-    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
-    handle = source.schedule(tmp_path, recorder)
-    try:
-        sub = tmp_path / "node_modules"
-        sub.mkdir()
-        time.sleep(0.2)
-        target = sub / "never.md"
-        target.write_text("never watched")
-        assert not recorder.wait_for(
-            lambda e: e.path == target, deadline=_QUIET_WINDOW_S
-        ), "a file inside a newly created node_modules/ reached the recorder"
-    finally:
-        source.unschedule(handle)
-        source.stop()
-
-
-def test_schedule_failure_releases_partial_watches_and_spares_other_trees(
+def test_schedule_failure_returns_none_and_spares_other_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A mid-tree ENOSPC releases every watch already acquired for THAT tree only.
+    """A schedule() failure for one root returns None and does not affect another.
 
-    Covers the ratchet's required boundary: the partial-failure release must
-    not leak the acquired watches, and a wholly separate registration must
-    keep working -- a failure on one tree is not permitted to starve another
-    (the quarry-ndrj leak this fix retires).
+    One recursive watch per root (DES-045e) means a schedule failure is a
+    single all-or-nothing call — there is no partial per-directory state to
+    release — but a failure on one registration must still leave a wholly
+    separate registration on the SAME observer unaffected.
     """
     good = tmp_path / "good"
     good.mkdir()
     bad = tmp_path / "bad"
-    (bad / "a").mkdir(parents=True)
-    (bad / "b").mkdir()
-    (bad / "c").mkdir()
+    bad.mkdir()
 
     source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
     real_schedule = source._observer.schedule
-    real_unschedule = source._observer.unschedule
-    released: list[object] = []
 
     def flaky_schedule(
         handler: FileSystemEventHandler, path: str, *, recursive: bool = False
     ) -> ObservedWatch:
-        if Path(path) == bad / "b":
+        if Path(path) == bad:
             msg = "No space left on device"
             raise OSError(28, msg)
         return real_schedule(handler, path, recursive=recursive)
 
-    def spy_unschedule(watch: ObservedWatch) -> None:
-        released.append(watch)
-        real_unschedule(watch)
-
     monkeypatch.setattr(source._observer, "schedule", flaky_schedule)
-    monkeypatch.setattr(source._observer, "unschedule", spy_unschedule)
 
     good_recorder = _Recorder()
     good_handle = source.schedule(good, good_recorder)
     assert good_handle is not None
 
     bad_recorder = _Recorder()
-    bad_handle = source.schedule(bad, bad_recorder)
-    assert bad_handle is None  # the partial tree is refused, not leaked
-
-    # Only the bad tree's two directories acquired before "b" failed (its own
-    # root and "a", visited before "b" in topdown/sorted walk order) were
-    # released; the good tree was never touched.
-    assert len(released) == 2
+    assert source.schedule(bad, bad_recorder) is None
 
     try:
         target = good / "note.md"
@@ -234,3 +154,44 @@ def test_schedule_returns_none_for_an_unresolvable_root(tmp_path: Path) -> None:
         assert source.schedule(missing, _Recorder()) is None
     finally:
         source.stop()  # joins the observer thread under the bounded timeout
+
+
+def test_build_observer_polling_overrides_pruned_choice() -> None:
+    """use_polling=True always returns the PollingObserver, even when the
+    pruned Linux observer is importable.
+    """
+    from watchdog.observers.polling import PollingObserver
+
+    observer = WatchdogSource._build_observer(use_polling=True, poll_interval_s=0.1)
+    assert isinstance(observer, PollingObserver)
+
+
+def test_build_observer_picks_pruned_inotify_observer_when_importable() -> None:
+    """A non-polling build picks the pruned inotify observer when it imported
+    successfully at module scope (DES-045e) -- this suite runs on Linux, so
+    the module-level import already succeeded; no per-test patching needed.
+    """
+    from quarry.daemon.inotify_prune_chain import PrunedInotifyObserver
+
+    observer = WatchdogSource._build_observer(use_polling=False, poll_interval_s=2.0)
+    try:
+        assert isinstance(observer, PrunedInotifyObserver)
+    finally:
+        observer.stop()
+
+
+def test_build_observer_falls_back_when_the_pruned_observer_is_unavailable() -> None:
+    """A non-polling build falls back to watchdog's standard recursive observer
+    when the module-scope import of the pruned Linux observer failed (or was
+    patched away here to stand in for "off Linux") -- FSEvents on macOS is
+    one stream per root with no per-directory kernel cost, so there is
+    nothing to prune at this layer regardless of why the import is absent.
+    """
+    with patch.object(fs_watchdog, "_PrunedInotifyObserver", None):
+        observer = WatchdogSource._build_observer(
+            use_polling=False, poll_interval_s=2.0
+        )
+    try:
+        assert type(observer).__module__ != "quarry.daemon.inotify_prune_chain"
+    finally:
+        observer.stop()

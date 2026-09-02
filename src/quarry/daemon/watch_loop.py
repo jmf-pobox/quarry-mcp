@@ -17,7 +17,7 @@ import contextlib
 import logging
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
 
 from starlette.concurrency import run_in_threadpool
 
@@ -188,6 +188,28 @@ class WatchLoop:
         if not self._started:
             return
         self._teardown(RouteKey(self._ctx.database_name, collection))
+
+    def watch_state(
+        self, collection: str
+    ) -> Literal["watched", "degraded", "scan-only"]:
+        """Report *collection*'s live-watch status in the active database.
+
+        ``"scan-only"`` — the observer is disabled (``watch_enabled=false``)
+        or this collection has never been (or is no longer) tracked by the
+        roster; it relies entirely on the periodic safety scan and explicit
+        ``quarry sync``. ``"degraded"`` — tracked, but the last
+        ``schedule()`` returned no handle (e.g. an exhausted inotify budget)
+        — same reliance on the safety scan, but silently, unlike a
+        collection that was never registered. ``"watched"`` — a live
+        observer handle backs it.
+        """
+        if not self._started or self._roster is None:
+            return "scan-only"
+        key = RouteKey(self._ctx.database_name, collection)
+        present = self._roster.watch_handle_present(key)
+        if present is None:
+            return "scan-only"
+        return "watched" if present else "degraded"
 
     def _teardown(self, key: RouteKey) -> None:
         """Unwatch *key*'s tree and drop its pending + backoff state."""

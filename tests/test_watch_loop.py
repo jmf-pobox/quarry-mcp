@@ -233,6 +233,78 @@ def test_start_submits_initial_scan_and_finalize_per_collection(tmp_path: Path) 
     asyncio.run(_run())
 
 
+def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
+    """A collection with a live observer handle reports "watched" (DES-045e)."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "watched"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_degraded_for_a_none_handle(tmp_path: Path) -> None:
+    """A schedule() failure (None handle) reports "degraded", not "watched"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource(null_handle=True)
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "degraded"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_for_an_unregistered_collection(tmp_path: Path) -> None:
+    """A collection the roster has never tracked reports "scan-only"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("never-registered") == "scan-only"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_when_the_observer_is_disabled(tmp_path: Path) -> None:
+    """watch_enabled=false means every collection reads "scan-only"."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue, enabled=False)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "scan-only"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_scan_only_before_start(tmp_path: Path) -> None:
+    """Before start() ever runs, watch_state is the safe scan-only default."""
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)
+        loop = WatchLoop(ctx, source=_FakeSource())
+        assert loop.watch_state("col") == "scan-only"
+
+    asyncio.run(_run())
+
+
 def test_ten_edits_coalesce_to_one_file_index_job(tmp_path: Path) -> None:
     """Ten modify events for one file submit exactly one FileIndexJob."""
 

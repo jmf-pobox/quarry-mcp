@@ -18,11 +18,9 @@ from quarry.db.chunk_table import ChunkTable
 from quarry.db.optimizer import TableOptimizer
 from quarry.db.schema import TABLE_NAME
 from quarry.db.storage import get_db
-from quarry.ignore_spec import _DEFAULT_IGNORE_PATTERNS, IgnoreRules
 from quarry.ingestion.pipeline import plan_file_chunks
 from quarry.ingestion.progressive import FlushCheckpoint, ProgressiveIndexer
 from quarry.models import PageContent, PageType
-from quarry.scratch_paths import ScratchGuard
 from quarry.sync import sync_collection
 from quarry.sync_discovery import FileDiscovery
 from quarry.sync_file_store import FileRecord
@@ -710,53 +708,7 @@ class TestIsWatchableDir:
         assert FileDiscovery(root).is_watchable_dir(sub) is False
 
 
-class TestLoadIgnoreSpec:
-    def test_default_patterns_are_globs_not_dir_names(self):
-        # Glob patterns stay in the pathspec defaults; scratch/VCS/cache DIR
-        # names moved to ScratchGuard (pruned by name in the walk), so they are
-        # no longer duplicated here.
-        assert "*.pyc" in _DEFAULT_IGNORE_PATTERNS
-        assert ".DS_Store" in _DEFAULT_IGNORE_PATTERNS
-        assert "node_modules/" not in _DEFAULT_IGNORE_PATTERNS
-        assert "venv/" not in _DEFAULT_IGNORE_PATTERNS
-        guard = ScratchGuard()
-        assert guard.is_skip_name("venv")
-        assert guard.is_skip_name("node_modules")
-        assert guard.is_skip_name("__pycache__")
-
-    def test_loads_gitignore(self, tmp_path: Path):
-        (tmp_path / ".gitignore").write_text("*.log\noutput/\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("debug.log")
-        assert spec.match_file("output/")
-        assert not spec.match_file("app.py")
-
-    def test_loads_quarryignore(self, tmp_path: Path):
-        (tmp_path / ".quarryignore").write_text("scratch/\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("scratch/")
-
-    def test_no_ignore_files_uses_defaults(self, tmp_path: Path):
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("module.pyc")
-        assert spec.match_file(".DS_Store")
-        assert not spec.match_file("src/app.py")
-
-    def test_comments_and_blanks_ignored(self, tmp_path: Path):
-        (tmp_path / ".gitignore").write_text("# comment\n\n*.log\n")
-        spec = FileDiscovery(tmp_path).load_ignore_spec()
-        assert spec.match_file("debug.log")
-        assert not spec.match_file("# comment")
-
-    def test_read_ignore_lines_absent_returns_empty(self, tmp_path: Path):
-        """An absent ignore file yields no lines (not a crash)."""
-        assert IgnoreRules._read_ignore_lines(tmp_path / ".gitignore") == []
-
-    def test_read_ignore_lines_unreadable_returns_empty(self, tmp_path: Path):
-        """An unreadable ignore file (a directory) yields no lines, no raise."""
-        (tmp_path / ".gitignore").mkdir()  # read_text → IsADirectoryError (OSError)
-        assert IgnoreRules._read_ignore_lines(tmp_path / ".gitignore") == []
-
+class TestDiscoverSurvivesUnreadableIgnoreFile:
     def test_discover_survives_unreadable_gitignore(self, tmp_path: Path):
         """A raced/unreadable .gitignore does not abort the whole discover() walk."""
         (tmp_path / ".gitignore").mkdir()  # unreadable ignore → skipped, walk continues

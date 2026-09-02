@@ -2538,6 +2538,35 @@ class TestRegistrations:
             {"collection": "archived", "original_directory": "/home/u/arch"}
         ]
 
+    def test_get_lists_registrations_reports_watch_state(
+        self, client: TestClient
+    ) -> None:
+        """Each registration carries its live watch-degradation status (DES-045e).
+
+        The test app's watch loop is never started, so every registration
+        reports the conservative "scan-only" reading rather than a stale
+        "watched" -- proven end to end through the real WatchLoop.watch_state,
+        not a mock.
+        """
+        from quarry.sync_registry import DirectoryRegistration
+
+        regs = [
+            DirectoryRegistration(
+                directory="/home/u/math",
+                collection="math",
+                registered_at="2026-01-01T00:00:00",
+            )
+        ]
+        with (
+            patch("quarry.daemon.routes.registrations.SyncRegistry") as mock_registry,
+            patch("pathlib.Path.exists", return_value=True),
+        ):
+            mock_registry.return_value.list_registrations.return_value = regs
+            mock_registry.return_value.markers.retained_markers.return_value = []
+            data = client.get("/v1/registrations").json()
+
+        assert data["registrations"][0]["watch_state"] == "scan-only"
+
     def test_list_response_matches_local_contract(self, client: TestClient) -> None:
         """The remote list JSON is a faithful RegistrationList (bug-class 3 parity).
 

@@ -201,16 +201,14 @@ class FileDiscovery:
         local_spec: IgnoreSpec | None,
     ) -> Iterator[Path]:
         """Yield the absolute path of each indexable file directly in *dirpath*."""
+        rel_dir = dirpath.relative_to(self._directory)
         for filename in sorted(filenames):
             filepath = dirpath / filename
             if filename.startswith((".", "._")):
                 continue
             if filepath.suffix.lower() not in extensions:
                 continue
-            rel_path = str(filepath.relative_to(self._directory))
-            if root_spec.match_file(rel_path):
-                continue
-            if local_spec is not None and local_spec.match_file(filename):
+            if not self._rules.keeps_file(rel_dir, filename, root_spec, local_spec):
                 continue
             if filepath.is_symlink() and not self._symlink_inside_root(filepath):
                 continue
@@ -240,7 +238,7 @@ class FileDiscovery:
             return False
         if self._guard.skips_below_root(rel):
             return False
-        if self._rules.root_spec().match_file(str(rel)):
+        if self._rules.excludes(self._rules.root_spec(), str(rel), is_dir=False):
             return False
         return not self._nested_ignored(parts)
 
@@ -270,8 +268,7 @@ class FileDiscovery:
         for index, segment in enumerate(parts):
             if current != self._directory:
                 local = self._rules.local_spec(current)
-                marker = "" if index == last else "/"
-                if local is not None and local.match_file(segment + marker):
+                if self._rules.excludes(local, segment, is_dir=index != last):
                     return True
             current = current / segment
         return False
@@ -309,10 +306,6 @@ class FileDiscovery:
             for chunk in iter(lambda: f.read(_HASH_CHUNK_SIZE), b""):
                 h.update(chunk)
         return h.hexdigest()
-
-    def load_ignore_spec(self) -> IgnoreSpec:
-        """Build a PathSpec from ``.gitignore``, ``.quarryignore``, and defaults."""
-        return self._rules.root_spec()
 
     def _symlink_inside_root(self, link: Path) -> bool:
         """Return True iff *link*'s target resolves inside the root."""

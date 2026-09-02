@@ -164,6 +164,19 @@ class WatchRoster:
         watch = self._watches.get(key)
         return None if watch is None else watch.resolved_root
 
+    def watch_handle_present(self, key: RouteKey) -> bool | None:
+        """Whether *key* has a live observer handle: ``None`` if untracked.
+
+        Distinguishes three states a status surface must tell apart:
+        ``None`` (the roster has never begun watching this key — a fresh
+        registration, or the observer is disabled entirely), ``False`` (the
+        roster tracks the key but ``schedule()`` returned no handle — the
+        tree is *watched in name only*, degraded to relying on the periodic
+        safety scan), and ``True`` (a real observer handle backs it).
+        """
+        watch = self._watches.get(key)
+        return None if watch is None else watch.handle is not None
+
     def keys(self) -> list[RouteKey]:
         """Return every currently-watched route key."""
         return list(self._watches)
