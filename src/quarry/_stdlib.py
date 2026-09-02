@@ -309,12 +309,11 @@ class _SessionSetup:
         settings = self._load_settings()
         if settings is None:
             return None
-        tool_prefix = f"mcp__{self._plugin_name}__"
+        wildcard = f"mcp__{self._plugin_name}__*"
         allow_list = self._ensure_allow_list(settings)
-        for entry in allow_list:
-            if isinstance(entry, str) and tool_prefix in entry:
-                return None
-        allow_list.append(f"{tool_prefix}*")
+        if wildcard in allow_list:
+            return None
+        allow_list.append(wildcard)
         if not self._write_settings(settings):
             return None
         return f"Auto-allowed {self._plugin_name} MCP tools in permissions"

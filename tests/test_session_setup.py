@@ -87,6 +87,27 @@ class TestAllowMcpTools:
         allow = settings["permissions"]["allow"]
         assert "mcp__quarry-dev__*" in allow
 
+    def test_grants_wildcard_when_narrower_entry_exists(
+        self, fake_home: Path, tmp_path: Path
+    ) -> None:
+        """A pre-seeded narrower entry must not shadow the wildcard.
+
+        Guards against a substring-match check that mistakes any string
+        containing ``mcp__<plugin>__`` (e.g. a single-tool entry) for the
+        wildcard already being present, leaving native tools prompt-gated.
+        """
+        settings_path = fake_home / ".claude" / "settings.json"
+        settings_path.write_text(
+            json.dumps({"permissions": {"allow": ["mcp__quarry__some_specific_tool"]}})
+        )
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
+        setup = _SessionSetup.open(plugin_root)
+        assert setup is not None
+        setup._allow_mcp_tools()
+
+        allow = json.loads(settings_path.read_text())["permissions"]["allow"]
+        assert "mcp__quarry__*" in allow
+
 
 class TestOpenFailOpen:
     """``_SessionSetup.open`` returns ``None`` for any structural defect."""
