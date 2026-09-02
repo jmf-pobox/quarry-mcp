@@ -91,8 +91,8 @@ _EVENT_CASES: tuple[tuple[str, str, str, str], ...] = (
     (
         "session-setup",
         "webfetch/httpbin_json.json",
-        "quarry",
-        "session-setup handler leaves at least one INFO line in quarry.log",
+        "quarry.hooks: session-setup: entered",
+        "session-setup handler emits the entered breadcrumb once configured",
     ),
 )
 
