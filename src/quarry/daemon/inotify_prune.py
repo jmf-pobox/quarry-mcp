@@ -44,6 +44,7 @@ scheduling — pruning happens only at the post-debounce event filter
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import logging
 import os
@@ -150,16 +151,38 @@ class PrunedInotify(Inotify):
             self._add_watch(full_path, mask)
         except OSError as exc:
             if exc.errno in {errno.ENOSPC, errno.EMFILE}:
-                # Known and accepted: vanilla Inotify.__init__ has no try/finally
-                # around this call, so a re-raise here leaks the 3 fds it already
-                # opened (the inotify fd, the kill pipe's two ends) -- this
-                # construction attempt is simply abandoned. Bounded: the caller
-                # (WatchdogSource.schedule) catches this as a degraded/unwatched
-                # tree and the daemon's reconciler never retries scheduling a
-                # degraded key, so the leak is at most once per registered tree
-                # per daemon lifetime, not a retry loop.
+                # Release every fd/watch this partially-constructed instance
+                # holds before aborting (Copilot, PR #503 round 2 -- the
+                # earlier "documented 3-fd bound" undercounted: every REAL
+                # watch descriptor already acquired by this walk lives until
+                # the inotify fd closes, so a failed schedule was permanently
+                # consuming watch budget and starving other registrations,
+                # the quarry-ndrj leak shape relocated here).
+                self._release_on_abort()
                 raise
             logger.warning("watch: skipping %s during initial walk: %s", full_path, exc)
+
+    def _release_on_abort(self) -> None:
+        """Close every fd this partially-constructed instance holds.
+
+        Vanilla ``Inotify.close()`` assumes an async reader thread exists
+        to finish the close -- it only writes to the KILL pipe when
+        ``self._is_reading`` is True, which it always is here (construction
+        aborts before any thread ever starts, so nothing would read that
+        byte and call ``_close_resources``). This bypasses that
+        thread-signaling protocol and closes each fd directly: the inotify
+        fd first (closing it releases every kernel watch this walk already
+        acquired, the actual budget being freed here — not just the fd
+        itself), then both kill-pipe ends, each independently
+        suppress-protected so one failing close cannot leave the others
+        open. Called from :meth:`_try_add_watch`'s ENOSPC/EMFILE abort path
+        only, so the caller re-raises the ORIGINAL error afterward — a
+        close failure here is swallowed, never substituted for it.
+        """
+        self._closed = True
+        for fd in (self._inotify_fd, self._kill_r, self._kill_w):
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
     def _add_watch(self, path: bytes, mask: int) -> int:
         """Add a real inotify watch for *path*, or refuse it if pruned.

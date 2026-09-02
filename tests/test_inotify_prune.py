@@ -250,6 +250,46 @@ def test_add_dir_watch_aborts_on_budget_exhaustion(
         PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
 
 
+@pytest.mark.parametrize("bad_errno", [errno.ENOSPC, errno.EMFILE])
+def test_add_dir_watch_releases_resources_on_budget_exhaustion(
+    tmp_path: Path, bad_errno: int
+) -> None:
+    """A budget-exhaustion abort must not leak the inotify fd or the kill
+    pipe (Copilot, PR #503 round 2). Closing the inotify fd is the real
+    budget relief: on Linux, closing an inotify instance's fd releases
+    every watch descriptor already acquired on it -- the earlier
+    "documented 3-fd bound" undercounted the cost, since a failed
+    schedule was leaving every watch this walk had ALREADY acquired
+    permanently consuming budget (the quarry-ndrj leak shape relocated).
+
+    Constructs via ``__new__`` + a direct ``Inotify.__init__`` call
+    (rather than ``PrunedInotify(...)``) so the partially-constructed
+    instance is still reachable after the raise -- ``PrunedInotify(...)``
+    itself would lose the only reference to it the moment the exception
+    propagates out of construction.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    fail_b = {str(tmp_path / "b").encode(): bad_errno}
+    kernel = _FakeKernel(fail_paths=fail_b)
+    with (
+        patch.object(inotify_c, "inotify_init", kernel.init),
+        patch.object(inotify_c, "inotify_add_watch", kernel.add_watch),
+        patch.object(inotify_c, "inotify_rm_watch", kernel.rm_watch),
+    ):
+        path = str(tmp_path).encode()
+        inst = PrunedInotify.__new__(
+            PrunedInotify, path, recursive=True, event_mask=None
+        )
+        with pytest.raises(OSError, match=r"limit reached"):
+            inotify_c.Inotify.__init__(inst, path, recursive=True, event_mask=None)
+
+    assert inst._closed is True
+    for fd in (inst._inotify_fd, inst._kill_r, inst._kill_w):
+        with pytest.raises(OSError):  # closing an already-closed fd raises EBADF
+            os.close(fd)
+
+
 def test_add_watch_rejects_an_ignored_path_and_registers_the_sentinel(
     tmp_path: Path, fake_kernel: _FakeKernel
 ) -> None:
