@@ -177,6 +177,95 @@ def test_non_html_ingest_redacts_url_secrets_in_document_name(
     )
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("application/json", "application/json"),
+        ("text/html; charset=utf-8", "text/html;charset=utf-8"),
+        ("application/vnd.api+json", "application/vnd.api+json"),
+    ],
+    ids=["json", "html-charset", "vendor-plus"],
+)
+def test_sanitize_media_type_passes_well_formed_values(raw: str, expected: str) -> None:
+    """A well-formed RFC 6838 media type survives sanitization unchanged."""
+    assert IngestJob.sanitize_media_type(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "application/json\n<!-- injection -->",
+        "text/plain\r\n<!-- xss -->",
+        "application/json; charset=utf-8\r\n\r\ninjected",
+        "text/html\n\r\t <script>alert(1)</script>",
+    ],
+    ids=["newline-comment", "crlf-comment", "crlf-header-smuggle", "html-tag"],
+)
+def test_sanitize_media_type_strips_marker_escape_attempts(raw: str) -> None:
+    """Whitespace, control bytes, and comment-escape needles are stripped clean."""
+    cleaned = IngestJob.sanitize_media_type(raw)
+    assert "<!--" not in cleaned, f"leaked <!-- opener from {raw!r} → {cleaned!r}"
+    assert "-->" not in cleaned, f"leaked --> closer from {raw!r} → {cleaned!r}"
+    assert "\n" not in cleaned and "\r" not in cleaned, (
+        f"newline survived from {raw!r} → {cleaned!r}"
+    )
+
+
+def test_sanitize_media_type_caps_length_at_128() -> None:
+    """A pathological megabyte Content-Type header is bounded at 128 chars."""
+    assert IngestJob.sanitize_media_type("a" * 500) == "a" * 128
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "   ", "\t\n\r", "!!!\x00\x01", "<>&{}"],
+    ids=["empty", "spaces", "control", "punctuation-and-null", "unsafe-only"],
+)
+def test_sanitize_media_type_falls_back_when_input_degrades_to_nothing(
+    raw: str,
+) -> None:
+    """Input that cleans to empty resolves to the RFC 2046 default octet-stream."""
+    assert IngestJob.sanitize_media_type(raw) == "application/octet-stream"
+
+
+def test_ingest_captured_body_sanitizes_media_type_in_marker() -> None:
+    """A hostile Content-Type never breaks the single-line ``<!-- media_type: X -->``.
+
+    Marker escape is the CWE-79-adjacent risk: a header carrying ``\\n<!-- foo -->``
+    would split the marker across lines and let the follow-on ``-->`` close the
+    HTML comment early — the stored capture would then leak the injected text
+    to any downstream tool that treats the marker as inert.
+    """
+    hostile = "text/plain\n<!-- xss -->"
+    body = FetchedBody(text="body", media_type=hostile)
+    with (
+        patch(
+            "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+            return_value=body,
+        ),
+        patch(
+            "quarry.ingestion.pipeline.ingest_content",
+            return_value={"chunks": 1, "sections": 1},
+        ) as mock_ingest_content,
+    ):
+        _job("https://example.test/data")._ingest(_ctx())
+
+    content_arg = mock_ingest_content.call_args.args[0]
+    first_line, _, _ = content_arg.partition("\n")
+    assert first_line.startswith("<!-- media_type: "), (
+        f"marker line does not start with the media_type comment: {first_line!r}"
+    )
+    assert first_line.endswith(" -->"), (
+        f"marker line does not close on a single line: {first_line!r}"
+    )
+    assert first_line.count("-->") == 1, (
+        f"marker line contains multiple '-->' sequences: {first_line!r}"
+    )
+    assert "<!--" not in first_line[4:], (
+        f"marker line contains a nested opener: {first_line!r}"
+    )
+
+
 def test_ingest_fetch_failure_logs_redacted_url_and_returns_zero_chunks(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

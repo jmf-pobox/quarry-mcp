@@ -9,8 +9,9 @@ build :class:`ScrubbedIngestJob`; the URL route builds :class:`IngestJob`.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from starlette.concurrency import run_in_threadpool
 
@@ -24,6 +25,17 @@ if TYPE_CHECKING:
     from quarry.ingestion.web_fetch import FetchedBody
 
 logger = logging.getLogger(__name__)
+
+# The Content-Type header is server-controlled and lands verbatim in the
+# ``<!-- media_type: X -->`` marker written to the stored capture.  A header
+# carrying whitespace, control bytes, or the ``-->`` needle would break the
+# single-line HTML-comment contract or escape the marker entirely.  The
+# whitelist is the RFC 6838 shape (type/subtype plus parameter punctuation),
+# the length cap defends against a pathological megabyte header, and the
+# fallback keeps a marker on the row when the input degrades to nothing.
+_MEDIA_TYPE_ALLOWED: Final = re.compile(r"[^a-zA-Z0-9/.+;=_-]")
+_MEDIA_TYPE_MAX_LEN: Final = 128
+_MEDIA_TYPE_FALLBACK: Final = "application/octet-stream"
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,29 +194,62 @@ class IngestJob:
     def fetch_and_route(self, ctx: DaemonContext) -> dict[str, object]:
         """Fetch ``self.source`` and route via :meth:`ingest_captured_body`.
 
-        A network/safety failure logs the URL through the same normaliser
-        writes use (dropping userinfo/query/fragment) and returns an empty
-        result rather than propagating the exception, whose message quotes
-        the raw URL and would leak ``?token=`` or ``user:pass@`` secrets
-        into the persistent quarry.log (CWE-532).
-
         Shared by :meth:`_ingest` (primary capture) and
         :meth:`CaptureIngestJob._refetch` (empty-inline fallback) so both
         paths have identical fetch-failure semantics — the fix landed on the
         fallback path first (PR #496); this method extends it to the primary.
+        Failure handling lives in :meth:`safe_fetch_body` — the exception
+        text quotes the raw URL and would leak ``?token=`` or ``user:pass@``
+        secrets into the persistent quarry.log (CWE-532).
+        """
+        body = self.safe_fetch_body(self.source, "ingest: fetch")
+        if body is None:
+            return {"chunks": 0, "sections": 0}
+        return self.ingest_captured_body(ctx, body)
+
+    @staticmethod
+    def safe_fetch_body(url: str, kind: str) -> FetchedBody | None:
+        """Fetch ``url`` or return ``None`` after logging the failure redacted.
+
+        ``fetch_body`` raises ``OSError``/``ValueError``/``TimeoutError`` with
+        the raw URL embedded in the message (``"Cannot reach {url}: ..."``);
+        letting that reach the log or ``task_terminal``'s traceback leaks
+        ``?token=`` and ``user:pass@`` secrets into the persistent
+        quarry.log (CWE-532).  Redact the URL through the same normaliser
+        writes use (drops userinfo/query/fragment), log only the exception
+        class name, and return ``None`` so the caller short-circuits with an
+        empty result instead of a traceback.
         """
         from quarry.capture_url import CaptureUrl  # noqa: PLC0415
 
         try:
-            body = WebFetcher().fetch_body(self.source)
+            return WebFetcher().fetch_body(url)
         except (OSError, ValueError, TimeoutError) as exc:
             logger.warning(
-                "ingest: fetch of %s failed (%s); skipping",
-                CaptureUrl.for_web_fetch(self.source),
+                "%s of %s failed (%s); skipping",
+                kind,
+                CaptureUrl.for_web_fetch(url),
                 type(exc).__name__,
             )
-            return {"chunks": 0, "sections": 0}
-        return self.ingest_captured_body(ctx, body)
+            return None
+
+    @staticmethod
+    def sanitize_media_type(raw: str) -> str:
+        """Return a marker-safe media type; fall back on empty/unsafe input.
+
+        ``raw`` is the ``Content-Type`` primary token from the HTTP response and
+        is server-controlled.  Interpolating it verbatim into the
+        ``<!-- media_type: X -->`` capture marker would let a header carrying
+        whitespace, control bytes, or the ``-->`` needle break the single-line
+        HTML-comment contract or escape the marker entirely.  Strip to the
+        RFC 6838 shape (alphanumerics plus ``/.+;=_-``), cap at 128 chars, and
+        substitute ``application/octet-stream`` when the input degrades to
+        nothing after cleaning — the marker survives; the injection does not.
+        """
+        cleaned = _MEDIA_TYPE_ALLOWED.sub("", raw)[:_MEDIA_TYPE_MAX_LEN]
+        if not cleaned or "-->" in cleaned:
+            return _MEDIA_TYPE_FALLBACK
+        return cleaned
 
     def ingest_captured_body(
         self, ctx: DaemonContext, body: FetchedBody
@@ -254,7 +299,7 @@ class IngestJob:
                 )
             )
 
-        media_type = body.media_type or "unknown"
+        media_type = self.sanitize_media_type(body.media_type)
         content = f"<!-- media_type: {media_type} -->\n{body.text}"
         name = self.document_name_override or CaptureUrl(self.source).redacted(scrub)
         return dict(
@@ -325,31 +370,21 @@ class CaptureIngestJob:
 
         A safety/network failure logs cleanly at WARN and returns an empty
         result — never a traceback — because ``_capture`` already stored what
-        the inline phase had.  A successful fetch flows through the same
-        HTML-vs-text routing :class:`IngestJob` uses for the primary URL path
-        (:meth:`IngestJob.ingest_captured_body`), so both paths agree on the
-        media-type contract instead of drifting.
+        the inline phase had.  Failure handling delegates to
+        :meth:`IngestJob.safe_fetch_body` so both fetch paths share the same
+        redacted-log semantics (CWE-532).  A successful fetch flows through
+        the same HTML-vs-text routing :class:`IngestJob` uses for the primary
+        URL path (:meth:`IngestJob.ingest_captured_body`), so both paths
+        agree on the media-type contract instead of drifting.
         """
-        from quarry.capture_url import CaptureUrl  # noqa: PLC0415
-
-        try:
-            body = WebFetcher().fetch_body(self.source_url)
-        except (OSError, ValueError, TimeoutError) as exc:
-            # Redact the URL through the same normaliser writes use (drops
-            # userinfo/query/fragment) and log only the exception class — the
-            # exception's own text quotes the raw URL and can carry ?token=
-            # or user:pass@ secrets into the persistent quarry.log (CWE-532).
-            logger.warning(
-                "capture: refetch of %s failed (%s); skipping",
-                CaptureUrl.for_web_fetch(self.source_url),
-                type(exc).__name__,
-            )
+        body = IngestJob.safe_fetch_body(self.source_url, "capture: refetch")
+        if body is None:
             return {"chunks": 0, "sections": 0}
 
         logger.info(
             "capture: %s inline extracted to zero chunks — re-fetching via daemon (%s)",
             self.inline.name,
-            body.media_type or "unknown",
+            IngestJob.sanitize_media_type(body.media_type),
         )
         return IngestJob(
             source=self.source_url,
