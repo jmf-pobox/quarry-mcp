@@ -21,6 +21,7 @@ from quarry.ingestion.web_fetch import WebFetcher
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+    from quarry.ingestion.web_fetch import FetchedBody
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,13 @@ class IngestJob:
     ``quarry ingest``: sitemap-aware and unscrubbed, since a deliberately
     ingested document is stored byte-for-byte.  ``collection`` is the routing key
     the queue serializes on, so the route resolves it before the job is built.
+
+    ``document_name_override`` is empty for the primary URL route (the URL is
+    the natural name).  A capture *re-fetch* built by
+    :meth:`CaptureIngestJob._refetch` sets it to the inline capture's friendly
+    name (e.g. ``"WebFetch — example.com — 2026-…"``), so a non-HTML capture
+    stored via the text pipeline keeps that name instead of falling back to the
+    raw URL.
     """
 
     source: str
@@ -119,6 +127,7 @@ class IngestJob:
     agent_handle: str
     memory_type: str
     summary: str
+    document_name_override: str = ""
 
     async def run(self, ctx: DaemonContext, state: TaskState) -> None:
         """Fetch and index the URL in a background thread, updating task state."""
@@ -142,14 +151,57 @@ class IngestJob:
         )
 
     def _ingest(self, ctx: DaemonContext) -> dict[str, object]:
-        """Run the capture re-fetch (scrubbed, captures collection) or plain ingest."""
+        """Run the capture re-fetch (scrubbed, captures collection) or plain ingest.
+
+        The scrubbed branch fetches via :meth:`WebFetcher.fetch_body` first so a
+        JSON/plain-text/XML URL (a REST endpoint, a raw log) is captured as text
+        rather than raising ``ValueError`` from the HTML-only :meth:`fetch`.  The
+        HTML-vs-text routing then lives in :meth:`ingest_captured_body`, shared
+        with :meth:`CaptureIngestJob._refetch`.
+        """
         if self.scrub:
-            from quarry.ingestion.pipeline import ingest_url  # noqa: PLC0415
-            from quarry.scrub import scrub_and_log  # noqa: PLC0415
+            body = WebFetcher().fetch_body(self.source)
+            return self.ingest_captured_body(ctx, body)
 
-            def scrub(text: str) -> str:
-                return scrub_and_log(text, "web-fetch")
+        from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
 
+        return dict(
+            ingest_auto(
+                self.source,
+                ctx.database,
+                ctx.settings,
+                overwrite=self.overwrite,
+                collection=self.collection,
+                agent_handle=self.agent_handle,
+                memory_type=self.memory_type,
+                summary=self.summary,
+            )
+        )
+
+    def ingest_captured_body(
+        self, ctx: DaemonContext, body: FetchedBody
+    ) -> dict[str, object]:
+        """Route a fetched capture body: HTML via extractor, else text with mime marker.
+
+        Shared by :meth:`_ingest` (primary capture) and
+        :meth:`CaptureIngestJob._refetch` (empty-inline fallback) so both paths
+        agree on the media-type contract: an HTML body flows through
+        :func:`ingest_url` with the already-fetched text reused via
+        ``prefetched_html`` (no double fetch), and anything else is stored via
+        :func:`ingest_content` with a leading ``<!-- media_type: X -->`` marker
+        so a reader — and a downstream grep — knows the shape.  The marker is
+        inert to the markdown extractor and to the scrub choke point.
+        """
+        from quarry.ingestion.pipeline import (  # noqa: PLC0415
+            ingest_content,
+            ingest_url,
+        )
+        from quarry.scrub import scrub_and_log  # noqa: PLC0415
+
+        def scrub(text: str) -> str:
+            return scrub_and_log(text, "web-fetch")
+
+        if body.is_html:
             return dict(
                 ingest_url(
                     self.source,
@@ -161,18 +213,22 @@ class IngestJob:
                     agent_handle=self.agent_handle,
                     memory_type=self.memory_type,
                     summary=self.summary,
+                    prefetched_html=body.text,
                 )
             )
 
-        from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
-
+        media_type = body.media_type or "unknown"
+        content = f"<!-- media_type: {media_type} -->\n{body.text}"
         return dict(
-            ingest_auto(
-                self.source,
+            ingest_content(
+                content,
+                self.document_name_override or self.source,
                 ctx.database,
                 ctx.settings,
                 overwrite=self.overwrite,
                 collection=self.collection,
+                format_hint="markdown",
+                content_scrubber=scrub,
                 agent_handle=self.agent_handle,
                 memory_type=self.memory_type,
                 summary=self.summary,
@@ -227,27 +283,16 @@ class CaptureIngestJob:
         return self._refetch(ctx)
 
     def _refetch(self, ctx: DaemonContext) -> dict[str, object]:
-        """Re-fetch source URL; route HTML through extractor, non-HTML as text.
+        """Re-fetch source URL and delegate routing to :class:`IngestJob`.
 
-        G4 capture-as-text: a JSON or plain-text URL (a REST endpoint,
-        a raw log) used to raise ``ValueError: URL returned non-HTML
-        content`` from :meth:`WebFetcher.fetch`, dumping a stack trace
-        in the daemon log and dropping the capture entirely.  The new
-        :meth:`WebFetcher.fetch_body` returns the body with its media
-        type so we can route HTML through the HTML extractor and
-        everything else through the text pipeline instead of skipping.
-        A safety/network failure still logs cleanly at WARN and returns
-        an empty result — never a traceback.
+        A safety/network failure logs cleanly at WARN and returns an empty
+        result — never a traceback — because ``_capture`` already stored what
+        the inline phase had.  A successful fetch flows through the same
+        HTML-vs-text routing :class:`IngestJob` uses for the primary URL path
+        (:meth:`IngestJob.ingest_captured_body`), so both paths agree on the
+        media-type contract instead of drifting.
         """
         from quarry.capture_url import CaptureUrl  # noqa: PLC0415
-        from quarry.ingestion.pipeline import (  # noqa: PLC0415
-            ingest_content,
-            ingest_url,
-        )
-        from quarry.scrub import scrub_and_log  # noqa: PLC0415
-
-        def scrub(text: str) -> str:
-            return scrub_and_log(text, "web-fetch")
 
         try:
             body = WebFetcher().fetch_body(self.source_url)
@@ -263,54 +308,18 @@ class CaptureIngestJob:
             )
             return {"chunks": 0, "sections": 0}
 
-        if body.is_html:
-            logger.info(
-                "capture: %s inline extracted to zero chunks — re-fetching via daemon",
-                self.inline.name,
-            )
-            return dict(
-                ingest_url(
-                    self.source_url,
-                    ctx.database,
-                    ctx.settings,
-                    overwrite=self.inline.overwrite,
-                    collection=self.inline.collection,
-                    content_scrubber=scrub,
-                    agent_handle=self.inline.agent_handle,
-                    memory_type=self.inline.memory_type,
-                    summary=self.inline.summary,
-                    # Already have the body from fetch_body above — reusing it
-                    # here avoids fetching self.source_url a second time.
-                    prefetched_html=body.text,
-                )
-            )
-
-        # Non-HTML (JSON, plain text, XML, etc.): capture as text so a
-        # REST-API response or a raw log becomes searchable instead of a
-        # stack trace in the daemon log.  The stored document leads with an
-        # HTML-comment mime marker so a reader — and a downstream grep — knows
-        # what shape the body actually carries; the marker is inert to both
-        # the markdown extractor and the scrub choke point.
-        media_type = body.media_type or "unknown"
         logger.info(
-            "capture: %s non-HTML (%s) — capturing body as text (%d chars)",
+            "capture: %s inline extracted to zero chunks — re-fetching via daemon (%s)",
             self.inline.name,
-            media_type,
-            len(body.text),
+            body.media_type or "unknown",
         )
-        content = f"<!-- media_type: {media_type} -->\n{body.text}"
-        return dict(
-            ingest_content(
-                content,
-                self.inline.name,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.inline.overwrite,
-                collection=self.inline.collection,
-                format_hint="markdown",
-                content_scrubber=scrub,
-                agent_handle=self.inline.agent_handle,
-                memory_type=self.inline.memory_type,
-                summary=self.inline.summary,
-            )
-        )
+        return IngestJob(
+            source=self.source_url,
+            overwrite=self.inline.overwrite,
+            collection=self.inline.collection,
+            scrub=True,
+            agent_handle=self.inline.agent_handle,
+            memory_type=self.inline.memory_type,
+            summary=self.inline.summary,
+            document_name_override=self.inline.name,
+        ).ingest_captured_body(ctx, body)

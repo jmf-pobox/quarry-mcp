@@ -821,10 +821,10 @@
   "src/quarry/daemon/ingest_jobs.py": {
     "method_ratio": 1.0,
     "encapsulation_ratio": 1.0,
-    "avg_params": 0.93,
+    "avg_params": 1.0,
     "max_complexity": 4.0,
-    "avg_complexity": 1.43,
-    "module_size": 271.0,
+    "avg_complexity": 1.57,
+    "module_size": 277.0,
     "classes_per_module": 3.0,
     "class_to_func_ratio": 1.0,
     "init_violations": 0.0,
