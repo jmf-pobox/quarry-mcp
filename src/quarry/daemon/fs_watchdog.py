@@ -12,10 +12,14 @@ and fds per directory. ``fs.inotify.max_user_instances`` defaults to 128
 (per-user, shared with IDEs/editors), so per-directory scheduling exhausted
 it at ~120 directories).
 
-``WatchdogSource`` instead picks the observer by whether the pruned Linux
-observer is importable (a module-scope ``try``/``except`` at the top of this
-file, not a ``platform.system()`` branch — the import itself is the reliable
-signal, since it fails exactly when the host's libc lacks inotify):
+``WatchdogSource`` instead picks the observer by platform (a module-scope
+``platform.system()`` branch at the top of this file, so the import happens
+once at process startup, not per-``WatchdogSource``): on Linux, an import
+failure is loud (``logger.error``) and falls back rather than silently
+reverting to unpruned recursive watching, so a future watchdog release that
+renames the private internals :mod:`~quarry.daemon.inotify_prune`/
+``inotify_prune_chain`` depend on is visible in the daemon's logs, not just
+in a quietly-larger fd/watch footprint.
 
 * **Linux** — :class:`~quarry.daemon.inotify_prune_chain.PrunedInotifyObserver`:
   one inotify instance per root (comfortably inside
@@ -39,6 +43,7 @@ ignore spec before any event reaches the ingest queue.
 from __future__ import annotations
 
 import logging
+import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, cast, final
 
@@ -69,16 +74,28 @@ _JOIN_TIMEOUT_S = 5.0
 # The pruned Linux observer, or None off Linux -- imported at module scope
 # (not lazily inside a function) so this is a plain conditional import, not a
 # PLC0415 violation, and so pyright/mypy narrow the None-check below rather
-# than needing a suppression.  Importing unconditionally and catching the
-# failure (instead of branching on platform.system()) is also the more
-# robust signal: it degrades correctly on any host whose libc lacks inotify,
-# not just ones platform.system() happens to report as non-Linux.
+# than needing a suppression.  Branches explicitly on platform.system() (djb
+# major): a Linux host whose import fails (e.g. a future watchdog release
+# renaming the private internals this module subclasses) is loud and
+# distinct from the expected, silent macOS/Windows fallback -- an
+# `except (ImportError, UnsupportedLibcError)` with no platform check would
+# make "watchdog upgrade broke us" indistinguishable from "this is macOS",
+# silently reverting a Linux host to UNPRUNED recursive watching with no
+# signal at all.
 _PrunedInotifyObserver: type[_PrunedInotifyObserverType] | None
-try:
-    from quarry.daemon.inotify_prune_chain import (
-        PrunedInotifyObserver as _PrunedInotifyObserver,
-    )
-except (ImportError, UnsupportedLibcError):
+if platform.system() == "Linux":
+    try:
+        from quarry.daemon.inotify_prune_chain import (
+            PrunedInotifyObserver as _PrunedInotifyObserver,
+        )
+    except (ImportError, UnsupportedLibcError) as exc:
+        logger.error(
+            "watch: Linux pruned inotify observer unavailable (%s); "
+            "falling back to UNPRUNED recursive watching",
+            exc,
+        )
+        _PrunedInotifyObserver = None
+else:
     _PrunedInotifyObserver = None
 
 

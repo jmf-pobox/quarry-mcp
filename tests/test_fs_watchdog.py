@@ -12,6 +12,9 @@ before DES-045d.
 
 from __future__ import annotations
 
+import importlib
+import logging
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, final
@@ -195,3 +198,40 @@ def test_build_observer_falls_back_when_the_pruned_observer_is_unavailable() -> 
         assert type(observer).__module__ != "quarry.daemon.inotify_prune_chain"
     finally:
         observer.stop()
+
+
+def test_module_load_logs_an_error_when_the_linux_import_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Linux host whose pruned-observer import fails logs loudly and falls
+    back, rather than silently reverting to unpruned recursive watching --
+    djb's major finding: an `except (ImportError, UnsupportedLibcError)`
+    with no platform check would make "watchdog upgrade broke us" on Linux
+    indistinguishable from the expected, silent macOS fallback.
+
+    ``sys.modules[name] = None`` is the standard technique for forcing an
+    ``ImportError`` on the next ``from name import ...`` (Python's import
+    system treats a ``None`` entry as "explicitly disallowed"), so this
+    drives the REAL module-scope ``try``/``except`` in ``fs_watchdog.py`` via
+    ``importlib.reload`` rather than asserting on a mock.
+    """
+    monkeypatch.setitem(sys.modules, "quarry.daemon.inotify_prune_chain", None)
+    try:
+        with caplog.at_level(logging.ERROR, logger="quarry.daemon.fs_watchdog"):
+            importlib.reload(fs_watchdog)
+        # vars()[...], not a direct attribute expression: pyright's strict
+        # mode flags fs_watchdog._PrunedInotifyObserver as
+        # reportPrivateImportUsage even for attribute access (not just
+        # `from ... import`), since the module has no __all__ declaring it
+        # exported; ruff's B009 in turn flags the getattr() alternative.
+        assert vars(fs_watchdog)["_PrunedInotifyObserver"] is None
+        assert any(
+            record.levelno == logging.ERROR and "unavailable" in record.message
+            for record in caplog.records
+        )
+    finally:
+        # Restore the real module in sys.modules BEFORE reloading again, so
+        # every other test in this process sees the correctly-imported
+        # pruned observer, not the forced-failure state this test set up.
+        monkeypatch.undo()
+        importlib.reload(fs_watchdog)
