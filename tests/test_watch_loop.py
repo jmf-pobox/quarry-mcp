@@ -124,15 +124,17 @@ class _FakeDatabase:
 class _FakeSource:
     """A synthetic FsEventSource: record scheduled trees, emit events on demand."""
 
-    __slots__ = ("_watches", "null_handle", "stopped")
+    __slots__ = ("_dead_handles", "_watches", "null_handle", "stopped")
 
     _watches: dict[object, tuple[Path, Callable[[FsEvent], None]]]
+    _dead_handles: set[object]
     null_handle: bool
     stopped: bool
 
     def __new__(cls, *, null_handle: bool = False) -> Self:
         self = super().__new__(cls)
         self._watches = {}
+        self._dead_handles = set()
         self.null_handle = null_handle
         self.stopped = False
         return self
@@ -148,6 +150,19 @@ class _FakeSource:
 
     def unschedule(self, handle: object | None) -> None:
         self._watches.pop(handle, None)
+        self._dead_handles.discard(handle)
+
+    def is_alive(self, handle: object | None) -> bool:
+        return (
+            handle is not None
+            and handle in self._watches
+            and (handle not in self._dead_handles)
+        )
+
+    def kill(self, handle: object | None) -> None:
+        """Simulate the background thread behind *handle* dying (test-only)."""
+        if handle is not None:
+            self._dead_handles.add(handle)
 
     def stop(self) -> None:
         self.stopped = True
@@ -286,6 +301,27 @@ def test_watch_state_watched_for_a_live_handle(tmp_path: Path) -> None:
         loop = WatchLoop(ctx, source=source)
         await loop.start()
         assert loop.watch_state("col") == "watched"
+        await loop.stop()
+
+    asyncio.run(_run())
+
+
+def test_watch_state_degraded_for_a_dead_emitter_thread(tmp_path: Path) -> None:
+    """A live handle whose background thread has died flips to "degraded",
+    not "watched" (djb minor) -- watch_handle_present alone cannot see
+    this; the emitter's own liveness must be checked too.
+    """
+
+    async def _run() -> None:
+        queue = _RecordingQueue()
+        ctx, _root = _build(tmp_path, queue=queue)  # registers "col"
+        source = _FakeSource()
+        loop = WatchLoop(ctx, source=source)
+        await loop.start()
+        assert loop.watch_state("col") == "watched"
+        (handle,) = source._watches
+        source.kill(handle)
+        assert loop.watch_state("col") == "degraded"
         await loop.stop()
 
     asyncio.run(_run())

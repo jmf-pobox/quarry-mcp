@@ -90,6 +90,38 @@ def test_watchdog_source_stop_is_idempotent_after_unschedule(tmp_path: Path) -> 
     source.stop()
 
 
+def test_is_alive_true_for_a_live_scheduled_handle(tmp_path: Path) -> None:
+    """A just-scheduled handle's emitter thread reports alive (djb minor)."""
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    try:
+        handle = source.schedule(tmp_path, _Recorder())
+        assert handle is not None
+        assert source.is_alive(handle) is True
+    finally:
+        source.stop()
+
+
+def test_is_alive_false_after_unschedule(tmp_path: Path) -> None:
+    """Unscheduling retires the emitter -- is_alive must not still say True."""
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    try:
+        handle = source.schedule(tmp_path, _Recorder())
+        assert handle is not None
+        source.unschedule(handle)
+        assert source.is_alive(handle) is False
+    finally:
+        source.stop()
+
+
+def test_is_alive_false_for_none_and_foreign_handles() -> None:
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    try:
+        assert source.is_alive(None) is False
+        assert source.is_alive(object()) is False  # never issued by this source
+    finally:
+        source.stop()
+
+
 def test_schedule_failure_returns_none_and_spares_other_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -145,6 +177,47 @@ def test_schedule_refuses_an_excluded_scratch_root(tmp_path: Path) -> None:
     source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
     try:
         assert source.schedule(root, _Recorder()) is None
+    finally:
+        source.stop()
+
+
+def test_schedule_survives_a_malformed_gitignore_at_the_registered_root(
+    tmp_path: Path,
+) -> None:
+    """A malformed .gitignore in a tree being registered must not crash
+    daemon startup / the register route (djb/rev-silent finding) -- the
+    tree is still watched, not degraded, since ignore_spec.IgnoreRules now
+    compiles line-tolerantly rather than raising.
+    """
+    (tmp_path / ".gitignore").write_text("*.log\n!\ndata/\n")
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    try:
+        handle = source.schedule(tmp_path, _Recorder())
+        assert handle is not None
+    finally:
+        source.stop()
+
+
+def test_schedule_returns_none_when_file_discovery_construction_raises(
+    tmp_path: Path,
+) -> None:
+    """Defense-in-depth beyond the ignore-spec fix: schedule()'s whole
+    contract is "never crash the caller, return None instead" -- if
+    building a FileDiscovery ever raises for a reason that layer's own
+    contract does not cover, this boundary must still return None rather
+    than propagate (djb/rev-silent finding).
+    """
+    from quarry.sync_discovery import FileDiscovery
+
+    source = WatchdogSource(use_polling=True, poll_interval_s=0.1)
+    try:
+        with patch(
+            "quarry.daemon.fs_watchdog.FileDiscovery",
+            side_effect=RuntimeError("boom"),
+        ):
+            assert source.schedule(tmp_path, _Recorder()) is None
+        # the source itself is unaffected -- a later, un-mocked call still works
+        assert isinstance(FileDiscovery(tmp_path), FileDiscovery)
     finally:
         source.stop()
 

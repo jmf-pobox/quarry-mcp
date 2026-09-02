@@ -204,11 +204,13 @@ class WatchLoop:
         ``"scan-only"`` — the observer is disabled (``watch_enabled=false``)
         or this collection has never been (or is no longer) tracked by the
         roster; it relies entirely on the periodic safety scan and explicit
-        ``quarry sync``. ``"degraded"`` — tracked, but the last
-        ``schedule()`` returned no handle (e.g. an exhausted inotify budget)
-        — same reliance on the safety scan, but silently, unlike a
-        collection that was never registered. ``"watched"`` — a live
-        observer handle backs it.
+        ``quarry sync``. ``"degraded"`` — tracked, but either the last
+        ``schedule()`` returned no handle (e.g. an exhausted inotify
+        budget) or a handle exists but its background thread has since
+        died (djb minor) — either way the same reliance on the safety
+        scan, but silently, unlike a collection that was never registered.
+        ``"watched"`` — a live observer handle backs it, with a live
+        thread behind it.
         """
         if not self._started or self._roster is None:
             return "scan-only"
@@ -216,7 +218,9 @@ class WatchLoop:
         present = self._roster.watch_handle_present(key)
         if present is None:
             return "scan-only"
-        return "watched" if present else "degraded"
+        if not present:
+            return "degraded"
+        return "watched" if self._roster.watch_handle_alive(key) else "degraded"
 
     def _teardown(self, key: RouteKey) -> None:
         """Unwatch *key*'s tree and drop its pending + backoff state."""

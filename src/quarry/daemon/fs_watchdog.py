@@ -177,11 +177,19 @@ class WatchdogSource:
         Picks the pruned Linux observer when the module-scope import at the
         top of this file succeeded (see ``_PrunedInotifyObserver``); falls
         back to watchdog's standard recursive observer everywhere else.
+        Logs the choice at ``INFO`` (djb minor) so "which watcher am I
+        running" is one grep-able line in the daemon's own log, rather than
+        something only inferable from platform + the earlier import-failure
+        ``logger.error`` (which fires only when the pruned path was tried
+        and failed, not on every startup).
         """
         if use_polling:
+            logger.info("watch: using PollingObserver (use_polling=True)")
             return PollingObserver(timeout=poll_interval_s)
         if _PrunedInotifyObserver is not None:
+            logger.info("watch: using PrunedInotifyObserver (Linux, pruned)")
             return _PrunedInotifyObserver.create()
+        logger.info("watch: using watchdog's standard recursive Observer")
         return Observer()
 
     def schedule(
@@ -197,8 +205,26 @@ class WatchdogSource:
         ``ObservedWatch`` handle, or ``None`` when the OS refuses the watch
         (e.g. inotify instance/watch exhaustion) — the caller treats a
         ``None`` handle as "this tree is unwatched, rely on scans".
+
+        Building a :class:`~quarry.sync_discovery.FileDiscovery` compiles
+        the tree's ignore spec, which is written to never raise for a
+        malformed ignore file
+        (:meth:`~quarry.ignore_spec.IgnoreRules._compile_lines`); this is
+        caught anyway (djb/rev-silent finding) because this method's whole
+        contract is "never crash the caller, return ``None`` instead" — a
+        second layer here is cheap and this is the one boundary a
+        surprising ignore-spec failure would otherwise reach
+        (:meth:`~quarry.daemon.watch_loop.WatchLoop.start` has no
+        try/except around ``schedule``).
         """
-        if not FileDiscovery(root).root_available:
+        try:
+            discovery = FileDiscovery(root)
+        except Exception:
+            logger.exception(
+                "watch: cannot evaluate ignore rules for %s; relying on scans", root
+            )
+            return None
+        if not discovery.root_available:
             logger.info("watch: refusing scratch/unresolvable root %s", root)
             return None
         try:
@@ -213,6 +239,30 @@ class WatchdogSource:
         """Stop watching the tree associated with *handle* (a no-op if ``None``)."""
         if handle is not None:
             self._observer.unschedule(cast("ObservedWatch", handle))
+
+    def is_alive(self, handle: object | None) -> bool:
+        """Whether *handle*'s background emitter thread is still running (djb minor).
+
+        ``schedule()`` returning a handle only proves the watch was
+        installed at that moment — it says nothing about later: an
+        unhandled exception on the emitter's own thread (this module now
+        hardens the ignore-spec paths against that, but a future watchdog
+        internals change is exactly the kind of surprise
+        ``test_pins_the_watchdog_internals_this_module_subclasses`` exists
+        to catch, not prevent) leaves the thread dead while the handle
+        still looks "present" to every other check. Each scheduled tree
+        gets its own ``EventEmitter`` thread; ``BaseObserver.emitters``
+        (public) plus ``EventEmitter.watch`` (public) find the one for
+        *handle* without reaching into ``BaseObserver``'s private
+        ``_emitter_for_watch`` map.
+        """
+        if handle is None:
+            return False
+        watch = cast("ObservedWatch", handle)
+        return any(
+            emitter.watch == watch and emitter.is_alive()
+            for emitter in self._observer.emitters
+        )
 
     def stop(self) -> None:
         """Stop the observer and join its thread under a bounded timeout."""

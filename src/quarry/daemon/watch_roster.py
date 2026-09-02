@@ -177,6 +177,20 @@ class WatchRoster:
         watch = self._watches.get(key)
         return None if watch is None else watch.handle is not None
 
+    def watch_handle_alive(self, key: RouteKey) -> bool | None:
+        """Whether *key*'s observer handle's background thread is still running.
+
+        Same three-state contract as :meth:`watch_handle_present`, one
+        layer deeper: ``None`` untracked, ``False`` tracked-but-no-handle
+        OR a handle whose backing thread has died, ``True`` a live handle
+        with a live thread (djb minor — a dead emitter thread otherwise
+        leaves ``watch_handle_present`` reporting ``True`` forever).
+        """
+        watch = self._watches.get(key)
+        if watch is None:
+            return None
+        return watch.handle is not None and self._source.is_alive(watch.handle)
+
     def keys(self) -> list[RouteKey]:
         """Return every currently-watched route key."""
         return list(self._watches)
