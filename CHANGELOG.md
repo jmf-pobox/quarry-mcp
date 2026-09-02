@@ -14,6 +14,40 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Fixed
+
+- `index`: the daemon's filesystem watcher scheduled `observer.schedule(root,
+  recursive=True)` on the raw registered root, so on Linux, watchdog's
+  per-`ObservedWatch` emitter architecture opened one inotify KERNEL
+  INSTANCE (plus threads and fds) per directory in the tree — including
+  `.git`, `.venv`, `node_modules`, and every other ignored subtree.
+  `fs.inotify.max_user_instances` defaults to 128 (per-user, shared with
+  IDEs/editors), so a real workspace exhausted it at ~120 directories,
+  degrading the whole tree to scan-only (`quarry-0bej`); a failed schedule
+  also leaked its partially-acquired watches, starving smaller registrations
+  sharing the same daemon (`quarry-ndrj`). Fixed by returning to ONE
+  recursive watch per root (one instance, one thread-pair, any tree size)
+  and, on Linux, subclassing watchdog's `Inotify` wrapper
+  (`quarry.daemon.inotify_prune`/`inotify_prune_chain`) so its own
+  directory-descriptor walk — both the initial recursive walk and the
+  auto-add path for a directory created later — skips ignored directories
+  per the SAME pruning seam (`FileDiscovery.iter_watchable_dirs`/
+  `is_watchable_dir`; `.gitignore` at every level, `.quarryignore`, the
+  built-in scratch defaults, hidden-dir rules) a bulk scan already uses, so
+  the much larger `max_user_watches` budget (65,536, per-descriptor, no
+  per-user cap) is spent only on directories worth watching. macOS keeps
+  watchdog's standard recursive observer unmodified (FSEvents has no
+  per-directory kernel cost); the post-debounce submitter filter still
+  provides the authoritative ignore check on every platform. A per-directory
+  `OSError` during the initial walk (ordinary churn — a directory vanishing
+  mid-walk) is skipped, not fatal; only genuine budget exhaustion
+  (`ENOSPC`/`EMFILE`) aborts. The daemon's `/registrations` listing (and the
+  `quarry list registrations` CLI output) now reports each collection's live
+  watch status — `watched`, `degraded` (tracked but the last schedule
+  attempt returned no handle), or `scan-only` (the observer is disabled, or
+  the collection was never tracked) — so a silently degraded watch is
+  visible instead of indistinguishable from a healthy one.
+
 ## [3.2.0] - 2026-09-01
 
 ### Added
