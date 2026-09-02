@@ -16,9 +16,12 @@ lives in ``tests/test_inotify_prune_chain.py``.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import errno
 import itertools
+import os
+import struct
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +29,7 @@ from unittest.mock import patch
 
 import pytest
 import watchdog.observers.inotify_c as inotify_c
+from watchdog.observers.inotify_c import InotifyConstants
 
 from quarry.daemon.inotify_prune import PrunedDirectoryError, PrunedInotify
 
@@ -42,20 +46,33 @@ _PRUNED_WD = -2
 class _FakeKernel:
     """Fake ``inotify_init``/``inotify_add_watch``/``inotify_rm_watch``.
 
-    Returns monotonically increasing fake fds/watch descriptors instead of
-    making a real ``inotify_init()`` syscall, so a test never depends on (or
-    consumes) the host's real, often near-zero, inotify instance headroom.
-    ``fail_paths`` maps one encoded path to the errno ``inotify_add_watch``
-    should fail with for that path only.
+    ``init()`` hands out the read end of a REAL ``os.pipe()`` rather than a
+    fabricated integer: a fabricated fd leaks into ``select.poll()``/
+    ``os.read()`` (both real syscalls -- only the three ctypes entry points
+    are faked) as an int that happens not to be open, and ``Inotify.close()``
+    ->``_close_resources()`` calling ``os.close()`` on a fabricated fd raises
+    ``OSError: Bad file descriptor`` for any test that reaches that path
+    (:meth:`Inotify.read_events` called directly, no background reader
+    thread). A real pipe end tolerates every one of those calls correctly.
+    ``close()`` closes every fd this kernel ever handed out, for tests whose
+    ``Inotify`` never reaches ``_close_resources()`` itself (never calls
+    ``read_events()``, so ``Inotify.close()`` only writes to the KILL pipe
+    for a background reader thread that, in these synchronous tests, does
+    not exist to read it and finish the close) -- otherwise every such fd
+    leaks for the life of the test process. ``fail_paths`` maps one encoded
+    path to the errno ``inotify_add_watch`` should fail with for that path
+    only.
     """
 
     def __init__(self, *, fail_paths: dict[bytes, int] | None = None) -> None:
-        self._fds = itertools.count(1000)
         self._wds = itertools.count(1)
         self._fail_paths = fail_paths or {}
+        self._open_fds: list[int] = []
 
     def init(self) -> int:
-        return next(self._fds)
+        read_fd, write_fd = os.pipe()
+        self._open_fds.extend((read_fd, write_fd))
+        return read_fd
 
     def add_watch(self, fd: int, path: bytes, mask: int) -> int:
         del fd, mask
@@ -69,6 +86,12 @@ class _FakeKernel:
         del fd, wd
         return 0
 
+    def close(self) -> None:
+        for fd in self._open_fds:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        self._open_fds.clear()
+
 
 @pytest.fixture
 def fake_kernel() -> Iterator[_FakeKernel]:
@@ -80,6 +103,28 @@ def fake_kernel() -> Iterator[_FakeKernel]:
         patch.object(inotify_c, "inotify_rm_watch", kernel.rm_watch),
     ):
         yield kernel
+    kernel.close()
+
+
+def _close_inotify(inst: PrunedInotify) -> None:
+    """Close *inst*, then force-close its KILL pipe.
+
+    ``Inotify.close()`` only writes a byte to the kill pipe to wake a
+    BACKGROUND reader thread blocked in ``read_events()`` -- that thread is
+    what actually closes ``_kill_r``/``_kill_w`` (inside
+    ``_close_resources``, once it notices ``self._closed``). These tests
+    construct ``PrunedInotify`` directly and never run that reader thread,
+    so the write sits unread and the pipe leaks for the life of the test
+    process unless closed here explicitly. A test that DID call
+    ``read_events()`` directly (see
+    ``test_read_events_survives_a_deep_create_burst_under_a_pruned_directory``)
+    already closed both ends via ``_close_resources``, so ``OSError`` here
+    is expected and tolerated, not a bug.
+    """
+    inst.close()
+    for fd in (inst._kill_r, inst._kill_w):
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
 
 def _watched_paths(inst: PrunedInotify) -> set[str]:
@@ -129,7 +174,7 @@ def test_add_dir_watch_prunes_ignored_directories(
         assert _watched_paths(inst) == {str(tmp_path), str(tmp_path / "src")}
         assert _pruned_sentinel_paths(inst) == set()
     finally:
-        inst.close()
+        _close_inotify(inst)
 
 
 def test_add_dir_watch_empty_directory_watches_only_the_root(
@@ -141,7 +186,7 @@ def test_add_dir_watch_empty_directory_watches_only_the_root(
     try:
         assert _watched_paths(inst) == {str(tmp_path)}
     finally:
-        inst.close()
+        _close_inotify(inst)
 
 
 def test_add_dir_watch_bounded_regardless_of_ignored_subtree_size(
@@ -157,7 +202,7 @@ def test_add_dir_watch_bounded_regardless_of_ignored_subtree_size(
     try:
         assert _watched_paths(inst) == {str(tmp_path), str(tmp_path / "src")}
     finally:
-        inst.close()
+        _close_inotify(inst)
 
 
 def test_add_dir_watch_skips_ordinary_oserror_and_continues(tmp_path: Path) -> None:
@@ -181,7 +226,7 @@ def test_add_dir_watch_skips_ordinary_oserror_and_continues(tmp_path: Path) -> N
             assert str(tmp_path / "c") in watched
             assert str(tmp_path / "b") not in watched
         finally:
-            inst.close()
+            _close_inotify(inst)
 
 
 @pytest.mark.parametrize("bad_errno", [errno.ENOSPC, errno.EMFILE])
@@ -222,7 +267,7 @@ def test_add_watch_rejects_an_ignored_path_and_registers_the_sentinel(
             inst._add_watch(ignored, 0)
         assert inst._wd_for_path[ignored] == _PRUNED_WD
     finally:
-        inst.close()
+        _close_inotify(inst)
 
 
 def test_add_watch_never_prunes_the_root_itself(
@@ -236,4 +281,126 @@ def test_add_watch_never_prunes_the_root_itself(
     try:
         assert str(tmp_path) in _watched_paths(inst)
     finally:
-        inst.close()
+        _close_inotify(inst)
+
+
+def test_read_events_survives_a_deep_create_burst_under_a_pruned_directory(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """A deterministic, default-tier pin for the crash guard the slow
+    end-to-end test (``tests/test_inotify_prune_chain.py``) exercises
+    against a real kernel: one crafted raw ``inotify_event`` struct
+    (``struct.pack("iIII", wd, IN_CREATE | IN_ISDIR, 0, len(name)) +
+    name``, the exact layout ``Inotify._parse_event_buffer`` decodes) for a
+    single "burst" directory-create, patched in via ``os.read`` and
+    ``_check_inotify_fd`` so ``read_events()`` runs its real auto-add and
+    ``_recursive_simulate`` logic against burst's disk state -- already
+    containing BOTH a watchable file and an ignored one by the time this
+    synthetic event is processed, the exact race the sentinel bookkeeping
+    in :meth:`PrunedInotify._add_watch` exists for (a missing entry would
+    raise ``KeyError`` from ``_recursive_simulate``'s unprotected
+    parent-wd lookup and kill the observer thread). Fake-kernel-backed and
+    single-threaded (``read_events()`` called directly, no observer
+    thread), so this needs no real inotify headroom and runs in the
+    default (non-slow) tier.
+    """
+    del fake_kernel
+    burst = tmp_path / "burst"
+    (burst / "a").mkdir(parents=True)
+    (burst / "a" / "deep.txt").write_text("deep")
+    (burst / "node_modules" / "pkg").mkdir(parents=True)
+    (burst / "node_modules" / "pkg" / "ignored.txt").write_text("ignored")
+
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        root_wd = inst._wd_for_path[str(tmp_path).encode()]
+        name = b"burst"
+        mask = InotifyConstants.IN_CREATE | InotifyConstants.IN_ISDIR
+        raw_event = struct.pack("iIII", root_wd, mask, 0, len(name)) + name
+
+        inst._check_inotify_fd = lambda: True  # skip the real select.poll()
+        with patch.object(os, "read", return_value=raw_event):
+            events = inst.read_events()  # must not raise KeyError
+
+        deep_file = os.fsencode(burst / "a" / "deep.txt")
+        assert any(e.src_path == deep_file for e in events), (
+            "the deep watchable file's backfilled create event is missing"
+        )
+
+        pruned_prefix = str(burst / "node_modules") + "/"
+        real_watches_below_pruned = {
+            path.decode(): wd
+            for path, wd in inst._wd_for_path.items()
+            if path.decode().startswith(pruned_prefix) and wd != _PRUNED_WD
+        }
+        assert not real_watches_below_pruned, (
+            f"a real watch was installed below the pruned directory: "
+            f"{real_watches_below_pruned}"
+        )
+    finally:
+        _close_inotify(inst)
+
+
+def test_read_events_renaming_a_pruned_directory_does_not_corrupt_state(
+    tmp_path: Path, fake_kernel: _FakeKernel
+) -> None:
+    """Renaming a pruned directory reuses the shared ``_PRUNED_WD`` sentinel
+    at its new path (djb minor) -- vanilla watchdog's move handling
+    (``read_events``'s ``is_moved_to`` branch) does not distinguish a real
+    wd from the sentinel: it deletes the old path's ``_wd_for_path`` entry,
+    inserts the new path with the SAME value, and points
+    ``_path_for_wd[value]`` at the new path. For two pruned directories
+    with DIFFERENT original paths, this makes ``_path_for_wd[_PRUNED_WD]``
+    collide (whichever was renamed most recently wins that slot) -- but
+    this is harmless BY CONSTRUCTION: the real kernel never emits an event
+    whose ``wd`` field is ``_PRUNED_WD`` (a negative int no
+    ``inotify_add_watch`` call can ever return), so
+    ``wd_path = self._path_for_wd[wd]`` in ``read_events`` can never
+    resolve through the sentinel slot -- only ``_wd_for_path`` (keyed by
+    PATH, never colliding) is ever read for a pruned entry. This test pins
+    that no exception is raised and both paths' ``_wd_for_path``
+    bookkeeping stays internally consistent across the rename.
+    """
+    del fake_kernel
+    (tmp_path / "node_modules").mkdir()
+
+    inst = PrunedInotify(str(tmp_path).encode(), recursive=True, event_mask=None)
+    try:
+        old_path = os.fsencode(tmp_path / "node_modules")
+        new_path = os.fsencode(tmp_path / "renamed_prunable")
+        with pytest.raises(PrunedDirectoryError):
+            inst._add_watch(old_path, 0)
+        assert inst._wd_for_path[old_path] == _PRUNED_WD
+
+        root_wd = inst._wd_for_path[os.fsencode(tmp_path)]
+        cookie = 42
+        old_name, new_name = b"node_modules", b"renamed_prunable"
+        moved_from = (
+            struct.pack(
+                "iIII",
+                root_wd,
+                InotifyConstants.IN_MOVED_FROM | InotifyConstants.IN_ISDIR,
+                cookie,
+                len(old_name),
+            )
+            + old_name
+        )
+        moved_to = (
+            struct.pack(
+                "iIII",
+                root_wd,
+                InotifyConstants.IN_MOVED_TO | InotifyConstants.IN_ISDIR,
+                cookie,
+                len(new_name),
+            )
+            + new_name
+        )
+
+        inst._check_inotify_fd = lambda: True  # skip the real select.poll()
+        with patch.object(os, "read", return_value=moved_from + moved_to):
+            inst.read_events()  # must not raise
+
+        assert old_path not in inst._wd_for_path
+        assert inst._wd_for_path[new_path] == _PRUNED_WD
+    finally:
+        _close_inotify(inst)

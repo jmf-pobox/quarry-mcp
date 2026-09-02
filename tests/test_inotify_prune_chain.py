@@ -11,12 +11,14 @@ slow-tier test drives the real kernel end to end.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import itertools
+import os
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +26,7 @@ import watchdog.observers.inotify_c as inotify_c
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers.api import EventQueue, ObservedWatch
 
-from quarry.daemon.inotify_prune import PrunedInotify
+from quarry.daemon.inotify_prune import _PRUNED_WD, PrunedInotify
 from quarry.daemon.inotify_prune_chain import (
     PrunedInotifyBuffer,
     PrunedInotifyEmitter,
@@ -42,16 +44,27 @@ pytestmark = pytest.mark.skipif(
 class _FakeKernel:
     """Fake ``inotify_init``/``inotify_add_watch``/``inotify_rm_watch``.
 
-    See ``tests/test_inotify_prune.py`` for why: independence from the
-    host's real, often near-zero, inotify instance headroom.
+    ``init()`` hands out the read end of a REAL ``os.pipe()`` rather than a
+    fabricated integer -- see ``tests/test_inotify_prune.py`` for the full
+    rationale: a fabricated fd leaks into the REAL ``select.poll()``/
+    ``os.read()`` syscalls a background reader thread makes here (only the
+    three ctypes entry points are faked), which can silently collide with
+    whatever real fd that integer happens to name in this process, and
+    which makes ``Inotify.close()`` -> ``_close_resources()``'s
+    ``os.close()`` raise ``OSError: Bad file descriptor`` for a test that
+    never runs a thread to make the fd real. ``close()`` closes every fd
+    this kernel ever handed out, for the same never-reaches-
+    ``_close_resources()`` case.
     """
 
     def __init__(self) -> None:
-        self._fds = itertools.count(2000)
         self._wds = itertools.count(1)
+        self._open_fds: list[int] = []
 
     def init(self) -> int:
-        return next(self._fds)
+        read_fd, write_fd = os.pipe()
+        self._open_fds.extend((read_fd, write_fd))
+        return read_fd
 
     def add_watch(self, fd: int, path: bytes, mask: int) -> int:
         del fd, path, mask
@@ -61,6 +74,12 @@ class _FakeKernel:
     def rm_watch(fd: int, wd: int) -> int:
         del fd, wd
         return 0
+
+    def close(self) -> None:
+        for fd in self._open_fds:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        self._open_fds.clear()
 
 
 @pytest.fixture
@@ -73,6 +92,7 @@ def fake_kernel() -> Iterator[_FakeKernel]:
         patch.object(inotify_c, "inotify_rm_watch", kernel.rm_watch),
     ):
         yield kernel
+    kernel.close()
 
 
 def test_pins_the_watchdog_internals_this_module_subclasses() -> None:
@@ -104,6 +124,14 @@ def test_pruned_inotify_buffer_create_builds_a_pruned_inotify(
         assert isinstance(buf._inotify, PrunedInotify)
     finally:
         buf.close()
+
+
+def test_pruned_inotify_buffer_refuses_direct_construction(tmp_path: Path) -> None:
+    """Direct construction would silently build a vanilla, unpruned Inotify
+    (PY-CC-3) -- it must raise instead, loudly, before any watch is opened.
+    """
+    with pytest.raises(TypeError, match="create"):
+        PrunedInotifyBuffer(str(tmp_path).encode(), recursive=True, event_mask=None)
 
 
 def test_pruned_inotify_emitter_builds_a_pruned_inotify_buffer(
@@ -143,6 +171,20 @@ def test_pruned_observer_end_to_end_prunes_and_handles_deep_create(
     Skips gracefully when the host has no free inotify instance headroom
     (a real, common desktop-session condition, not a test bug) rather than
     flaking the suite.
+
+    The event-level assertions below are deliberately narrower than "zero
+    events under node_modules": vanilla watchdog's un-prunable
+    ``_recursive_simulate`` file loop (module docstring,
+    ``inotify_prune.py``) has NO exception handling around its parent-wd
+    lookup or its event append, so a file directly inside a pruned
+    directory CAN still produce one synthetic create event, looked up via
+    the sentinel wd -- this is the accepted, documented cost of pruning a
+    walk this method cannot itself prune, filtered downstream by the
+    post-debounce submitter (:class:`~quarry.daemon.watch_submit.
+    WatchSubmitter`). What the watch BUDGET actually needs protected is
+    that no directory under a pruned ancestor ever receives a REAL kernel
+    watch descriptor -- checked directly against the ``Inotify`` internals
+    below, independent of which stray events happen to slip through.
     """
     events: list[tuple[str, str, bool]] = []
 
@@ -185,11 +227,40 @@ def test_pruned_observer_end_to_end_prunes_and_handles_deep_create(
         assert any(e[1] == str(target) for e in events), (
             "a file inside a deep-created watchable subtree was never reported"
         )
-        assert not any("node_modules" in e[1] for e in events), (
-            "an event surfaced for content under an ignored directory"
-        )
         assert observer.is_alive(), "the observer thread died (a KeyError crash)"
+
+        pruned_prefix = str(burst / "node_modules") + os.sep
+        real_watches_below_pruned = tuple(
+            (path, wd)
+            for path, wd in _all_wd_for_path(observer).items()
+            if os.fsdecode(path).startswith(pruned_prefix) and wd != _PRUNED_WD
+        )
+        assert not real_watches_below_pruned, (
+            f"a REAL kernel watch descriptor was installed under a pruned "
+            f"directory: {real_watches_below_pruned}"
+        )
     finally:
         observer.unschedule(watch)
         observer.stop()
         observer.join(timeout=5)
+
+
+def _all_wd_for_path(observer: PrunedInotifyObserver) -> dict[bytes, int]:
+    """Collect every emitter's ``Inotify._wd_for_path`` for one observer.
+
+    Reaches through the construction chain (``PrunedInotifyEmitter`` ->
+    ``PrunedInotifyBuffer`` -> ``PrunedInotify``) to the raw watch-descriptor
+    bookkeeping -- the ONE place that can distinguish "a real kernel watch
+    was installed" from "a sentinel was recorded so a later lookup does not
+    KeyError" (see the module docstring on ``PrunedInotify._add_watch``).
+    """
+    merged: dict[bytes, int] = {}
+    for emitter in observer.emitters:
+        # PrunedInotifyObserver only ever schedules PrunedInotifyEmitter
+        # instances (its _emitter_class); the base BaseObserver.emitters
+        # property types its return value as the vanilla EventEmitter.
+        pruned_emitter = cast("PrunedInotifyEmitter", emitter)
+        buffer = pruned_emitter._inotify
+        assert buffer is not None, "emitter's on_thread_start had not run yet"
+        merged.update(buffer._inotify._wd_for_path)
+    return merged

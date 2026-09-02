@@ -4,22 +4,36 @@ Split out of :mod:`~quarry.daemon.inotify_prune` (which owns the pruning
 ALGORITHM) because watchdog's ``InotifyBuffer`` → ``InotifyEmitter`` →
 ``BaseObserver`` chain each hardcode the next class down inline, with no
 factory hook to override — reaching :class:`~quarry.daemon.inotify_prune.
-PrunedInotify` from :class:`PrunedInotifyObserver` therefore requires
-overriding one method or constructor at each of the three levels. Every
-override here is a verbatim, low-drift copy of its vanilla counterpart's
-3-4 line body with one class name substituted;
-``tests/test_inotify_prune.py``'s
+PrunedInotify` from :class:`PrunedInotifyObserver` requires a change at each
+of the three levels, but NOT the same kind of change at each level:
+
+* :class:`PrunedInotifyBuffer` and :class:`PrunedInotifyObserver` each
+  override a CONSTRUCTOR that would otherwise do something harmful if left
+  unmodified (build a vanilla ``Inotify``; omit the injected
+  ``emitter_class`` ``BaseObserver.__init__`` requires with no default).
+  Neither defines ``__init__`` (PY-CC-1): each uses a ``create`` classmethod
+  factory (PY-CC-5) that constructs directly via ``object.__new__`` rather
+  than relying on ``type.__call__``'s automatic post-``__new__`` invocation
+  of the inherited ``__init__``. Only :class:`PrunedInotifyBuffer` also
+  overrides ``__new__`` to refuse direct construction (PY-CC-3): a bare
+  ``PrunedInotifyBuffer(path, ...)`` call would otherwise SILENTLY build a
+  vanilla, unpruned ``Inotify`` (its inherited ``__init__``'s signature is
+  perfectly satisfiable). A bare ``PrunedInotifyObserver(timeout=...)`` call
+  already fails loudly on its own — ``BaseObserver.__init__`` requires
+  ``emitter_class`` positionally with no default — so no equivalent guard is
+  needed there; ``create()`` is the only path that can supply it.
+* :class:`PrunedInotifyEmitter` overrides ``on_thread_start`` — a METHOD, not
+  a constructor. ``EventEmitter.__init__`` (its inherited constructor) does
+  nothing that needs replacing, so it is built the ordinary way by
+  ``BaseObserver.schedule()``; the pruned construction happens later, when
+  its own thread starts.
+
+Every override here is a verbatim, low-drift copy of its vanilla
+counterpart's 3-4 line body with one class name substituted;
+``tests/test_inotify_prune_chain.py``'s
 ``test_pins_the_watchdog_internals_this_module_subclasses`` fails loudly if a
 future watchdog release renames or removes any of the methods this module
 depends on.
-
-None of these three classes define ``__init__`` (PY-CC-1): each vanilla
-parent's ``__init__`` does something this class must NOT run unmodified
-(construct a vanilla ``Inotify``, or omit the injected ``emitter_class``), so
-each uses a ``create`` classmethod factory (PY-CC-5) that performs
-construction directly via ``object.__new__`` rather than relying on
-``type.__call__``'s automatic post-``__new__`` invocation of the (harmful,
-unoverridable-by-signature) inherited ``__init__``.
 """
 
 from __future__ import annotations
@@ -44,6 +58,26 @@ class PrunedInotifyBuffer(InotifyBuffer):
     """An ``InotifyBuffer`` that builds a :class:`PrunedInotify`."""
 
     _queue: DelayedQueue[InotifyEvent | tuple[InotifyEvent, InotifyEvent]]
+
+    def __new__(
+        cls, path: bytes, *, recursive: bool = False, event_mask: int | None = None
+    ) -> Self:
+        """Refuse direct construction (PY-CC-3): use :meth:`create` instead.
+
+        ``PrunedInotifyBuffer`` defines no ``__init__`` override, so a bare
+        ``PrunedInotifyBuffer(path, ...)`` call would run the INHERITED
+        ``InotifyBuffer.__init__`` unmodified -- silently building a vanilla,
+        UNPRUNED ``Inotify`` instead of a :class:`PrunedInotify`, with no
+        error at all. This guard only affects that path: :meth:`create`
+        constructs via ``object.__new__(cls)`` directly, never through
+        ``cls(...)``, so it never reaches this override. The signature
+        mirrors ``InotifyBuffer.__init__`` (rather than a generic
+        ``*args, **kwargs``) so pyright's constructor-consistency check
+        (``reportInconsistentConstructor``) sees the two agree.
+        """
+        del path, recursive, event_mask
+        msg = f"{cls.__name__} must be built via {cls.__name__}.create()"
+        raise TypeError(msg)
 
     @classmethod
     def create(

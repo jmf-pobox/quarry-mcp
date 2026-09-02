@@ -176,6 +176,17 @@ class PrunedInotify(Inotify):
         seen from a live create event, traded for never allocating a real
         kernel watch for it. This is the accepted cost of pruning a walk this
         method cannot itself prune (module docstring).
+
+        Renaming a pruned directory (vanilla ``read_events()``'s
+        ``is_moved_to`` branch) reuses the shared ``_PRUNED_WD`` sentinel at
+        the new path and can overwrite ``_path_for_wd[_PRUNED_WD]`` if two
+        DIFFERENT pruned directories are each renamed -- harmless by
+        construction: the real kernel never emits an event whose ``wd``
+        field equals ``_PRUNED_WD`` (no ``inotify_add_watch`` call can ever
+        return a negative descriptor), so that reverse-lookup slot is never
+        read through a real event; see
+        ``test_read_events_renaming_a_pruned_directory_does_not_corrupt_state``
+        in ``tests/test_inotify_prune.py``.
         """
         decoded = Path(os.fsdecode(path))
         if decoded != self._root and not self._discovery.is_watchable_dir(decoded):
