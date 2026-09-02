@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -58,11 +57,23 @@ class EphemeralDaemon:
         return f"http://{self.host}:{self.port}"
 
 
-def _free_port() -> int:
-    """Return an OS-assigned free TCP port (bind→getsockname→close)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+def _read_port_file(path: Path, timeout_s: float) -> int:
+    """Return the port from ``serve.port``, polling until the daemon writes it.
+
+    Spawning ``quarryd --port 0`` lets the OS pick the port; the daemon then
+    atomically renames its ``serve.port`` sidecar into place with the bound
+    value.  Polling that file replaces the old choose-a-port-then-start-daemon
+    handshake, which had a race: any other process could grab the picked port
+    between our ``close()`` and the daemon's ``bind()``.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            return int(path.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            time.sleep(0.1)
+    msg = f"quarryd did not publish {path} within {timeout_s:.1f}s"
+    raise RuntimeError(msg)
 
 
 def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
@@ -116,27 +127,32 @@ def ephemeral_daemon(
     log_dir.mkdir(parents=True, exist_ok=True)
     api_key = "test-key-" + os.urandom(8).hex()
     env = _daemon_env(root, log_dir, api_key)
-    port = _free_port()
 
     stderr = (log_dir / "quarryd.stderr").open("wb")
     stdout = (log_dir / "quarryd.stdout").open("wb")
     proc = subprocess.Popen(
-        [binary, "--host", "127.0.0.1", "--port", str(port)],
+        [binary, "--host", "127.0.0.1", "--port", "0"],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=stdout,
         stderr=stderr,
     )
 
-    daemon = EphemeralDaemon(
-        host="127.0.0.1",
-        port=port,
-        api_token=api_key,
-        ca_cert_path=None,
-        data_dir=Path(env["QUARRY_ROOT"]),
-        env=env,
-    )
     try:
+        # ``$QUARRY_ROOT/default/serve.port`` is the daemon's post-bind port
+        # sidecar (run_dir.PortFile).  Reading it — instead of picking a port
+        # ourselves and passing ``--port <n>`` — closes the pick→bind race that
+        # made this fixture flaky under session-scoped reuse.
+        port_file = Path(env["QUARRY_ROOT"]) / "default" / "serve.port"
+        port = _read_port_file(port_file, timeout_s=15.0)
+        daemon = EphemeralDaemon(
+            host="127.0.0.1",
+            port=port,
+            api_token=api_key,
+            ca_cert_path=None,
+            data_dir=Path(env["QUARRY_ROOT"]),
+            env=env,
+        )
         _wait_ready(daemon.base_url, api_key, timeout_s=30.0)
         yield daemon
     finally:
