@@ -42,11 +42,11 @@
     "public_names": 1.0
   },
   "src/quarry/_stdlib.py": {
-    "efferent_coupling": 1.0,
+    "efferent_coupling": 3.0,
     "public_names": 6.0,
     "circular_imports": 0.0,
-    "max_lcom": 0.0,
-    "avg_lcom": 0.0
+    "max_lcom": 0.782,
+    "avg_lcom": 0.782
   },
   "src/quarry/api/__init__.py": {
     "efferent_coupling": 14.0,
