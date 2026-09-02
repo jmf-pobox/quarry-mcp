@@ -2333,6 +2333,9 @@ class TestIngest:
             url_kwargs.append(kw)
             return {"document_name": "u", "collection": kw["collection"], "chunks": 1}
 
+        # scrub=True flows through IngestJob._ingest → WebFetcher.fetch_body →
+        # ingest_captured_body → ingest_url; patch fetch_body so no real HTTP fires.
+        body = FetchedBody(text="<html><body>hi</body></html>", media_type="text/html")
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
@@ -2342,6 +2345,10 @@ class TestIngest:
             patch(
                 "quarry.captures_collection.CapturesCollection.for_registry_path",
                 return_value=CapturesCollection.resolve(None),
+            ),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=body,
             ),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
             patch("quarry.ingestion.pipeline.ingest_auto") as auto,
