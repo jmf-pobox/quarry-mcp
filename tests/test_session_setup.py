@@ -179,3 +179,38 @@ class TestSessionSetupBreadcrumb:
         assert "config=on" in msg
         assert "payload_ok=Y" in msg
         assert "skip:not-a-dir" in msg
+
+    def test_dispatch_oserror_emits_error_breadcrumb_and_reraises(
+        self,
+        fake_home: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog_hooks: pytest.LogCaptureFixture,
+    ) -> None:
+        """A filesystem fault inside ``dispatch()`` must trace before re-raising.
+
+        Without the guard, an ``OSError`` from ``shutil.copy2`` propagates past
+        the ``HookTrace``, run_hook prints ``{}`` fail-open, and ``quarry.log``
+        holds no record of what went wrong -- the G6 gap for error paths.
+        """
+        plugin_root = _make_plugin(tmp_path / "plugin", {"name": "quarry"})
+        commands_dir = plugin_root / "commands"
+        commands_dir.mkdir()
+        (commands_dir / "sample.md").write_text("# sample\n")
+        monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
+
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            msg = "disk full"
+            raise OSError(msg)
+
+        monkeypatch.setattr("quarry._stdlib.shutil.copy2", _raise)
+
+        with pytest.raises(OSError, match="disk full"):
+            handle_session_setup({})
+
+        entered = [r for r in caplog_hooks.records if "entered" in r.getMessage()]
+        assert entered, "session-setup emitted no entered breadcrumb"
+        msg = entered[-1].getMessage()
+        assert "config=on" in msg
+        assert "payload_ok=Y" in msg
+        assert "error:dispatch-failed:OSError" in msg

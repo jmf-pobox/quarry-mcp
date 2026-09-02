@@ -424,7 +424,16 @@ def handle_session_setup(payload: dict[str, object]) -> dict[str, object]:
     if setup is None:
         trace.skip("plugin-name-unreadable")
         return {}
-    actions = setup.dispatch()
+    try:
+        actions = setup.dispatch()
+    except OSError as exc:
+        # Filesystem faults (copy/unlink/compare/write) would otherwise
+        # bubble past the breadcrumb and recreate the G6 observability gap
+        # for error paths — emit the trace before re-raising so run_hook's
+        # fail-open still has an audit trail.
+        trace.error(f"dispatch-failed:{type(exc).__name__}")
+        logger.warning("session-setup: dispatch failed (%s)", type(exc).__name__)
+        raise
     if not actions:
         trace.skip("nothing-to-do")
         return {}
