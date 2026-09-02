@@ -329,7 +329,7 @@
       },
       "RegistrationInfo": {
         "additionalProperties": true,
-        "description": "One directory registration.\n\n``extra=\"allow\"`` keeps the model a superset of the registry row shape.",
+        "description": "One directory registration.\n\n``extra=\"allow\"`` keeps the model a superset of the registry row shape.\n``watch_state`` defaults to ``\"scan-only\"`` so a response from an older\ndaemon that omits the field still parses as the conservative reading \u2014\n\"assume the safety scan is doing the work\" \u2014 rather than as \"watched\"\n(DES-045e: :meth:`~quarry.daemon.watch_loop.WatchLoop.watch_state`).",
         "properties": {
           "collection": {
             "title": "Collection",
@@ -341,6 +341,16 @@
           },
           "registered_at": {
             "title": "Registered At",
+            "type": "string"
+          },
+          "watch_state": {
+            "default": "scan-only",
+            "enum": [
+              "watched",
+              "degraded",
+              "scan-only"
+            ],
+            "title": "Watch State",
             "type": "string"
           }
         },

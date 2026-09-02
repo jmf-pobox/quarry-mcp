@@ -2219,6 +2219,95 @@ every core; the cap is the ceiling, the throttle is the duty-cycle, and both are
 needed. *Raising `narenas` to reduce contention instead of capping threads* —
 addressed in DES-032; increases jemalloc retention (DES-027) and does not bound CPU.
 
+### DES-045d: One ignore seam — watch, scan, and filter all consult IgnoreRules
+
+**Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
+
+**Context.** The watch layer and the scan layer disagreed about what is ignored.
+`FileDiscovery` pruned its bulk walk with full gitignore semantics (`pathspec`:
+`.gitignore` at every level, `.quarryignore` at the root, scratch defaults,
+hidden-dir skip), but the fs watchdog handed the raw registered root to
+`observer.schedule(..., recursive=True)` — inotify allocated one watch descriptor
+per directory, junk included. The operator's workspace root holds 206k
+directories (117k of them accumulated pytest scratch under one repo's `.tmp`)
+against the default 65,536-descriptor budget, so scheduling failed with ENOSPC
+after consuming ~55k descriptors, the partial acquisition was never released,
+and even 300-directory trees in the same daemon could not be watched. Ignore
+filtering ran only on *events*, after the descriptors already existed — paying
+the kernel cost for directories whose events would then be discarded.
+
+**Decision.** Extract the ignore decision into one component, `IgnoreRules`
+(`ignore_spec.py`), composed by `FileDiscovery`, and route every code path that
+walks, watches, or filters registered-directory contents through it: the bulk
+scan (`discover()`), the watch layer (`iter_watchable_dirs()` /
+`is_watchable_dir()`), the post-debounce submitter filter, and file-level
+matching (`keeps_file` — `FileDiscovery` never calls `pathspec` directly).
+Compiled specs are cached; the observer-thread hot path never re-reads ignore
+files per event. Paths that walk fixed, non-document directories (doctor's
+existence stat, shadow rescrub's captures glob, backfill/ethos-memory/transcript
+readers) are documented non-consumers, audited per mission m-2026-09-02-003.
+
+**Consequence.** Watch-time pruning and scan-time pruning cannot drift: a
+directory is ignored for descriptors, events, and bulk scans by the same rules,
+matching git's own semantics (`.gitignore` + `.quarryignore`). The operator's
+four registered roots prune from ~206k directories to ~1.2k watchable ones.
+
+**Rejected alternatives.** *Raising `fs.inotify.max_user_watches`* — operator-
+refused; treats the symptom and scales with junk accumulation rather than
+content. *Event-level filtering only* (the status quo) — the kernel cost is paid
+at watch establishment, so filtering events cannot protect the descriptor
+budget. *A second pattern list for the watcher* — the exact drift bug class
+(remote/local divergence, bug class 3) transplanted into the ignore layer.
+
+### DES-045e: Watch mechanism — one pruned recursive inotify instance per root
+
+**Status:** Accepted (2026-09-02) · **Beads:** quarry-0bej, quarry-ndrj
+
+**Context.** The first implementation of DES-045d scheduled one *non-recursive*
+`observer.schedule()` per surviving directory. Review rejected it: watchdog
+gives every `ObservedWatch` its own emitter, and on Linux each emitter
+constructs its own `Inotify` object calling `inotify_init()` — one kernel
+*instance* plus two threads and three fds per directory, against
+`fs.inotify.max_user_instances` = 128 (per-user, shared with IDEs). It
+exhausted at ~120 directories — structurally worse than the 65,536-descriptor
+problem it replaced. It also introduced a cross-thread watch-bookkeeping dict
+with no lock (evaluator blocker) and aborted whole trees on ordinary mid-walk
+ENOENT churn (evaluator major).
+
+**Decision.** Operator-ratified: return to ONE recursive watch per registered
+root — one emitter, one kernel instance, one thread-pair — and prune the
+*descriptor* walk instead. On Linux, `PrunedInotify` (`daemon/inotify_prune.py`)
+subclasses watchdog's private `Inotify`, overriding `_add_dir_watch` (the
+initial recursive walk: prunes via the DES-045d seam; ordinary per-directory
+`OSError` skips that directory, only `ENOSPC`/`EMFILE` aborts the tree) and
+`_add_watch` (the auto-add primitive for directories created later: rejects an
+ignored path via an `OSError` subclass every vanilla call site already
+tolerates, with sentinel bookkeeping so a file directly inside a pruned
+directory cannot `KeyError` watchdog's event simulation). A
+`PrunedInotifyBuffer`/`Emitter`/`Observer` chain (`inotify_prune_chain.py`)
+wires it into watchdog's construction pipeline. macOS keeps watchdog's standard
+recursive FSEvents observer — one stream per root, no per-directory kernel
+cost — with ignore filtering at the event/scan seam. Platform selection is a
+module-scope import of the pruned chain; on failure the `PollingObserver` and
+default recursive observer remain as fallbacks. Each collection's live watch
+state (`watched`/`degraded`/`scan-only`) surfaces through `/registrations` and
+`quarry list registrations`, so a silently degraded watch is observable.
+
+**Consequence.** The daemon fits the operator's unraised kernel budgets: four
+roots cost four inotify instances and ~1.2k descriptors. Watch bookkeeping
+lives inside watchdog's own single-threaded buffer, eliminating the cross-
+thread dict the first attempt needed. The cost accepted: `PrunedInotify`
+depends on watchdog private internals, pinned by tests that fail loudly if the
+subclassed surface moves.
+
+**Rejected alternatives.** *Per-directory non-recursive scheduling* (the first
+attempt) — one inotify instance per directory; dies at
+`max_user_instances` = 128. *A bespoke ctypes inotify layer* — full control,
+but reimplements rename cookies, queue overflow, and thread lifecycle — the
+hairiest, most defect-prone part of the space watchdog already handles.
+*Raising either sysctl* — operator-refused, and instance exhaustion is
+per-user, shared with every editor and IDE on the box.
+
 ## DES-046: File-descriptor envelope — raise RLIMIT_NOFILE at daemon start
 
 **Context.** The resident `quarryd` exhausted file descriptors over long uptime: an

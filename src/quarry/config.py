@@ -61,7 +61,13 @@ class Settings(BaseSettings):
     # budget + admission bound); ``use_polling`` forces watchdog's stat-walk
     # observer; ``safety_scan_s`` is the periodic roster reconcile that re-scans
     # collections whose scan was shed and picks up databases/collections
-    # registered since start — the backstop that retires the uae timer (0 = off).
+    # registered since start — the backstop that retires the uae timer.
+    # 0 disables the periodic task entirely (watch_loop.py only creates it when
+    # > 0) — this is a TEST-ONLY convention throughout this suite (drive
+    # _reconcile directly instead of waiting on a timer) and must never be set
+    # in production: it removes the ONLY backstop for a missed/shed live-watch
+    # event, a kernel inotify queue overflow (silently dropped by the OS, not
+    # recoverable any other way), or a watch that degraded to scan-only.
     watch_enabled: bool = True
     watch_debounce_s: float = Field(default=1.0, ge=0)
     watch_max_delay_s: float = Field(default=5.0, ge=0)
