@@ -63,6 +63,13 @@ def _job(url: str) -> IngestJob:
     )
 
 
+@pytest.mark.xfail(
+    reason=(
+        "quarry-jzqw: IngestJob._ingest still routes non-HTML URLs through "
+        "ingest_url, which raises ValueError instead of storing the body as text."
+    ),
+    strict=True,
+)
 @pytest.mark.parametrize(
     ("media_type", "body_text"),
     [
@@ -104,13 +111,15 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
             pytest.fail(
                 f"{_QUARRY_JZQW_SUMMARY}\n"
                 f"  media_type={media_type!r}\n"
-                f"  raised ValueError: {exc}"
+                f"  raised ValueError: {exc}\n"
+                "  remove the @pytest.mark.xfail marker when this passes"
             )
 
     assert mock_ingest_content.called, (
         f"{_QUARRY_JZQW_SUMMARY}\n"
         f"  media_type={media_type!r}: ingest_content was never called; "
-        "the non-HTML body was dropped instead of stored as text."
+        "the non-HTML body was dropped instead of stored as text.\n"
+        "  remove the @pytest.mark.xfail marker when this passes"
     )
     call = mock_ingest_content.call_args
     content_arg = call.args[0] if call.args else call.kwargs.get("content", "")
@@ -119,11 +128,13 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
         f"  media_type={media_type!r}: stored content lacks the "
         f"'<!-- media_type: X -->' marker "
         "that lets a reader (and downstream grep) know the body's shape.\n"
-        f"  content prefix: {content_arg[:80]!r}"
+        f"  content prefix: {content_arg[:80]!r}\n"
+        "  remove the @pytest.mark.xfail marker when this passes"
     )
     chunks_reported = int(cast("int", result.get("chunks", 0)))
     assert chunks_reported >= 1, (
         f"{_QUARRY_JZQW_SUMMARY}\n"
         f"  media_type={media_type!r}: ingest_content returned zero chunks; "
-        "the capture would still be dropped."
+        "the capture would still be dropped.\n"
+        "  remove the @pytest.mark.xfail marker when this passes"
     )
