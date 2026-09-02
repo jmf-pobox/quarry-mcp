@@ -255,6 +255,21 @@ class WatchdogSource:
         (public) plus ``EventEmitter.watch`` (public) find the one for
         *handle* without reaching into ``BaseObserver``'s private
         ``_emitter_for_watch`` map.
+
+        Thread-confinement invariant this iteration depends on:
+        ``BaseObserver.emitters`` returns the live ``self._emitters`` set
+        with NO lock -- ``schedule()``/``unschedule()`` are the only
+        mutators and both take ``BaseObserver._lock`` around their
+        mutation, but this read does not. That is safe only because every
+        current caller (``WatchLoop.watch_state`` -> ``WatchRoster.
+        watch_handle_alive`` -> here, and the roster's own ``watch``/
+        ``unwatch``) runs on the asyncio event-loop thread, the SAME
+        thread that calls ``schedule``/``unschedule`` -- so this read and
+        those mutations can never interleave. Wrapping ``watch_state`` in
+        ``run_in_threadpool`` (as its siblings in
+        ``daemon/routes/registrations.py`` are) would break this and
+        create a real set-changed-during-iteration race; do not do that
+        without adding locking here first.
         """
         if handle is None:
             return False
