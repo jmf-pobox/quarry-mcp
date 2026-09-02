@@ -1761,7 +1761,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "ultimate-sitemap-parser", specifier = ">=1.8.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
-    { name = "watchdog", specifier = ">=4.0,<7" },
+    { name = "watchdog", specifier = ">=6.0,<7" },
     { name = "websockets", specifier = ">=13.0" },
 ]
 provides-extras = ["dev", "eval"]
