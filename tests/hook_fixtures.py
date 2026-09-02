@@ -130,13 +130,18 @@ def ephemeral_daemon(
 
     stderr = (log_dir / "quarryd.stderr").open("wb")
     stdout = (log_dir / "quarryd.stdout").open("wb")
-    proc = subprocess.Popen(
-        [binary, "--host", "127.0.0.1", "--port", "0"],
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=stdout,
-        stderr=stderr,
-    )
+    try:
+        proc = subprocess.Popen(
+            [binary, "--host", "127.0.0.1", "--port", "0"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    except BaseException:
+        stdout.close()
+        stderr.close()
+        raise
 
     try:
         # ``$QUARRY_ROOT/default/serve.port`` is the daemon's post-bind port
