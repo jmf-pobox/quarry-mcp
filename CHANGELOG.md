@@ -47,6 +47,247 @@ across `transform`, `index`, and `connector`).
   attempt returned no handle), or `scan-only` (the observer is disabled, or
   the collection was never tracked) — so a silently degraded watch is
   visible instead of indistinguishable from a healthy one.
+
+## [3.2.0] - 2026-09-01
+
+### Added
+
+- `tool`: G6 — per-hook-invocation breadcrumb line in `quarry.log`. Every
+  `PostToolUse:*`/`SessionEnd`/`SubagentStop`/`PreCompact` handler emits one
+  `quarry.hooks: <name>: entered (config=..., payload_ok=...) -> capture|skip|error`
+  at INFO, so a silent-skip is visible on every exit path — including the
+  `PostToolUse:WebFetch` happy paths that previously went dark. (quarry-38qs)
+
+### Changed
+
+- `tool`: `plugin/skills/recall/SKILL.md` — the auto-loaded recall skill now
+  differentiates all four capture verbs (`find`, `remember`, `ingest`, `learn`)
+  in its frontmatter description and body, including a worked `learn` example.
+  A "When not to use it" bullet points repo-internal architecture questions to
+  `DESIGN.md` directly. Also corrects `/ingest` documentation to reflect the
+  URL-only contract (local files/directories route through
+  `register_directory` + `sync_all_registrations`). (quarry-wdhi)
+
+### Fixed
+
+- `tool`: slash-command MCP tool references repaired (quarry-ydym). The
+  seven tool-dispatching quarry slash commands (`/find`, `/ingest`,
+  `/remember`, `/learn`, `/explain`, `/source`, `/quarry`) — and their
+  seven `-dev` twins — still named the disconnected proxy namespace
+  (`mcp__plugin_quarry_quarry__*` / `mcp__plugin_quarry-dev_quarry__*`).
+  The native quarry MCP server now exposes tools as `mcp__quarry__*`
+  and its dev variant as `mcp__quarry-dev__*`; the released 3.1.0
+  plugin worked only because a capable assistant inferred the new
+  names. Cheaper models would hard-fail. All 26 references now name
+  the live tools directly.
+- `tool`: the compact panel summary for `list documents`, `list collections`,
+  `list databases`, and `list registrations` now reports the correct row
+  count. `plugin/hooks/suppress-output.sh` previously derived the count via
+  `wc -l` on the rendered table body, which over-counted continuation lines
+  from wrapped variable-width columns (a 2-row table with one wrapped row
+  displayed as "3 documents"). List formatters now emit an authoritative
+  `▶ N <noun>` on line 1 via a shared `_Listing` renderer in
+  `src/quarry/formatting.py`, and the hook reads that line as the panel
+  summary. (quarry-wdhi)
+- `tool`: G5 — WebSearch captures were silently dropped when Claude Code
+  emitted its rendered markdown summary instead of the pre-2026-05 JSON list;
+  the extractor now falls back to the plain-text digest and the missing-digest
+  log upgraded from DEBUG to WARN so operators can see the skip. The WARN
+  logs shape metadata only (presence, length, tool_response type) — never the
+  query text, which may hold tokens or secrets (CWE-532). (quarry-38qs)
+- `tool`: G4 — `PostToolUse:WebFetch` on a non-HTML URL (`application/json`,
+  `text/plain`, XML, …) no longer raises `ValueError` and drops the capture.
+  `WebFetcher.fetch_body` returns the body plus its declared media type; the
+  daemon routes HTML through the extractor and non-HTML through the text
+  pipeline (prefixed with a `<!-- media_type: … -->` marker) so the shape
+  survives into the stored document, still through the PII/secret scrub choke
+  point. A network failure during the refetch logs a WARN with a redacted URL
+  (via `CaptureUrl.for_web_fetch`) and the exception class only — never the
+  raw URL or exception text — and returns cleanly with zero chunks (CWE-532).
+  (quarry-38qs)
+
+## [3.1.0] - 2026-08-31
+
+### Added
+
+- `query`: `POST /v1/captures/lookup` (JSON body `{url, cwd}`) answers whether
+  a URL is already indexed under the caller's `<repo>-captures` collection
+  (`CapturesLookupResponse`: `{matched, document_name}`). POST avoids leaking
+  the target URL into server access logs and browser/proxy history (CWE-598:
+  sensitive query-string data). `QuarryClient.captures_lookup()`
+  is the client-side wrapper. `PostToolUse:WebFetch` calls it BEFORE sending the
+  new capture (a lookup run after would always match) via
+  `WebFetchLoopCloser` (`web_fetch_loop_closer.py`); on a match the hook
+  returns an `additionalContext` nudge naming the URL, a suggested `find`
+  query (the last path segment, or the host for a bare path), and the stored
+  `document_name` when the daemon supplies one. The lookup normalizes the URL
+  identically to the write path (`CaptureUrl.for_web_fetch`): two URLs
+  differing only by query string or fragment share one document; a
+  trailing-slash difference does not normalize and is a distinct document.
+  Fails open — an unreachable daemon or any client error returns `{}` silently
+  without blocking the fetch.
+- `tool`: `quarry learn` — a fourth capture verb, on CLI (`quarry learn`), MCP
+  (`learn`), slash (`/quarry:learn`), and the Python client
+  (`QuarryClient.learn`). A single call atomically saves a distilled lesson
+  (capped at 500 characters) and registers its retrieval preference — no
+  `learn`-then-`set_config` two-step. Lessons file into a project-scoped
+  `<repo>-lessons` collection (`default-lessons` when unregistered) and always
+  carry `memory_type="lesson"` with no `agent_handle`, so they never decay.
+  `memory_type='lesson'` is now reserved and rejected with `400` on
+  `remember`/`ingest`. `quarry doctor`'s memory-corpus check reports a
+  `lessons=N` segment. See DES-053.
+- `query`: `RrfFusion` gains a `lesson_boost` knob — a 1.5x default RRF-term
+  multiplier (`Settings.retrieval_lesson_boost`) that lifts a moderately
+  relevant lesson above equivalently-ranked plain content without letting an
+  irrelevant lesson dominate.
+
+- `tool`: four new agent-lifecycle hooks — `SessionEnd`, `PostToolUse:WebSearch`,
+  `PostToolUse:Read`, `SubagentStop`. `SessionEnd` captures the full session
+  transcript on every close (closing the "PreCompact never fires on short
+  sessions" gap); `PostToolUse:WebSearch` files a scrubbed digest of the
+  results under `<repo>-captures`; `PostToolUse:Read` (opt-in via
+  `HookConfig.read`, default `false`) captures prose files (`.md`, `.pdf`,
+  `.docx`, ...) read from outside any registered tree, gated by a four-check
+  fail-closed filter (in-tree exclusion, secret-path denylist, extension
+  allowlist, 200 KB size cap); `SubagentStop` archives the subagent's own
+  `agent_transcript_path` (distinct from the parent's `transcript_path`) with
+  `agent_id` as the wire identity. `SubagentStop` is a BLOCKING hook — the
+  handler always returns `{}` and never emits a `decision` field, verified
+  under crafted-adversarial payloads.
+- `infra`: extract `DaemonCaptureSender` (`daemon_capture.py`) and
+  `SessionTranscriptCapture` (`session_transcript.py`) out of `hooks.py`,
+  along with `WebSearchPayload`, `ReadPayload`, `ReadCaptureFilter`, and
+  `hooks_agent.py` for the four new handlers. `hooks.py` shrinks from 926 to
+  760 lines; `handle_pre_compact` now delegates to `SessionTranscriptCapture`
+  without behavior change.
+- `query`: `GET /v1/coverage?collection=<repo>` returns three per-repo counts —
+  `documents_indexed`, `transcripts_captured`, `memories_saved` — bounded to
+  the collection and its `<repo>-captures` sibling via a single
+  `WHERE collection IN (...)` scan. `CoverageResponse` (wire model),
+  `CoverageCounts` (TypedDict), `ChunkCatalog.coverage`, and
+  `QuarryClient.coverage` land together so a new field never exists on one
+  path without the other.
+- `tool`: SessionStart `additionalContext` now leads with the three canonical
+  trigger rules (find-before-WebSearch, grep-for-symbols/find-for-meaning,
+  remember-for-durable-knowledge) in every branch that leaves quarry
+  operational — including the daemon-unreachable auto-register defer, so an
+  agent that reads the "restart quarryd" diagnosis also sees the rules to
+  apply once the tools come back (operator ratification R2b).
+- `tool`: `/quarry:help` (and `-dev` twin) lists all seven slash commands with
+  one-line descriptions, matching the org's `/help` template.
+- `tool`: `plugin/skills/recall/SKILL.md` — a Claude Code plugin skill so
+  agents that never invoke a quarry slash command still reach for `/find`
+  before WebSearch/WebFetch, before a why/how/what-did-we-decide answer, and
+  when a durable fact is worth persisting past compaction.
+
+### Changed
+
+- `tool`: the `remember`/`ingest` descriptions on every surface (CLI, MCP,
+  slash) now carry the boundary sentence distinguishing the three capture
+  verbs: "remember = a specific durable fact, ingest = a URL, learn = a
+  distilled lesson that gets retrieval preference."
+- `tool`: MCP server `instructions` block leads with the two find-triggering
+  sentences (R1 + R2) plus an anti-rationalisation clause and a negative rule;
+  the formatting-policy paragraph is demoted below the trigger vocabulary.
+- `tool`: every MCP tool docstring opens with an occasion rather than a
+  mechanism verb. `find` and `remember` splice R1/R2 and R3 verbatim; the
+  other nine tools each get a situational "Use ..." opener naming the
+  occasion an agent would reach for them (operator ratification R3a drops
+  the previous clipboard / API-response / sandbox-uploaded-files framing on
+  `remember`).
+- `tool`: `plugin/skills/recall/SKILL.md` — frontmatter and "When to use it"
+  bullets splice R1/R2/R3 verbatim so the plugin skill, the SessionStart
+  context, and the MCP tool docstrings share one wording.
+- `query`: agent-memory temporal decay wired through the daemon's search
+  route. A new `QUARRY_RETRIEVAL_DECAY_RATE` setting (default `0.000963`, a
+  30-day half-life) is threaded from `Settings` into `RetrievalConfig` at
+  call time so every daemon-served hybrid query applies the exponential
+  recency curve to agent memories.
+- `tool`: `quarry remember`/MCP `remember`/HTTP `POST /v1/remember` route
+  by `agent_handle` when no collection is named. The three surfaces now
+  send `collection=""` (the empty sentinel) and the daemon owns the single
+  routing rule: an empty collection with a handle lands in
+  `memory-<handle>`; empty on both sides falls back to `default`; an
+  explicit collection always wins.
+- `tool`: `quarry doctor` grows a **Memory corpus** informational line
+  (per-handle, per-type, per-collection counts) and a **Memory identity**
+  warning check that fires when the resident ethos handle has zero rows in
+  a corpus that otherwise contains memory — the "ethos config resolves but
+  PreCompact never fired" gap.
+- `tool`: SessionStart now gates on the `.punt-labs/quarry/enabled`
+  marker. A repo with the marker takes the existing active flow
+  (walk-up coverage, auto-register, background sync). A repo without
+  the marker gets one of two read-only nudges: if there is no covering
+  registration, the hook returns a message pointing at
+  `quarry enable DIR`; if there IS a covering registration (drift — the
+  marker was never written or was deleted), the hook surfaces both
+  `quarry enable DIR` (re-adopt) and `quarry deregister COLLECTION` (drop) and
+  refuses to pick automatically. The nudge and drift paths never mutate
+  the registry, never launch a sync, and never deposit the guide.
+  Standard `punt-kit/standards/tool-enable-disable.md` §§ 2.1, 2.3,
+  2.9, 2.11.
+- `tool`: `/quarry:remember`'s `argument-hint` was `<document name>`, easily
+  misread as "type the content here" next to a description that says "Remember
+  inline text content." The command's own arguments are the memory's name,
+  not its content (content is asked separately); reworded to `<name for this
+  memory>`.
+- The ethos-config walker (`.punt-labs/ethos/config.yaml` ancestor lookup)
+  extracts into a new `quarry.ethos_handle.EthosConfig` module so the
+  hook, doctor, and future callers share one reader. `hooks.py`'s inline
+  copy migrates in a small follow-up bead (temporary, intentional
+  duplication).
+
+### Removed
+
+- `tool`: `/quarry:use` (and `-dev` twin) — the manager subcommand
+  `/quarry:quarry use <db>` is the only slash-command door to switching
+  databases; a bare top-level command for one subcommand was redundant. The
+  CLI verb `quarry use` is unaffected.
+
+### Fixed
+
+- `query`: fusion decay guard now requires both a non-empty `agent_handle`
+  AND a decayable `memory_type`. Previously a bulk-ingested document that
+  picked up a `memory_type` tag would decay under RRF; knowledge chunks
+  (empty handle) now hold their rank regardless of the tag.
+- `tool`: the `researcher` sub-agent's `tools:` allowlist granted only `Read,
+  Glob, Grep, WebSearch, WebFetch` — every quarry MCP tool the agent's prompt
+  directs it to call (`find`, `show`, `remember`, `list`, `ingest`) was
+  excluded, so "always start with local knowledge" was structurally
+  unexecutable as shipped. Per DES-025, MCP tool names carry a dev/prod
+  prefix (`mcp__plugin_quarry_quarry__find` vs
+  `mcp__plugin_quarry-dev_quarry__find`) that an allowlist cannot enumerate
+  portably. Replaced the `tools:` allowlist with `disallowedTools: [Write,
+  Edit, NotebookEdit, Bash]` — DES-025's denylist pattern extended for
+  research agents that fetch untrusted web content (Cursor Security M1 on
+  PR #481). DES-025's minimum is `[Write, Edit]`; this agent's threat model
+  warrants tightening: `NotebookEdit` and `Bash` bypass the Write/Edit denies
+  as filesystem-mutation surfaces, and prompt-injected content routing to
+  Bash would elevate a confused-deputy risk. Both prod and dev MCP prefixes
+  are still inherited from the parent session; the researcher can call
+  every quarry MCP tool without needing the plugin's install-time prefix at
+  frontmatter-write time.
+- `infra`: the repo's `CLAUDE.md` carried the quarry user-guide twice — once
+  as a `<!-- quarry:begin -->` / `<!-- quarry:end -->` fenced block and once
+  via the canonical `@.punt-labs/quarry/CLAUDE.md` import that ships the
+  same twenty lines. The fence violated
+  `punt-kit/standards/tool-enable-disable.md` § 2.1 (tooling never merges,
+  marks, or fences user-owned `CLAUDE.md` prose) and was a pre-standard
+  legacy artifact — no code in `src/` writes it. Deleted the fence; the
+  canonical `@`-import remains as the single delivery path. Documented the
+  ownership contract in `src/quarry/guidance.py`'s module docstring so a
+  future editor does not fork the string back into a fenced block.
+- `tool`: `quarry disable` now teardown-commits the marker + `@`-import
+  via `Enablement.disable()` **before** deregistering the sync
+  collection via the daemon. Under the old order, a mid-disable failure
+  in `Enablement.disable` (hostile symlink, lock contention, filesystem
+  error) left the collection already gone while the marker and import
+  still declared the repo enabled — the § 2.11 forbidden state (marker
+  present, no functional collection). The reordered flow leaves either
+  the fully-enabled state (recoverable) or a coherent disabled surface
+  (marker-absent, import-absent) with only a runtime registration
+  residue a retry converges — never the invalid state in between.
+
 - `tool`: README and `/ingest` (and `/ingest-dev`) described `ingest`/`quarry
   ingest` as accepting a local file path. It only ever accepts an `http(s)`
   URL (`src/quarry/mcp_server.py`'s `ingest` docstring already documented the

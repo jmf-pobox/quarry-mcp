@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
-from quarry.daemon.ingest_jobs import IngestJob
+from quarry.daemon.ingest_jobs import IngestJob, ScrubbedIngestJob
 from quarry.daemon.routes.ingestion import IngestionRoutes
 from quarry.db import Database
 from quarry.extractors.html_extractor import HtmlExtractor
@@ -173,6 +173,67 @@ class TestIngestUrl:
             result = ingest_url(url, db, settings)
 
         assert result["document_name"] == url
+
+    @patch(_FETCH)
+    def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):
+        """A caller that already fetched the body must not pay for a second fetch.
+
+        The daemon's capture re-fetch (``CaptureIngestJob._refetch``) calls
+        ``WebFetcher.fetch_body`` itself to decide HTML vs. text routing;
+        ``prefetched_html`` lets ``ingest_url`` reuse that body instead of
+        fetching the URL again (Copilot round-4, PR #496).
+        """
+        from quarry.ingestion.pipeline import ingest_url
+
+        settings = _fake_settings()
+        db = _fake_db()
+        html = (
+            "<html><body><h1>Already fetched</h1><p>Some body text.</p></body></html>"
+        )
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            result = ingest_url(
+                "https://example.com/page",
+                db,
+                settings,
+                prefetched_html=html,
+            )
+
+        mock_fetch.assert_not_called()
+        assert result["chunks"] >= 1
+
+
+class TestRememberCollectionRouting:
+    """Server-side sentinel: empty ``collection`` routes by ``agent_handle``.
+
+    One rule at the daemon chokepoint keeps the CLI/MCP/HTTP surfaces from
+    drifting (bug class 3): explicit collection wins; empty + handle lands in
+    ``memory-<handle>``; empty on both sides falls back to ``default``.
+    """
+
+    @staticmethod
+    def _job(body: dict[str, object]) -> ScrubbedIngestJob:
+        routes = IngestionRoutes(cast("DaemonContext", SimpleNamespace()))
+        payload = {"name": "note.md", "content": "hi", **body}
+        job = routes._remember_job(payload)
+        assert isinstance(job, ScrubbedIngestJob), job
+        return job
+
+    def test_handle_and_empty_collection_route_to_memory_bucket(self) -> None:
+        assert self._job({"agent_handle": "rmh"}).collection == "memory-rmh"
+
+    def test_explicit_collection_wins_over_agent_handle(self) -> None:
+        job = self._job({"agent_handle": "rmh", "collection": "notes"})
+        assert job.collection == "notes"
+
+    def test_empty_handle_and_empty_collection_fall_back_to_default(self) -> None:
+        assert self._job({}).collection == "default"
+
+    def test_empty_handle_with_explicit_collection_uses_that_collection(self) -> None:
+        job = self._job({"collection": "research"})
+        assert job.collection == "research"
 
 
 class TestIngestRouteKeying:

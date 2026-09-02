@@ -32,6 +32,7 @@ from quarry.daemon.context import DaemonContext
 from quarry.daemon.server import DaemonServer, ServeConfig
 from quarry.daemon.tasks import TASK_TTL_SECONDS, TaskState
 from quarry.fd_headroom import FdHeadroom
+from quarry.ingestion.web_fetch import FetchedBody
 from quarry.results import SearchResult
 
 # Bound on how long fixture teardown waits for a background job to finish for
@@ -514,6 +515,93 @@ class TestSearch:
         result = data["results"][0]
         assert result["agent_handle"] == "rmh"
         assert result["memory_type"] == "episodic"
+
+    def test_search_threads_settings_decay_rate(self, tmp_path: Path) -> None:
+        """The daemon builds RetrievalConfig from ``Settings.retrieval_decay_rate``.
+
+        A search on a daemon with a non-zero configured rate must construct the
+        SearchService with that rate; otherwise the memory-decay knob is
+        silently pinned to the dataclass default (0.0) and never takes effect.
+        """
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.5
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_rates: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            rate = getattr(config, "decay_rate", None)
+            if rate is not None:
+                seen_rates.append(float(rate))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_rates == [0.5]
+
+    def test_search_zero_rate_disables_decay(self, tmp_path: Path) -> None:
+        """A configured rate of 0.0 is passed through — the dataclass default path."""
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.0
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_rates: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            rate = getattr(config, "decay_rate", None)
+            if rate is not None:
+                seen_rates.append(float(rate))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_rates == [0.0]
+
+    def test_search_threads_settings_lesson_boost(self, tmp_path: Path) -> None:
+        """The daemon threads ``Settings.retrieval_lesson_boost`` into search."""
+        settings = _mock_settings(tmp_path)
+        settings.retrieval_decay_rate = 0.0
+        settings.retrieval_lesson_boost = 2.0
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        seen_boosts: list[float] = []
+
+        real_service = __import__(
+            "quarry.retrieval.service", fromlist=["SearchService"]
+        ).SearchService
+
+        def capture(database: object, config: object = None) -> object:
+            boost = getattr(config, "lesson_boost", None)
+            if boost is not None:
+                seen_boosts.append(float(boost))
+            return real_service(database, config)
+
+        with (
+            patch("quarry.daemon.routes.search.SearchService", side_effect=capture),
+            patch("quarry.retrieval.hybrid.HybridRetriever.retrieve", return_value=[]),
+            TestClient(build_app(ctx), raise_server_exceptions=False) as tc,
+        ):
+            tc.get("/v1/search?q=hello")
+
+        assert seen_boosts == [2.0]
 
 
 class TestDocuments:
@@ -1328,6 +1416,152 @@ class TestShow:
         assert "must be >= 1" in resp.json()["error"]
 
 
+class TestCapturesLookup:
+    """Tests for POST /captures/lookup — bug class 3: url/cwd param parity.
+
+    POST, not a ``?url=`` query string: a query-string token (an API key, a
+    session id) rides the URL itself and can leak into proxy/WAF/browser logs
+    even on a loopback hop (CWE-598).
+    """
+
+    def test_route_is_post_not_get(self, client: TestClient) -> None:
+        resp = client.get("/v1/captures/lookup?url=https://example.com/x")
+        assert resp.status_code == 405
+
+    def test_missing_url_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/captures/lookup", json={})
+        assert resp.status_code == 400
+        assert "url" in resp.json()["error"].lower()
+
+    def test_empty_url_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/captures/lookup", json={"url": ""})
+        assert resp.status_code == 400
+
+    def test_matched_true_returns_document_name(self, client: TestClient) -> None:
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.for_repo("quarry"),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ),
+        ):
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/docs", "cwd": "/repo"},
+            ).json()
+
+        assert data == {
+            "matched": True,
+            "document_name": "https://example.com/docs",
+        }
+
+    def test_no_match_returns_false_and_no_document_name(
+        self, client: TestClient
+    ) -> None:
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+            return_value=False,
+        ):
+            data = client.post(
+                "/v1/captures/lookup", json={"url": "https://example.com/x"}
+            ).json()
+
+        assert data == {"matched": False, "document_name": None}
+
+    def test_reads_url_and_cwd_and_derives_collection(self, client: TestClient) -> None:
+        """The daemon derives ``<repo>-captures`` from ``cwd`` — same contract
+        as ``POST /capture`` — so the client never spells the naming rule."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path"
+            ) as for_path,
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=False,
+            ) as exists,
+        ):
+            for_path.return_value = CapturesCollection.for_repo("myproj")
+            client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://x.test/p", "cwd": "/projects/myproj"},
+            )
+
+        for_path.assert_called_once()
+        assert for_path.call_args[0][0] == "/projects/myproj"
+        assert exists.call_args[0][1] == "myproj-captures"
+
+    def test_query_string_and_fragment_ignored_by_normalization(
+        self, client: TestClient
+    ) -> None:
+        """A lookup URL with a query string still reaches the redacted document
+        name — the SAME normalization the write path applies."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.resolve(None),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ) as exists,
+        ):
+            data = client.post(
+                "/v1/captures/lookup",
+                json={"url": "https://x.test/guide?utm=1#frag"},
+            ).json()
+
+        assert data["document_name"] == "https://x.test/guide"
+        assert exists.call_args[0][0] == "https://x.test/guide"
+
+    def test_trailing_slash_produces_a_different_document_name(
+        self, client: TestClient
+    ) -> None:
+        """No normalization for a trailing slash — the compared name keeps it."""
+        with (
+            patch(
+                "quarry.captures_collection.CapturesCollection.for_registry_path",
+                return_value=CapturesCollection.resolve(None),
+            ),
+            patch(
+                "quarry.db.chunk_catalog.ChunkCatalog.document_exists",
+                return_value=True,
+            ) as exists,
+        ):
+            client.post("/v1/captures/lookup", json={"url": "https://x.test/guide/"})
+
+        assert exists.call_args[0][0] == "https://x.test/guide/"
+
+    def test_end_to_end_matches_a_real_stored_capture(self, tmp_path: Path) -> None:
+        """No mocks on the catalog: a real chunk written under the derived
+        captures collection is found by a lookup with a differing query string."""
+        from quarry.capture_url import CaptureUrl
+        from quarry.db import ChunkStore
+        from quarry.db.storage import get_db
+        from tests.test_database import _make_chunk, _random_vectors
+
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        db = get_db(settings.lancedb_path)
+        stored_name = CaptureUrl.for_web_fetch("https://example.com/guide")
+        ChunkStore(db).insert(
+            [_make_chunk(document_name=stored_name, collection="default-captures")],
+            _random_vectors(1),
+        )
+        app = build_app(ctx)
+
+        with TestClient(app, raise_server_exceptions=False) as tc:
+            data = tc.post(
+                "/v1/captures/lookup",
+                json={"url": "https://example.com/guide?ref=nav"},
+            ).json()
+
+        assert data == {"matched": True, "document_name": stored_name}
+
+
 class TestDeleteDocuments:
     """Tests for DELETE /documents endpoint -- now returns 202."""
 
@@ -1482,7 +1716,7 @@ class TestCapture:
             resp = tc.post(
                 "/v1/capture",
                 json={
-                    "content": "reach me at jmf@pobox.com",
+                    "content": "reach me at jdoe@example.com",
                     "document_name": "note",
                     "cwd": str(tmp_path),
                 },
@@ -1491,8 +1725,8 @@ class TestCapture:
 
         assert collections == ["default-captures"]
         assert scrubbers
-        redacted = scrubbers[0]("reach me at jmf@pobox.com")
-        assert "jmf@pobox.com" not in redacted
+        redacted = scrubbers[0]("reach me at jdoe@example.com")
+        assert "jdoe@example.com" not in redacted
         assert "[REDACTED:email]" in redacted
 
     def test_scrub_failure_marks_task_failed_and_stores_nothing(
@@ -1515,7 +1749,7 @@ class TestCapture:
             resp = tc.post(
                 "/v1/capture",
                 json={
-                    "content": "secret jmf@pobox.com",
+                    "content": "secret jdoe@example.com",
                     "document_name": "note",
                     "cwd": str(tmp_path),
                     "overwrite": True,
@@ -1550,10 +1784,21 @@ class TestCapture:
             }
 
         empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        # G4: _refetch now calls WebFetcher.fetch_body first to route HTML
+        # through ingest_url (this test's path) vs. non-HTML through
+        # ingest_content-as-text. Stub the network fetch as HTML so the
+        # existing refetch-via-ingest_url expectations hold.
+        html_body = FetchedBody(
+            text="<html><body>refetched</body></html>", media_type="text/html"
+        )
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
             patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=html_body,
+            ),
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1561,7 +1806,7 @@ class TestCapture:
                     "content": "<html><body></body></html>",
                     "document_name": "example.com/p",
                     "source_url": "https://example.com/p",
-                    "summary": "see jmf@pobox.com",
+                    "summary": "see jdoe@example.com",
                     "format_hint": "html",
                 },
             )
@@ -1576,7 +1821,121 @@ class TestCapture:
         # (the choke point) redacts summary+name — see test_pipeline's
         # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
-        assert "[REDACTED:email]" in scrub("reach jmf@pobox.com")
+        assert "[REDACTED:email]" in scrub("reach jdoe@example.com")
+
+    def test_refetch_non_html_captures_body_as_text(self, tmp_path: Path) -> None:
+        """G4: a JSON/plain-text URL is captured as text (not dropped).
+
+        Pre-G4, WebFetcher.fetch() rejected non-HTML with ValueError and the
+        capture disappeared into a stack trace.  Now fetch_body returns the
+        body + media type; the refetch routes non-HTML through ingest_content
+        with a mime marker so the shape survives into the stored document.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        content_kwargs: list[dict[str, object]] = []
+        empty: dict[str, object] = {
+            "document_name": "p",
+            "collection": "default-captures",
+            "chunks": 0,
+        }
+
+        def _content(
+            content: str,
+            name: str,
+            *_a: object,
+            **kw: object,
+        ) -> dict[str, object]:
+            content_kwargs.append({"content": content, "name": name, **kw})
+            # First invocation is the inline empty extraction; every later
+            # one is the refetch-as-text landing.
+            if len(content_kwargs) == 1:
+                return empty
+            return {
+                "document_name": name,
+                "collection": kw["collection"],
+                "chunks": 1,
+            }
+
+        json_body = FetchedBody(
+            text='{"answer": 42, "email": "user@example.com"}',
+            media_type="application/json",
+        )
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _content),
+            patch("quarry.ingestion.pipeline.ingest_url") as url,
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                return_value=json_body,
+            ),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html><body></body></html>",
+                    "document_name": "example.com/p",
+                    "source_url": "https://example.com/p",
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"]["chunks"] == 1
+        url.assert_not_called()  # non-HTML did NOT go through ingest_url
+        # The refetch call carried the body prefixed with the mime marker AND
+        # ran through the scrub choke point (parity with the HTML branch).
+        refetch_call = content_kwargs[-1]
+        assert "<!-- media_type: application/json -->" in str(refetch_call["content"])
+        scrub = cast("Callable[[str], str]", refetch_call["content_scrubber"])
+        assert "[REDACTED:email]" in scrub("reach user@example.com")
+
+    def test_refetch_fetch_body_failure_returns_zero_chunks_no_traceback(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """G4/bug-class 2: a network failure during refetch is a clean skip.
+
+        Any of OSError/ValueError/TimeoutError from fetch_body must surface as
+        a WARN + zero-chunks return, not a stack trace in the daemon log.  The
+        WARN must not leak the raw source_url (userinfo/query can carry
+        secrets — CWE-532); the exception's ``str`` is dropped in favour of
+        its class name for the same reason.
+        """
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        empty = {"document_name": "p", "collection": "default-captures", "chunks": 0}
+        raw_url = "https://user:pass@example.com/p?api_key=secret123"
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
+            patch(
+                "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
+                side_effect=OSError(f"boom fetching {raw_url}"),
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            resp = tc.post(
+                "/v1/capture",
+                json={
+                    "content": "<html></html>",
+                    "document_name": "example.com/p",
+                    "source_url": raw_url,
+                    "format_hint": "html",
+                },
+            )
+            data = _poll_task_done(tc, resp.json()["task_id"])
+
+        assert data["status"] == "completed"
+        assert data["results"] == {"chunks": 0, "sections": 0}
+        assert "refetch" in caplog.text
+        assert "secret123" not in caplog.text
+        assert "user:pass" not in caplog.text
+        assert "OSError" in caplog.text
 
     def test_nonempty_extraction_does_not_refetch(self, tmp_path: Path) -> None:
         """A page that extracts to >=1 chunk stores inline and never re-fetches."""
@@ -1651,6 +2010,17 @@ class TestCapture:
         assert "rejected" in resp.json()["error"].lower()
         url.assert_not_called()  # the SSRF sink was never reached
         content.assert_not_called()  # rejected before any ingest job ran
+
+    def test_capture_rejects_reserved_memory_type_lesson(
+        self, client: TestClient
+    ) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        resp = client.post(
+            "/v1/capture",
+            json={"content": "body", "document_name": "n.md", "memory_type": "lesson"},
+        )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
 
 
 class TestRemember:
@@ -1736,16 +2106,16 @@ class TestRemember:
             resp = tc.post(
                 "/v1/remember",
                 json={
-                    "name": "note jmf@pobox.com",
+                    "name": "note jdoe@example.com",
                     "content": "body",
-                    "summary": "contact jmf@pobox.com",
+                    "summary": "contact jdoe@example.com",
                 },
             )
             _poll_task_done(tc, resp.json()["task_id"])
 
-        assert "jmf@pobox.com" not in str(seen["name"])
+        assert "jdoe@example.com" not in str(seen["name"])
         assert "[REDACTED:email]" in str(seen["name"])
-        assert "jmf@pobox.com" not in str(seen["summary"])
+        assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
     def test_invalid_json_returns_400(self, client: TestClient) -> None:
@@ -1895,6 +2265,15 @@ class TestRemember:
         assert resp.status_code == 400
         assert "overwrite" in resp.json()["error"].lower()
 
+    def test_rejects_reserved_lesson_memory_type(self, client: TestClient) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        resp = client.post(
+            "/v1/remember",
+            json={"name": "n.md", "content": "body", "memory_type": "lesson"},
+        )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
+
 
 def _fake_public_addrinfo(
     _host: str,
@@ -1982,7 +2361,7 @@ class TestIngest:
         assert url_kwargs
         assert url_kwargs[0]["collection"] == "default-captures"
         scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
-        assert "[REDACTED:email]" in scrub("reach me at jmf@pobox.com")
+        assert "[REDACTED:email]" in scrub("reach me at jdoe@example.com")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
         resp = client.post("/v1/ingest", json={})
@@ -2237,6 +2616,181 @@ class TestIngest:
             resp = client.post("/v1/ingest", json={"source": "http://cgnat.example/"})
         assert resp.status_code == 400
         assert "cgnat" in resp.json()["error"].lower()
+
+    def test_rejects_reserved_lesson_memory_type(self, client: TestClient) -> None:
+        """memory_type='lesson' is reserved for quarry learn (D7)."""
+        with patch(
+            "quarry.url_safety.socket_module.getaddrinfo",
+            side_effect=_fake_public_addrinfo,
+        ):
+            resp = client.post(
+                "/v1/ingest",
+                json={"source": "https://example.com/doc", "memory_type": "lesson"},
+            )
+        assert resp.status_code == 400
+        assert "reserved" in resp.json()["error"].lower()
+
+
+class TestLearn:
+    """Tests for POST /learn endpoint (quarry-b6p)."""
+
+    def test_success_returns_202_with_learn_prefixed_task_id(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch(
+                "quarry.ingestion.pipeline.ingest_content",
+                return_value={"document_name": "n", "collection": "c", "chunks": 1},
+            ),
+        ):
+            resp = tc.post("/v1/learn", json={"lesson": "always run make check"})
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["task_id"].startswith("learn-")
+
+    def test_missing_lesson_returns_400(self, client: TestClient) -> None:
+        resp = client.post("/v1/learn", json={})
+        assert resp.status_code == 400
+        assert "lesson" in resp.json()["error"].lower()
+
+    def test_lesson_over_max_chars_returns_400_naming_the_limit(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post("/v1/learn", json={"lesson": "x" * 501})
+        assert resp.status_code == 400
+        assert "500" in resp.json()["error"]
+        assert "remember" in resp.json()["error"].lower()
+
+    def test_topic_lands_in_summary_and_name_in_document_name(
+        self, tmp_path: Path
+    ) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["name"] = name
+            seen["summary"] = kw["summary"]
+            seen["memory_type"] = kw["memory_type"]
+            seen["agent_handle"] = kw["agent_handle"]
+            return {"document_name": name, "collection": "c", "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post(
+                "/v1/learn",
+                json={
+                    "lesson": "always run make check",
+                    "topic": "testing",
+                    "name": "auth-gotcha",
+                },
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert str(seen["name"]).startswith("lesson-auth-gotcha-")
+        assert seen["summary"] == "testing"
+        assert seen["memory_type"] == "lesson"
+        assert seen["agent_handle"] == ""
+
+    def test_two_calls_same_name_produce_distinct_document_names(
+        self, tmp_path: Path
+    ) -> None:
+        """D6 regression: two lessons filed under the same name never collide."""
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        names: list[str] = []
+
+        def _ingest_content(
+            _content: str, name: str, *_a: object, **_kw: object
+        ) -> dict[str, object]:
+            names.append(name)
+            return {"document_name": name, "collection": "c", "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            for _ in range(2):
+                resp = tc.post(
+                    "/v1/learn",
+                    json={"lesson": "a lesson", "name": "auth-gotcha"},
+                )
+                _poll_task_done(tc, resp.json()["task_id"])
+
+        assert len(names) == 2
+        assert names[0] != names[1]
+
+    def test_empty_cwd_routes_to_default_lessons(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, _name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["collection"] = kw["collection"]
+            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post("/v1/learn", json={"lesson": "a lesson"})
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert seen["collection"] == "default-lessons"
+
+    def test_registered_cwd_routes_to_repo_lessons(self, tmp_path: Path) -> None:
+        """A cwd under a registered directory resolves to <repo>-lessons."""
+        from quarry.sync_registry import SyncRegistry
+
+        settings = _mock_settings(tmp_path)
+        settings.registry_path = tmp_path / "registry.db"
+        project = tmp_path / "myapp"
+        project.mkdir()
+        reg = SyncRegistry(settings.registry_path)
+        reg.register_directory(project, "myapp")
+        reg.commit()
+        reg.close()
+
+        ctx = DaemonContext(settings)
+        _inject_mocks(ctx)
+        app = build_app(ctx)
+        seen: dict[str, object] = {}
+
+        def _ingest_content(
+            _content: str, _name: str, *_a: object, **kw: object
+        ) -> dict[str, object]:
+            seen["collection"] = kw["collection"]
+            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+
+        with (
+            TestClient(app, raise_server_exceptions=False) as tc,
+            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+        ):
+            resp = tc.post(
+                "/v1/learn",
+                json={"lesson": "a lesson", "cwd": str(project)},
+            )
+            _poll_task_done(tc, resp.json()["task_id"])
+
+        assert seen["collection"] == "myapp-lessons"
 
 
 class TestSync:
@@ -3753,3 +4307,57 @@ class TestHealthResponseFdOptional:
         health = HealthResponse.model_validate(payload)
         assert health.fd is not None
         assert (health.fd.open_fds, health.fd.soft_limit) == (42, 8192)
+
+
+class TestCoverageRoute:
+    """The ``/v1/coverage`` route: query-param contract + local/remote field parity.
+
+    Bug-class-3: a new query param must reach the DB, and the JSON response
+    fields must match the ``CoverageResponse`` model exactly — the client and
+    the daemon share that one shape.
+    """
+
+    def test_missing_collection_param_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/coverage")
+        assert resp.status_code == 400
+        assert "collection" in resp.json()["error"]
+
+    def test_blank_collection_param_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/v1/coverage?collection=%20%20")
+        assert resp.status_code == 400
+
+    def test_collection_query_param_reaches_catalog(self, client: TestClient) -> None:
+        """The daemon reads ``?collection=<repo>`` and passes it (plus the derived
+        captures sibling) to ``ChunkCatalog.coverage``."""
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.coverage",
+            return_value={
+                "documents_indexed": 5,
+                "transcripts_captured": 2,
+                "memories_saved": 7,
+            },
+        ) as coverage_mock:
+            resp = client.get("/v1/coverage?collection=myproject")
+        assert resp.status_code == 200
+        args, _ = coverage_mock.call_args
+        assert args == ("myproject", "myproject-captures")
+
+    def test_response_keys_match_model(self, client: TestClient) -> None:
+        """Response has exactly the ``CoverageResponse`` fields."""
+        from quarry.api import CoverageResponse
+
+        with patch(
+            "quarry.db.chunk_catalog.ChunkCatalog.coverage",
+            return_value={
+                "documents_indexed": 3,
+                "transcripts_captured": 1,
+                "memories_saved": 0,
+            },
+        ):
+            body = client.get("/v1/coverage?collection=myproject").json()
+        assert set(body) == set(CoverageResponse.model_fields)
+        assert body == {
+            "documents_indexed": 3,
+            "transcripts_captured": 1,
+            "memories_saved": 0,
+        }

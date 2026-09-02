@@ -90,6 +90,36 @@ class Settings(BaseSettings):
     # survive, so a typo in the override must not defeat it.
     fd_limit: int = Field(default=DEFAULT_FD_LIMIT, validation_alias="QUARRY_FD_LIMIT")
 
+    # Agent-memory temporal decay rate (1/hour) threaded into RetrievalConfig
+    # at wire time (see daemon/routes/search.py).  The default is a 30-day
+    # half-life: ln(2) / 720h ≈ 0.000963.  RRF rank-1 weight is 1/(60+0) ≈
+    # 0.0167; a 30-day-old memory decays to weight 0.5, roughly the difference
+    # between ranks 1 and 60 — a month-old top hit loses to a fresh rank-2.
+    # 7 days would decay useful memories before they mature; 90 days ≈ no
+    # decay at typical session cadences.  Set to 0.0 to disable decay; a
+    # negative rate would invert the curve (older rows outrank newer), so
+    # ``ge=0`` fails loud at construction.
+    retrieval_decay_rate: float = Field(
+        default=0.000963,
+        ge=0,
+        validation_alias="QUARRY_RETRIEVAL_DECAY_RATE",
+    )
+
+    # ``quarry learn``'s retrieval-preference knob, threaded into
+    # RetrievalConfig at wire time (see daemon/routes/search.py). RRF's
+    # rank-1 term is 1/(60+0); boosting by 1.5x lifts a lesson ranked in the
+    # top ~30 of its own channel above even the single best non-lesson hit,
+    # while a genuinely poor-relevance lesson (rank 40+) still loses to a
+    # relevant plain result -- conservative enough that irrelevant lessons
+    # never dominate. ``ge=1.0`` fails loud on a value that would *suppress*
+    # lessons instead of boosting them -- 1.0 is how an operator disables the
+    # effect, not 0.0, because 0.0 would zero out the row's entire RRF term.
+    retrieval_lesson_boost: float = Field(
+        default=1.5,
+        ge=1.0,
+        validation_alias="QUARRY_RETRIEVAL_LESSON_BOOST",
+    )
+
     @field_validator("fd_limit", mode="before")
     @classmethod
     def _coerce_fd_limit(cls, value: object) -> int:

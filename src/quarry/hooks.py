@@ -22,22 +22,173 @@ import logging
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self, final
 
+from quarry._hook_trace import HookTrace
 from quarry._stdlib import load_hook_config
+from quarry.daemon_capture import DaemonCaptureSender
+from quarry.ethos_handle import EthosConfig
+from quarry.session_transcript import SessionTranscriptCapture
 from quarry.web_capture import WebFetchPayload
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from quarry.api import CaptureIngestRequest, IngestRequest
-    from quarry.artifacts import SessionArtifacts
-    from quarry.client import QuarryClient
+    from quarry.collection_resolver import CollectionResolver
     from quarry.config import Settings
+    from quarry.results import CoverageCounts
+    from quarry.sync_registry import DirectoryRegistration, SyncRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# Three canonical trigger sentences — used verbatim in the SessionStart
+# ``additionalContext``, the MCP server ``instructions`` block, and the recall
+# skill.  Any drift between surfaces is what the design set out to prevent, so
+# the sentences live in a single module constant and are spliced by reference,
+# not paraphrase.
+_TRIGGER_RULES = (
+    "Use find before WebSearch or WebFetch for research, or before "
+    "answering a why/how/what-did-we-decide question.",
+    "Prefer grep for symbol and value lookups; prefer find for meaning.",
+    "Use remember when you learn something durable — a decision, a gotcha, "
+    "a non-obvious fact, a procedure — so it survives context compaction.",
+)
+
+
+@final
+class _SessionStartTemplates:
+    """Produce every SessionStart ``additionalContext`` string.
+
+    Owns the three-rule trailer and the per-branch templates so ``hooks``'s
+    dispatcher never assembles ad-hoc strings.  Each ``@classmethod`` maps to
+    exactly one dispatcher branch; the shared trailer is stitched into the
+    trigger-carrying branches at one place.
+    """
+
+    __slots__ = ()
+
+    _SLASH_TAIL = (
+        "Slash commands: /find, /ingest, /remember, /explain, /source, /quarry. "
+        "For deep research across local docs and the web, use the researcher agent."
+    )
+
+    @classmethod
+    def _trailer(cls) -> str:
+        """Return the R1/R2/R3 rules joined by newlines."""
+        return "\n".join(_TRIGGER_RULES)
+
+    @classmethod
+    def _sync_line(cls, status: str) -> str:
+        """Render the launched/running/failed background-sync status line."""
+        return {
+            "launched": "Background sync in progress.",
+            "running": "Background sync already running.",
+        }.get(status, "Background sync failed to launch.")
+
+    @classmethod
+    def active(
+        cls,
+        directory: Path,
+        collection: str,
+        captures_collection: str,
+        counts: CoverageCounts,
+        sync_status: str,
+    ) -> str:
+        """Reachable-coverage active-mode context: counts + rules + sync + slash."""
+        header = (
+            f"Quarry semantic search is active for this project.\n"
+            f'Collection: "{collection}" ({directory})\n'
+            f'Captures: "{captures_collection}"\n'
+            f"{counts['documents_indexed']} documents indexed, "
+            f"{counts['transcripts_captured']} transcripts captured, "
+            f"{counts['memories_saved']} memories saved."
+        )
+        return (
+            f"{header}\n{cls._trailer()}\n"
+            f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
+        )
+
+    @classmethod
+    def active_unreachable_coverage(
+        cls,
+        directory: Path,
+        collection: str,
+        captures_collection: str,
+        sync_status: str,
+    ) -> str:
+        """Active-mode context when the coverage query itself failed.
+
+        Registration and background sync are local operations that can succeed
+        while the daemon's HTTP API refuses the coverage call — the daemon is
+        unreachable, an HTTP status refused (401 not-authorized, 5xx), or the
+        client is misconfigured.  The trailer is still emitted so an agent that
+        reads this message can act on the diagnosis and then apply the rules.
+        """
+        header = (
+            f"Quarry semantic search is active for this project.\n"
+            f'Collection: "{collection}" ({directory})\n'
+            f'Captures: "{captures_collection}"\n'
+            "Coverage counts unavailable "
+            "(quarryd unreachable or client not authorized)."
+        )
+        return (
+            f"{header}\n{cls._trailer()}\n"
+            f"{cls._sync_line(sync_status)}\n{cls._SLASH_TAIL}"
+        )
+
+    @classmethod
+    def subsumption(cls, directory: Path) -> str:
+        """Child registrations exist under this directory — trailer still applies.
+
+        A subsumption refusal says nothing about the daemon; ``find``/``remember``
+        against the covering child still work, so the trigger rules are emitted.
+        """
+        header = (
+            f"Quarry: child registrations exist under {directory}. "
+            "Auto-register skipped to prevent subsumption. "
+            f"Run 'quarry enable {directory}' to register the parent."
+        )
+        return f"{header}\n{cls._trailer()}"
+
+    @classmethod
+    def daemon_unreachable(cls, directory: Path) -> str:
+        """Auto-register deferred because quarryd is unreachable.
+
+        Per operator ratification R2b: the trailer is emitted even here — the
+        agent is not a passive receiver; it can restart quarryd, run
+        ``quarry doctor``, and then apply the rules once the tools come back.
+        """
+        header = (
+            "Quarry is enabled for this repo but quarryd is currently unreachable.\n"
+            "Once you restart it (systemctl --user restart quarry / "
+            "launchctl kickstart) the tools below become available.\n"
+            f"Auto-registration of {directory} is deferred until quarryd returns."
+        )
+        return f"{header}\n{cls._trailer()}"
+
+    @classmethod
+    def nudge_enable(cls, directory: Path) -> str:
+        """No marker, no coverage: nudge the operator to run ``quarry enable``."""
+        return (
+            "Quarry semantic search is available but not enabled for this project.\n"
+            f"Directory: {directory}\n"
+            "This directory is not registered for sync. To turn quarry on:\n"
+            f"  quarry enable {directory}\n"
+            "This runs once, commits an opt-in marker, deposits the agent guide,\n"
+            "and registers this directory for background sync."
+        )
+
+    @classmethod
+    def drift_surface(cls, directory: Path, collection: str) -> str:
+        """Marker absent + coverage exists: surface the drift, no auto-fix."""
+        return (
+            "Quarry: this project has an indexed collection but no opt-in marker\n"
+            f"({directory}, collection {collection!r}). Two doors:\n"
+            f"  quarry enable {directory}         re-adopt: marker + guide.\n"
+            f"  quarry deregister {collection}    drop the registration (keep-data).\n"
+            "Auto-register is refused (already registered); auto-deregister is\n"
+            "refused (would delete indexed data on marker drift)."
+        )
 
 
 def _resolve_settings() -> Settings:
@@ -188,6 +339,42 @@ def _daemon_chunk_collections() -> frozenset[str]:
     return frozenset(listing.chunk_collections)
 
 
+def _session_coverage(
+    collection: str, captures_collection: str
+) -> CoverageCounts | None:
+    """Fetch per-repo coverage counts from the daemon.
+
+    Returns ``None`` whenever the client cannot obtain counts — daemon
+    unreachable, HTTP error (including 401 not-authorized), malformed
+    response, or client misconfiguration.  ``ClientConfigError`` is a
+    ``QuarryError`` subclass, so a single ``except QuarryError`` catches
+    every failure mode the client hierarchy names.
+
+    Mirrors ``_daemon_chunk_collections`` at the boundary: client-specific
+    exceptions become a single ``None`` signal, so the SessionStart template
+    can fall back to a coverage-unavailable message without importing the
+    client exception hierarchy.  ``None`` is the documented "unavailable"
+    contract here — the caller distinguishes it from the empty-catalog case
+    where the daemon answered with zeros.
+    """
+    del captures_collection  # daemon derives the sibling name server-side
+    from quarry.client import (  # noqa: PLC0415
+        ClientConfigError,
+        QuarryError,
+        TargetResolver,
+    )
+
+    try:
+        resp = TargetResolver.connect().coverage(collection)
+    except (ClientConfigError, QuarryError):
+        return None
+    return {
+        "documents_indexed": resp.documents_indexed,
+        "transcripts_captured": resp.transcripts_captured,
+        "memories_saved": resp.memories_saved,
+    }
+
+
 def _session_start_output(context: str) -> dict[str, object]:
     """Wrap *context* in the SessionStart hook-response envelope."""
     return {
@@ -201,118 +388,215 @@ def _session_start_output(context: str) -> dict[str, object]:
 def handle_session_start(payload: dict[str, object]) -> dict[str, object]:
     """Handle SessionStart hook.
 
-    Auto-registers the current working directory (from the payload ``cwd``
-    field) with quarry and kicks off a background sync.  Returns
-    ``additionalContext`` immediately so Claude knows quarry is available
-    without waiting for the sync to complete.
+    Gates on the ``.punt-labs/quarry/enabled`` marker (§ 2.11): only a repo
+    that opted in through ``quarry enable`` gets the active flow (walk-up
+    coverage → auto-register → background sync → active context). A repo
+    without the marker gets one of two read-only nudges — the state machine
+    is:
 
-    Walk-up matching: if cwd is a child of an existing registration, the
-    parent's collection is reused (no new registration).  Auto-register
-    only fires when no coverage exists.  If cwd is a parent of existing
-    child registrations, auto-register is skipped to prevent subsumption.
+    "Marker present" means at *cwd* itself OR at the root of the registration
+    covering *cwd* — a session opened in a subdirectory of an enabled repo
+    reads the marker the repo's own root carries, not one at the subdirectory.
+
+    * marker present → Path A (active). No coverage becomes auto-register;
+      a child of a parent registration reuses the parent; a subsumption is
+      refused; a down daemon defers.
+    * marker absent, no covering registration → Path B (nudge to
+      ``quarry enable``). The registry is read but never mutated.
+    * marker absent, covering registration exists → Path C (surface the
+      drift). Names both ``quarry enable`` and ``quarry deregister``; the
+      registry is never mutated because neither door is safe to pick
+      automatically.
     """
-    from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
-    from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
-
+    trace = HookTrace("session-start")
     cwd = _as_dir(payload.get("cwd"))
     if not cwd:
-        logger.debug("session-start: no cwd in payload, skipping")
+        trace.skip("cwd")
         return {}
-
-    config = load_hook_config(cwd)
-    if not config.session_sync:
-        logger.debug("session-start: disabled by config")
+    on = load_hook_config(cwd).session_sync
+    trace.mark_config(on=on)
+    if not on:
+        trace.skip("config")
         return {}
-
     directory = Path(cwd).resolve()
     if not directory.is_dir():
         logger.warning("session-start: cwd is not a directory: %s", directory)
+        trace.skip("not-a-dir")
         return {}
+    trace.mark_payload(ok=True)
+    result = _SessionStartContext.open(directory).dispatch()
+    trace.capture()
+    return result
 
-    settings = _resolve_settings()
-    conn = SyncRegistry(settings.registry_path)
-    resolver = CollectionResolver(conn)
-    try:
-        # Step 1: Walk up from cwd to find covering registration.
-        collection = resolver.covering_collection(str(directory))
 
+@final
+class _SessionStartContext:
+    """Own the cwd + registry state and route the SessionStart marker gate.
+
+    Instantiated once per session-start invocation; ``dispatch()`` picks the
+    Path A / B / C handler from the marker present/absent by covering
+    registration axes and closes the registry connection on the way out.
+    """
+
+    __slots__ = ("_conn", "_directory", "_resolver")
+
+    _directory: Path
+    _conn: SyncRegistry
+    _resolver: CollectionResolver
+
+    def __new__(
+        cls, directory: Path, conn: SyncRegistry, resolver: CollectionResolver
+    ) -> Self:
+        self = super().__new__(cls)
+        self._directory = directory
+        self._conn = conn
+        self._resolver = resolver
+        return self
+
+    @classmethod
+    def open(cls, directory: Path) -> Self:
+        """Build the context with a fresh registry connection."""
+        from quarry.collection_resolver import CollectionResolver  # noqa: PLC0415
+        from quarry.sync_registry import SyncRegistry  # noqa: PLC0415
+
+        settings = _resolve_settings()
+        conn = SyncRegistry(settings.registry_path)
+        return cls(directory, conn, CollectionResolver(conn))
+
+    def dispatch(self) -> dict[str, object]:
+        """Route to Path A / B / C by (marker, covering) and close the registry."""
+        try:
+            registration = self._resolver.covering_registration(str(self._directory))
+            collection = registration.collection if registration is not None else None
+            if self._marker_present(registration):
+                return self._path_a(collection)
+            if collection is not None:
+                return self._path_c(collection)
+            return self._path_b()
+        finally:
+            self._conn.close()
+
+    def _marker_present(self, registration: DirectoryRegistration | None) -> bool:
+        """Return whether the marker is present at cwd OR at the covering root.
+
+        A session opened in a subdirectory of an enabled repo has no marker of
+        its own — the marker lives at the repo root the registration names —
+        so ancestry, not just cwd, decides "enabled."
+        """
+        from quarry.enabled_marker import EnabledMarker  # noqa: PLC0415
+
+        if EnabledMarker(self._directory).is_present():
+            return True
+        return (
+            registration is not None
+            and EnabledMarker(Path(registration.directory)).is_present()
+        )
+
+    def _path_a(self, collection: str | None) -> dict[str, object]:
+        """Marker present: run the active flow (auto-register if needed, sync)."""
         if collection is None:
-            # Step 2: No coverage -- check for descendant registrations
-            # before auto-registering.  A parent registration would
-            # subsume existing child registrations, causing data loss.
-            if conn.has_registrations_under(directory):
+            registered_or_short_circuit = self._auto_register()
+            if isinstance(registered_or_short_circuit, dict):
+                return registered_or_short_circuit
+            collection = registered_or_short_circuit
+        return _session_start_output(self._active_context(collection))
+
+    def _path_b(self) -> dict[str, object]:
+        """No marker, no coverage: nudge the operator to run ``quarry enable``.
+
+        Read-only: the covering registration was already checked to reach
+        here, but nothing is written — the daemon is not consulted, no
+        registration is written, no guide is deposited. § 2.3 reserves both
+        mutations to the explicit ``enable`` verb.
+        """
+        return _session_start_output(
+            _SessionStartTemplates.nudge_enable(self._directory)
+        )
+
+    def _path_c(self, collection: str) -> dict[str, object]:
+        """Marker absent + coverage exists: surface the drift; two doors, no auto-fix.
+
+        Auto-register is refused (already registered); auto-deregister is
+        refused (would delete indexed data on marker drift, violating § 2.9's
+        promise that toggling never destroys committed content).
+        """
+        logger.warning(
+            "session-start: covering registration %r for %s has no opt-in "
+            "marker; surfacing drift instead of auto-registering",
+            collection,
+            self._directory,
+        )
+        return _session_start_output(
+            _SessionStartTemplates.drift_surface(self._directory, collection)
+        )
+
+    def _auto_register(self) -> str | dict[str, object]:
+        """Register the covering row and return its collection name.
+
+        Returns the collection ``str`` on success. Returns a response
+        envelope (``dict``) when the flow must short-circuit — subsumption
+        refusal or daemon-unreachable defer.
+        """
+        if self._conn.has_registrations_under(self._directory):
+            logger.warning(
+                "session-start: existing child registrations found under %s; "
+                "skipping auto-register to prevent subsumption. Run "
+                "'quarry enable %s' to explicitly register the parent.",
+                self._directory,
+                self._directory,
+            )
+            return _session_start_output(
+                _SessionStartTemplates.subsumption(self._directory)
+            )
+        # A same-directory re-adopt reuses this cwd's own keep-data archive
+        # before consulting the daemon — so a re-open of an archived repo
+        # works even when quarryd is down.
+        collection = self._resolver.archived_collection_for(self._directory)
+        if collection is None:
+            try:
+                chunk_collections = _daemon_chunk_collections()
+            except ConnectionError:
+                # Fail closed on the merge-safety front: an unverifiable chunk set
+                # means a fresh name is unpickable, and writing a registration now
+                # would clear the orphan sweep's pending mark and arm a latent
+                # cross-project merge on the daemon's return.  Per R2b the emitted
+                # context still carries the trigger rules so the agent can act on
+                # the diagnosis.
                 logger.warning(
-                    "session-start: existing child registrations found "
-                    "under %s; skipping auto-register to prevent "
-                    "subsumption. Run 'quarry enable %s' to explicitly "
-                    "register the parent.",
-                    directory,
-                    directory,
+                    "session-start: quarryd unreachable; deferring "
+                    "auto-registration of %s to avoid a cross-project merge",
+                    self._directory,
                 )
                 return _session_start_output(
-                    f"Quarry: child registrations exist under {directory}. "
-                    "Auto-register skipped to prevent subsumption. "
-                    f"Run 'quarry enable {directory}' to register the parent."
+                    _SessionStartTemplates.daemon_unreachable(self._directory)
                 )
-
-            # Re-adopt this cwd's own keep-data archive if it owns one (checked
-            # first, over LOCAL retained markers, so a same-dir re-adopt works even
-            # with the daemon down).  Only a cwd owning NO archive needs a fresh
-            # name — and a merge-safe fresh name requires the daemon's chunk set.
-            collection = resolver.archived_collection_for(directory)
-            if collection is None:
-                try:
-                    chunk_collections = _daemon_chunk_collections()
-                except ConnectionError:
-                    # Fail closed: the daemon is unreachable, so the chunk set is
-                    # unverifiable.  Writing a registration now would clear the
-                    # orphan sweep's pending mark and arm a latent cross-project
-                    # merge when the daemon returns.  No indexing runs while the
-                    # daemon is down, so deferring has zero functional cost.
-                    logger.warning(
-                        "session-start: quarryd unreachable; deferring "
-                        "auto-registration of %s to avoid a cross-project merge",
-                        directory,
-                    )
-                    return _session_start_output(
-                        f"Quarry: quarryd is unreachable, so auto-registration of "
-                        f"{directory} is deferred to avoid merging chunks across "
-                        "projects. Start quarryd and re-open the session to enable "
-                        "semantic search here."
-                    )
-                collection = resolver.unique_collection_name(
-                    directory, chunk_collections
-                )
-            conn.register_directory(directory, collection)
-            logger.info(
-                "session-start: auto-registered %s as '%s'",
-                directory,
-                collection,
+            collection = self._resolver.unique_collection_name(
+                self._directory, chunk_collections
             )
-
-        captures_collection = f"{collection}-captures"
-
-        # Return context immediately; sync runs in background.
-        sync_status = _sync_in_background()
-        sync_line = {
-            "launched": "Background sync in progress.",
-            "running": "Background sync already running.",
-        }.get(sync_status, "Background sync failed to launch.")
-        context = (
-            "Quarry semantic search is active for this project.\n"
-            f'Collection: "{collection}" ({directory})\n'
-            f'Captures: "{captures_collection}"\n'
-            f"{sync_line}\n"
-            "Use the quarry MCP tools (find, show, ingest, remember) "
-            "to search this codebase semantically.\n"
-            "Slash commands: /find, /ingest, /remember, /explain, "
-            "/source, /quarry.\n"
-            "For deep research across local docs and the web, use the "
-            "researcher agent."
+        self._conn.register_directory(self._directory, collection)
+        logger.info(
+            "session-start: auto-registered %s as '%s'",
+            self._directory,
+            collection,
         )
-        return _session_start_output(context)
-    finally:
-        conn.close()
+        return collection
+
+    def _active_context(self, collection: str) -> str:
+        """Build the active-mode ``additionalContext`` string."""
+        captures_collection = f"{collection}-captures"
+        sync_status = _sync_in_background()
+        counts = _session_coverage(collection, captures_collection)
+        if counts is None:
+            return _SessionStartTemplates.active_unreachable_coverage(
+                self._directory, collection, captures_collection, sync_status
+            )
+        return _SessionStartTemplates.active(
+            self._directory,
+            collection,
+            captures_collection,
+            counts,
+            sync_status,
+        )
 
 
 def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
@@ -323,29 +607,34 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
     ``tool_response`` directly — no second fetch.  When the payload has no usable
     content, the daemon re-fetches through the SSRF-checked URL-ingest route
     instead.  The hook imports no engine — only the thin client and the
-    lightweight URL/scrub helpers.
+    lightweight URL/scrub helpers.  Looks up a PRIOR capture of this URL FIRST
+    — after the (unconditional) send would always match — via
+    :class:`~quarry.web_fetch_loop_closer.WebFetchLoopCloser`.
     """
+    trace = HookTrace("post-web-fetch")
     cwd = _as_dir(payload.get("cwd"))
     if cwd:
-        config = load_hook_config(cwd)
-        if not config.web_fetch:
-            logger.debug("post-web-fetch: disabled by config")
+        on = load_hook_config(cwd).web_fetch
+        trace.mark_config(on=on)
+        if not on:
+            trace.skip("config")
             return {}
 
     parsed = WebFetchPayload(payload)
     url = parsed.url
     if not url:
-        logger.debug("post-web-fetch: no valid URL in payload, skipping")
+        trace.mark_payload(ok=False)
+        trace.skip("no-url")
         return {}
+    trace.mark_payload(ok=True)
 
     from quarry.api import CaptureIngestRequest, IngestRequest  # noqa: PLC0415
     from quarry.capture_url import CaptureUrl  # noqa: PLC0415
-    from quarry.scrub import scrub_and_log  # noqa: PLC0415
+    from quarry.web_fetch_loop_closer import WebFetchLoopCloser  # noqa: PLC0415
 
-    # A capture must not persist the URL's userinfo/query/fragment as the stored
-    # document name; redact it for the name the daemon files under.
-    meta_url = CaptureUrl(url).redacted(lambda raw: scrub_and_log(raw, "web-fetch"))
+    context = WebFetchLoopCloser(url, cwd).context()
 
+    sender = DaemonCaptureSender()
     content = parsed.content
     if content:
         # Primary: hand the raw HTML to the daemon (it extracts, scrubs, chunks).
@@ -353,133 +642,35 @@ def handle_post_web_fetch(payload: dict[str, object]) -> dict[str, object]:
         # JS-rendered page) the daemon can re-fetch it server-side — the capture
         # route SSRF-gates source_url before the re-fetch — so the page is
         # captured, not silently dropped, and the client stays engine-free.
-        _capture_via_daemon(
+        sent = sender.send_capture(
             CaptureIngestRequest(
                 content=content,
                 cwd=cwd,
-                document_name=meta_url,
+                document_name=CaptureUrl.for_web_fetch(url),
                 format_hint="html",
                 source_url=url,
             ),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
+        detail = "inline"
     else:
         # Fallback: no usable content — the daemon re-fetches through the
         # SSRF-checked ingest route, scrubbing the page into <repo>-captures.
         logger.debug("post-web-fetch: no content in payload, re-fetching via daemon")
-        _ingest_url_via_daemon(
+        sent = sender.send_ingest_url(
             IngestRequest(source=url, cwd=cwd, overwrite=True, scrub=True),
             unreachable_log=_WEB_FETCH_UNREACHABLE,
         )
-    return {}
+        detail = "ingest-url"
+    # The sender logs the specific failure class (misconfig, down, HTTP, malformed);
+    # the trace only needs the binary distinction so the entered→ line closes on
+    # every exit path (G6).
+    if sent:
+        trace.capture(detail)
+    else:
+        trace.error("daemon-unreachable")
+    return context
 
-
-def _read_ethos_agent_handle(cwd: str) -> str:
-    """Read the agent handle from the ethos sidecar config.
-
-    Looks for ``.punt-labs/ethos/config.yaml`` relative to *cwd* and
-    walks up to the filesystem root.  Returns the ``agent`` field value
-    (which is the agent handle), or empty string if not found.
-    """
-    import yaml as _yaml  # noqa: PLC0415
-
-    current = Path(cwd).resolve()
-    while True:
-        config_path = current / ".punt-labs" / "ethos" / "config.yaml"
-        if config_path.is_file():
-            try:
-                data = _yaml.safe_load(config_path.read_text())
-            except (OSError, _yaml.YAMLError):
-                logger.warning(
-                    "pre-compact: could not parse ethos config %s",
-                    config_path,
-                    exc_info=True,
-                )
-                return ""
-            if isinstance(data, dict):
-                agent = data.get("agent", "")
-                if isinstance(agent, str) and agent:
-                    return agent
-            return ""
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return ""
-
-
-def _write_capture_file(
-    project_dir: Path,
-    session_id: str,
-    timestamp: str,
-    artifacts: SessionArtifacts,
-    text: str,
-) -> None:
-    """Write the PreCompact session capture via the shared CaptureWriter.
-
-    The writer scrubs secrets, PII, and profanity before any bytes reach the
-    git-tracked capture file, and fails silently so capture issues never
-    block the main ingest flow.
-    """
-    from quarry.capture import CaptureRequest, CaptureWriter  # noqa: PLC0415
-
-    CaptureWriter().write(
-        CaptureRequest(
-            project_dir=project_dir,
-            session_id=session_id,
-            timestamp=timestamp,
-            artifacts=artifacts,
-            text=text,
-            label="pre-compact",
-        )
-    )
-
-
-def _send_to_daemon(
-    post: Callable[[QuarryClient], object], *, unreachable_log: str
-) -> bool:
-    """Connect to the daemon and run *post*; return False if the send failed.
-
-    The hook imports only the thin client — no engine.  A failed send is never
-    fatal (the request is fire-and-forget; the daemon 202s immediately), so this
-    returns False rather than raising.  The four failure classes are logged
-    distinctly so an operator is not misled: a local misconfiguration (e.g. a
-    QUARRY_URL pointing at a refused cleartext remote) is a config error, not a
-    down daemon; a genuine connection failure is "unreachable" (what that costs
-    differs per caller — a compaction has a durable archive, a web fetch does not
-    — so the caller supplies *unreachable_log*); a non-2xx response means the
-    daemon is up but rejected the request (auth, server, validation), not "down";
-    a bare QuarryError is a reachable-but-broken daemon (malformed response).
-    """
-    from quarry.client import (  # noqa: PLC0415
-        ClientConfigError,
-        HttpError,
-        QuarryConnectionError,
-        QuarryError,
-        TargetResolver,
-    )
-
-    try:
-        post(TargetResolver.connect())
-    except ClientConfigError as exc:
-        logger.warning("daemon target misconfigured: %s", exc.message)
-        return False
-    except QuarryConnectionError:
-        logger.warning("%s", unreachable_log)
-        return False
-    except HttpError as exc:
-        logger.warning("daemon rejected request: HTTP %s — %s", exc.status, exc.message)
-        return False
-    except QuarryError as exc:
-        logger.warning("daemon send failed (malformed response): %s", exc.message)
-        return False
-    return True
-
-
-# The daemon 202s a capture before any embedding runs, so a healthy send is near
-# instant.  Cap it well below the client's 15s default: a saturated daemon must
-# never make a compaction wait — the durable archive already holds the transcript.
-_CAPTURE_SEND_TIMEOUT = 5.0
 
 # A web fetch writes NO durable local copy and backfill-sessions only re-ingests
 # session transcripts, so a lost web capture is genuinely lost — the log must not
@@ -487,22 +678,6 @@ _CAPTURE_SEND_TIMEOUT = 5.0
 _WEB_FETCH_UNREACHABLE = (
     "web-fetch: daemon unreachable; page not indexed (re-fetch to retry)"
 )
-
-
-def _capture_via_daemon(req: CaptureIngestRequest, *, unreachable_log: str) -> bool:
-    """Send an inline capture (transcript or fetched page) to the daemon."""
-    return _send_to_daemon(
-        lambda client: client.capture(req, timeout=_CAPTURE_SEND_TIMEOUT),
-        unreachable_log=unreachable_log,
-    )
-
-
-def _ingest_url_via_daemon(req: IngestRequest, *, unreachable_log: str) -> bool:
-    """Ask the daemon to re-fetch and index a URL (the web-fetch fallback)."""
-    return _send_to_daemon(
-        lambda client: client.ingest_url(req, timeout=_CAPTURE_SEND_TIMEOUT),
-        unreachable_log=unreachable_log,
-    )
 
 
 def _as_str(value: object) -> str:
@@ -569,64 +744,28 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
     Returns the systemMessage immediately so compaction is never blocked, and a
     down daemon still leaves the durable local copies for ``backfill-sessions``.
     """
+    trace = HookTrace("pre-compact")
     target = _precompact_target(payload)
     if target is None:
+        trace.skip("payload")
         return {}
     cwd, session_id, tp = target
+    trace.mark_payload(ok=True)
 
-    from quarry.transcript_reader import TranscriptReader  # noqa: PLC0415
-
-    # Archive raw JSONL before extraction.
-    sessions_dir = Path.home() / ".punt-labs" / "quarry" / "sessions"
-    reader = TranscriptReader(tp)
-    try:
-        reader.archive(session_id, sessions_dir)
-    except Exception:
-        logger.exception("pre-compact: archival failed, proceeding with ingest")
-
-    text = reader.text()
-    if not text:
-        logger.debug("pre-compact: no conversation text found")
-        return {}
-
-    from quarry.artifacts import (  # noqa: PLC0415
-        extract_artifacts,
-        format_artifacts_header,
-    )
-
-    artifacts = extract_artifacts(text)
-    raw_text = text  # preserve before header prepend for capture file
-    header = format_artifacts_header(artifacts)
-    if header:
-        text = header + "\n\n" + text
-
-    agent_handle = _read_ethos_agent_handle(cwd) if cwd else ""
-
-    # Write the scrubbed .md capture to the project directory (durable copy).
-    if cwd:
-        iso_timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _write_capture_file(
-            project_dir=Path(cwd),
-            session_id=session_id,
-            timestamp=iso_timestamp,
-            artifacts=artifacts,
-            text=raw_text,
-        )
-
-    from quarry.api import CaptureIngestRequest  # noqa: PLC0415
-
-    req = CaptureIngestRequest(
-        content=text,
+    outcome = SessionTranscriptCapture(
         cwd=cwd,
         session_id=session_id,
-        agent_handle=agent_handle,
-        format_hint="markdown",
-    )
-    unreachable = (
-        "pre-compact: daemon unreachable; transcript archived, "
-        "run backfill-sessions to index it"
-    )
-    if not _capture_via_daemon(req, unreachable_log=unreachable):
+        transcript_path=tp,
+        label="pre-compact",
+        agent_handle=EthosConfig.agent_handle_at(cwd) if cwd else "",
+    ).capture()
+
+    if not outcome.text_captured:
+        trace.skip("empty-transcript")
+        return {}
+
+    if not outcome.sent:
+        trace.error("daemon-unreachable")
         return {
             "systemMessage": (
                 "Warning: quarryd is not reachable, so this session was not "
@@ -635,6 +774,7 @@ def handle_pre_compact(payload: dict[str, object]) -> dict[str, object]:
             ),
         }
 
+    trace.capture()
     return {
         "systemMessage": (
             "Capturing this session's conversation (background). "

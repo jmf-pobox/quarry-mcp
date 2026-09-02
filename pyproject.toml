@@ -1,6 +1,6 @@
 [project]
 name = "punt-quarry"
-version = "3.0.3"
+version = "3.2.0"
 description = "Extract searchable knowledge from any document. Expose it to LLMs via MCP."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -287,7 +287,7 @@ reportMissingParameterType = false
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q -m 'not slow and not embedding'"
+addopts = "-ra -q -m 'not slow and not embedding and not hook_integration'"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 30
@@ -297,6 +297,7 @@ markers = [
     "integration: real-socket/live-server tests, also slow so excluded from the fast CI suite and run via -m integration",
     "embedding: opts back in to the real ONNX model (410 MB); deselected by default alongside slow, run via -m embedding",
     "network: opts back in to real DNS resolution; the default suite resolves from a fake so it does not depend on the network",
+    "hook_integration: spawns a real quarry-hook and/or quarryd subprocess; deselected by default, run via -m hook_integration",
 ]
 
 [tool.coverage.run]
