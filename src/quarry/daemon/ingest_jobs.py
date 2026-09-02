@@ -37,6 +37,16 @@ _MEDIA_TYPE_ALLOWED: Final = re.compile(r"[^a-zA-Z0-9/.+;=_-]")
 _MEDIA_TYPE_MAX_LEN: Final = 128
 _MEDIA_TYPE_FALLBACK: Final = "application/octet-stream"
 
+# ``fetch_body`` messages are of two shapes: url-safety policy rejections that
+# describe a rule (``"URL rejected: ..."``, ``"final URL rejected: ..."``) and
+# network/HTTP failures that quote the raw URL (``"Cannot reach {url}: ..."``).
+# Only the first shape is safe to append to the log — the second would carry
+# ``?token=``/``user:pass@`` secrets into the persistent quarry.log (CWE-532).
+_SAFE_FETCH_ERROR_PREFIXES: Final = (
+    "URL rejected:",
+    "final URL rejected:",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ScrubbedIngestJob:
@@ -216,9 +226,10 @@ class IngestJob:
         letting that reach the log or ``task_terminal``'s traceback leaks
         ``?token=`` and ``user:pass@`` secrets into the persistent
         quarry.log (CWE-532).  Redact the URL through the same normaliser
-        writes use (drops userinfo/query/fragment), log only the exception
-        class name, and return ``None`` so the caller short-circuits with an
-        empty result instead of a traceback.
+        writes use (drops userinfo/query/fragment), render the failure through
+        :meth:`_classify_fetch_error` -- which appends url-safety policy text
+        but keeps other exceptions class-only -- and return ``None`` so the
+        caller short-circuits with an empty result instead of a traceback.
         """
         from quarry.capture_url import CaptureUrl  # noqa: PLC0415
 
@@ -229,9 +240,28 @@ class IngestJob:
                 "%s of %s failed (%s); skipping",
                 kind,
                 CaptureUrl.for_web_fetch(url),
-                type(exc).__name__,
+                IngestJob._classify_fetch_error(exc),
             )
             return None
+
+    @staticmethod
+    def _classify_fetch_error(exc: BaseException) -> str:
+        """Return the log-safe rendering of a ``fetch_body`` exception.
+
+        Two message shapes are known-safe -- the url-safety rejections raised
+        by ``fetch_body`` and ``_check_final_url`` describe a policy rule and
+        do not embed the raw URL -- and their text is appended so an operator
+        sees WHY the URL was rejected (private IP, redirect to blocked host,
+        metadata hostname) without having to reproduce with debug logging.
+        Every other exception falls back to the class name alone, preserving
+        the CWE-532 guard for network/HTTP failures whose messages quote the
+        raw URL (``"Cannot reach {url}: ..."``, ``"HTTP N fetching {url}"``).
+        """
+        msg = str(exc)
+        cls = type(exc).__name__
+        if msg.startswith(_SAFE_FETCH_ERROR_PREFIXES):
+            return f"{cls}: {msg}"
+        return cls
 
     @staticmethod
     def sanitize_media_type(raw: str) -> str:
