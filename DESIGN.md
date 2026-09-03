@@ -2870,8 +2870,10 @@ shape (C2) that has no field for it on any of the four surfaces.
 8-member `quarry` team from the CLAUDE.md pairing tables (jfreeman,
 claude, rmh, gvr, kpz, djb, mdm, adb), their personalities, writing
 styles, talents, and roles, and `teams/quarry.yaml` only.
-`.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`. The
-canonical registry (`punt-labs/team`) gained `teams/quarry.yaml`
+`.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`, and
+`resolution: repo-only` (identity resolution never falls back to the
+global store; `ethos doctor` verifies the 8 identities resolve
+repo-locally). The canonical registry (`punt-labs/team`) gained `teams/quarry.yaml`
 claiming `punt-labs/quarry`, and `teams/engineering.yaml` stopped
 claiming it, so exactly one team claims the repo. Runtime state
 (`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored;
