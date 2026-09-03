@@ -44,7 +44,7 @@ across `transform`, `index`, and `connector`).
   refetch path already used: HTML flows through `ingest_url(prefetched_html=…)`
   (reusing round-4's perf shortcut), non-HTML through `ingest_content()`
   with a sanitized `<!-- media_type: … -->` marker prefix (whitelist strip
-  + 128-char cap so a hostile `Content-Type` header can't break the
+  plus 128-char cap so a hostile `Content-Type` header can't break the
   single-line marker contract). Also closes the CWE-532 leak surface: on
   the non-HTML branch, `document_name` now derives from
   `CaptureUrl(source).redacted(scrub)` so URL userinfo/query/fragment
