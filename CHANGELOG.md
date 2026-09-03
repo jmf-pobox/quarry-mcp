@@ -14,6 +14,8 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-09-03
+
 ### Fixed
 
 - `index`: the daemon's filesystem watcher scheduled `observer.schedule(root,
