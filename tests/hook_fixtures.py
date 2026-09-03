@@ -25,6 +25,28 @@ from typing import TYPE_CHECKING, Self, final
 import httpx
 import pytest
 
+try:
+    import pwd as _pwd
+except ImportError:  # pragma: no cover — POSIX-only; Windows falls back to Path.home()
+
+    def _real_home() -> Path:
+        """Return the operator's real home; falls back to ``Path.home()`` off POSIX."""
+        return Path.home()
+
+else:
+
+    def _real_home() -> Path:
+        """Return the operator's real home from the password DB, ignoring ``$HOME``."""
+        try:
+            return Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        except KeyError:
+            # Minimal container images may lack a passwd entry for the UID;
+            # fall back to Path.home() (which reads $HOME — overridden by the
+            # hermetic conftest, but accepting that override beats crashing
+            # fixture setup on a stripped-down CI image).
+            return Path.home()
+
+
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable
 
@@ -76,14 +98,45 @@ def _read_port_file(path: Path, timeout_s: float) -> int:
     raise RuntimeError(msg)
 
 
+def _hf_home() -> str | None:
+    """Return an ``HF_HOME`` value that keeps the daemon hermetic.
+
+    An explicit ``$HF_HOME`` in the parent env wins — operators and CI can
+    force a specific cache location. Otherwise reuse the operator's real
+    cache only if it already exists on disk; without that guard a first-run
+    test would trigger a ~200 MB download into the operator's real home,
+    violating DES-047 hermeticity. When neither applies, return ``None`` so
+    the caller leaves ``HF_HOME`` unset and any download stays under the
+    sandbox ``HOME``.
+    """
+    if hf_home := os.environ.get("HF_HOME"):
+        return hf_home
+    cache_dir = _real_home() / ".cache" / "huggingface"
+    if cache_dir.exists():
+        return str(cache_dir)
+    return None
+
+
 def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
-    """Build the env for the daemon subprocess (hermetic, no operator paths)."""
+    """Build the env for the daemon subprocess.
+
+    Quarry paths are isolated to *root* (``QUARRY_ROOT`` + ``QUARRY_LOG_DIR``
+    override every home-derived path :mod:`quarry.config` resolves). The
+    operator's HuggingFace cache is reused via ``HF_HOME`` when it exists —
+    otherwise ``quarryd`` would re-download the ~200 MB ONNX embedding model
+    every session and ``/health`` would never reach ``ready`` inside the 30s
+    poll window. When no operator cache is available, ``HF_HOME`` is left
+    unset so any download lands under the sandbox ``HOME`` and hermeticity
+    holds — see :func:`_hf_home`.
+    """
     env = os.environ.copy()
     env["HOME"] = str(root)
     env["QUARRY_ROOT"] = str(root / "quarry")
     env["QUARRY_LOG_DIR"] = str(log_dir)
     env["QUARRY_API_KEY"] = api_key
     env["TMPDIR"] = str(root / "tmp")
+    if (hf_home := _hf_home()) is not None:
+        env["HF_HOME"] = hf_home
     (root / "tmp").mkdir(parents=True, exist_ok=True)
     return env
 
@@ -263,10 +316,14 @@ class HookInvoker:
 
     @staticmethod
     def _resolve_command(event: str) -> list[str]:
-        """Return the argv for ``event`` — installed binary if present, else module."""
-        binary = shutil.which("quarry-hook")
-        if binary is not None:
-            return [binary, event]
+        """Return the argv for ``event`` — module path from the current interpreter.
+
+        Using ``[sys.executable, "-m", "quarry._hook_entry", event]`` guarantees
+        the tests exercise the ``quarry`` source under test (whichever venv or
+        PYTHONPATH resolves ``import quarry``), not whatever ``quarry-hook``
+        binary happens to sit on ``$PATH`` from a prior install.  The demo gate
+        exercises the installed binary; the test suite exercises the source.
+        """
         return [sys.executable, "-m", "quarry._hook_entry", event]
 
 
