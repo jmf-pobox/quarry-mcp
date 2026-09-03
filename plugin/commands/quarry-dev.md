@@ -17,7 +17,7 @@ Parse the first token as a subcommand. Default to `status` if empty.
 - **collections**: Call `mcp__quarry-dev__list` with `kind` set to `"collections"`
 - **databases**: Call `mcp__quarry-dev__list` with `kind` set to `"databases"`
 - **registrations**: Call `mcp__quarry-dev__list` with `kind` set to `"registrations"`
-- **use `<name>`**: Call `mcp__quarry-dev__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry use <database-name>`
+- **use `<name>`**: Call `mcp__quarry-dev__use` with `name` set to the second token. If no name is given after `use`, reply with brief usage: `/quarry-dev use <database-name>`
 - **enable**: Run `quarry enable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--collection <name>` to override the collection name.
 - **disable**: Run `quarry disable` via the Bash tool. If a directory argument follows, pass it as a positional argument. Supports `--keep-data` to preserve indexed data in LanceDB.
 
