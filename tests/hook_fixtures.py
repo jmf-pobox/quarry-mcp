@@ -98,19 +98,36 @@ def _read_port_file(path: Path, timeout_s: float) -> int:
     raise RuntimeError(msg)
 
 
+def _hf_home() -> str | None:
+    """Return an ``HF_HOME`` value that keeps the daemon hermetic.
+
+    An explicit ``$HF_HOME`` in the parent env wins — operators and CI can
+    force a specific cache location. Otherwise reuse the operator's real
+    cache only if it already exists on disk; without that guard a first-run
+    test would trigger a ~200 MB download into the operator's real home,
+    violating DES-047 hermeticity. When neither applies, return ``None`` so
+    the caller leaves ``HF_HOME`` unset and any download stays under the
+    sandbox ``HOME``.
+    """
+    if hf_home := os.environ.get("HF_HOME"):
+        return hf_home
+    cache_dir = _real_home() / ".cache" / "huggingface"
+    if cache_dir.exists():
+        return str(cache_dir)
+    return None
+
+
 def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
     """Build the env for the daemon subprocess.
 
     Quarry paths are isolated to *root* (``QUARRY_ROOT`` + ``QUARRY_LOG_DIR``
-    override every home-derived path :mod:`quarry.config` resolves) but the
-    operator's HuggingFace cache is preserved via ``HF_HOME`` — otherwise
-    ``quarryd`` re-downloads the ~200 MB ONNX embedding model every session
-    and ``/health`` never reaches ``ready`` inside the 30s poll window.
-
-    ``pwd.getpwuid`` is the source of the real home: the rootdir hermetic
-    conftest overrides ``$HOME`` before any test runs, so a naive
-    ``os.environ["HOME"]`` here returns the sandbox home and the daemon
-    finds no cached model there.
+    override every home-derived path :mod:`quarry.config` resolves). The
+    operator's HuggingFace cache is reused via ``HF_HOME`` when it exists —
+    otherwise ``quarryd`` would re-download the ~200 MB ONNX embedding model
+    every session and ``/health`` would never reach ``ready`` inside the 30s
+    poll window. When no operator cache is available, ``HF_HOME`` is left
+    unset so any download lands under the sandbox ``HOME`` and hermeticity
+    holds — see :func:`_hf_home`.
     """
     env = os.environ.copy()
     env["HOME"] = str(root)
@@ -118,8 +135,8 @@ def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
     env["QUARRY_LOG_DIR"] = str(log_dir)
     env["QUARRY_API_KEY"] = api_key
     env["TMPDIR"] = str(root / "tmp")
-    hf_home = os.environ.get("HF_HOME") or str(_real_home() / ".cache" / "huggingface")
-    env["HF_HOME"] = hf_home
+    if (hf_home := _hf_home()) is not None:
+        env["HF_HOME"] = hf_home
     (root / "tmp").mkdir(parents=True, exist_ok=True)
     return env
 
