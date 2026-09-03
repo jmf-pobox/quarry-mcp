@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,21 @@ from typing import TYPE_CHECKING, Self, final
 
 import httpx
 import pytest
+
+try:
+    import pwd as _pwd
+except ImportError:  # pragma: no cover — POSIX-only; Windows falls back to Path.home()
+
+    def _real_home() -> Path:
+        """Return the operator's real home; falls back to ``Path.home()`` off POSIX."""
+        return Path.home()
+
+else:
+
+    def _real_home() -> Path:
+        """Return the operator's real home from the password DB, ignoring ``$HOME``."""
+        return Path(_pwd.getpwuid(os.getuid()).pw_dir)
+
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable
@@ -101,11 +115,6 @@ def _daemon_env(root: Path, log_dir: Path, api_key: str) -> dict[str, str]:
     env["HF_HOME"] = hf_home
     (root / "tmp").mkdir(parents=True, exist_ok=True)
     return env
-
-
-def _real_home() -> Path:
-    """Return the operator's real home from the password DB, ignoring ``$HOME``."""
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 def _wait_ready(base_url: str, api_token: str, timeout_s: float) -> None:
