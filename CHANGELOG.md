@@ -14,6 +14,14 @@ across `transform`, `index`, and `connector`).
 
 ## [Unreleased]
 
+### Added
+
+- infra: vendored, locally-optimized ethos identity registry at
+  `.punt-labs/ethos/` — the 8-member `quarry` team only, produced by
+  `ethos vendor` with `resolution: repo-only`, replacing global-store
+  fallback. Runtime state (`missions/`, `sessions/`) stays gitignored.
+  (quarry-teuk)
+
 ## [3.2.1] - 2026-09-03
 
 ### Fixed

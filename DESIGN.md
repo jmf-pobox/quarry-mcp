@@ -2862,3 +2862,47 @@ follow-on, not a speculative addition here.
 **Rejected: agent-scoped lessons (route via `agent_handle` like
 `remember`).** Would require smuggling an identity parameter onto a wire
 shape (C2) that has no field for it on any of the four surfaces.
+
+## DES-054: Vendored, locally-optimized ethos registry — pruned 8-identity copy, quarry team pin
+
+**Decision.** Quarry commits a vendored identity registry at
+`.punt-labs/ethos/` (org standard, the `lux`/`cryptd` pattern): the
+8-member `quarry` team from the CLAUDE.md pairing tables (jfreeman,
+claude, rmh, gvr, kpz, djb, mdm, adb), their personalities, writing
+styles, talents, and roles, and `teams/quarry.yaml` only.
+`.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`. The
+canonical registry (`punt-labs/team`) gained `teams/quarry.yaml`
+claiming `punt-labs/quarry`, and `teams/engineering.yaml` stopped
+claiming it, so exactly one team claims the repo. Runtime state
+(`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored;
+everything else under the path is tracked. There is deliberately no
+`.vendor.yaml`: the copy is produced by `ethos vendor <8 seeds> --apply`
+followed by a prune back to the quarry-team closure, because the tool's
+closure is membership-connected — the 8 seeds belong to `engineering`,
+so an unpruned vendor always plans the full 29-identity org roster
+regardless of `repositories:` claims (verified empirically; `--team
+quarry` seeding plans the same 29).
+
+**Why.** Identity resolution previously fell back to the global
+`~/.punt-labs/ethos/`, so a bare clone could not resolve identities, and
+SessionStart injected the full 29-identity engineering roster (~155 KB
+of personalities) into every session. The `team: quarry` pin bounds the
+injected team context to the specialists quarry actually delegates to;
+the pruned copy makes the repo self-standing and keeps the marketplace
+plugin clone lean.
+
+**Rejected: unpruned `ethos vendor` snapshot (the `../ethos` repo
+shape).** Tool-verifiable via `.vendor.yaml`, but carries the 29-identity
+org roster in every plugin clone — the payload bloat this change exists
+to avoid — and its `.vendor.yaml` would be a lie the moment the copy is
+pruned, so the manifest is dropped along with the excess identities.
+
+**Rejected: `punt-labs/team` submodule.** Claude Code clones plugin
+repos with `--recurse-submodules` (ships the whole roster to consumers),
+and `ethos enable` v4.15.0+ refuses submodule mounts (`ethos-e29s`).
+
+**Rejected: repo-local-only team file (lux's original shape).** A
+`teams/quarry.yaml` existing only in the vendored copy leaves the org
+registry unaware the team exists and leaves `engineering` claiming the
+repo — two sources of truth for repo-to-team mapping. Canonical-first
+matches the org's "edit `punt-labs/team` first, then sync" rule.
