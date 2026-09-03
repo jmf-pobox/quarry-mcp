@@ -18,6 +18,44 @@ across `transform`, `index`, and `connector`).
 
 ### Fixed
 
+- `tool`: G6 hook breadcrumbs (shipped as `HookTrace` in v3.2.0 via PR #496)
+  never actually emitted, because the `quarry-hook` binary — the entry point
+  every `PostToolUse`/`SessionStart`/`SessionEnd`/`SubagentStop`/`PreCompact`
+  hook dispatches through — did not call `LoggingConfig.configure()`.
+  `HookTrace.logger.info()` calls had no handler attached to the
+  `quarry.hooks` logger, so every "did the hook run?" INFO line was silently
+  dropped. Fixed by adding one `LoggingConfig.configure(stderr_level="WARNING")`
+  call at the top of `_stdlib.run_hook()` (covers every event via one seam).
+  Also extracted `handle_session_setup`'s free helpers into a cohesive
+  `_SessionSetup` class and wired a `HookTrace("session-setup")` breadcrumb
+  onto every exit path (including filesystem-fault error paths, via a
+  `try/except OSError` around `setup.dispatch()`), so the "one breadcrumb
+  per invocation" contract holds even when setup itself raises.
+  `_allow_mcp_tools` also updated to emit the current `mcp__{name}__*`
+  wildcard (not the retired `mcp__plugin_{name}_quarry__*` proxy namespace),
+  with slug validation on the plugin name and exact-wildcard membership
+  check on the settings allow-list. (quarry-ridg, PR #501)
+- `tool`: G4 non-HTML `WebFetch` capture — v3.2.0 patched the refetch
+  path in `CaptureIngestJob._refetch` but left `IngestJob._ingest`'s
+  primary scrubbed path calling `ingest_url()` → `WebFetcher.fetch()`
+  (HTML-only), so any `WebFetch` on a JSON/text/xml URL still raised
+  `ValueError` in the daemon and dropped the capture. Fixed by routing
+  `_ingest` through the shared `ingest_captured_body()` seam that the
+  refetch path already used: HTML flows through `ingest_url(prefetched_html=…)`
+  (reusing round-4's perf shortcut), non-HTML through `ingest_content()`
+  with a sanitized `<!-- media_type: … -->` marker prefix (whitelist strip
+  plus 128-char cap so a hostile `Content-Type` header can't break the
+  single-line marker contract). Also closes the CWE-532 leak surface: on
+  the non-HTML branch, `document_name` now derives from
+  `CaptureUrl(source).redacted(scrub)` so URL userinfo/query/fragment
+  never lands in the stored metadata; `fetch_and_route()` catches
+  `OSError`/`ValueError`/`TimeoutError` around `fetch_body()` and logs
+  only the redacted URL + exception class (with a `_classify_fetch_error`
+  helper that appends the safe policy message for
+  `URL rejected:` / `final URL rejected:` rejections so operators can
+  diagnose SSRF/redirect gating without exposing raw URLs from
+  network-failure messages that quote them). (quarry-jzqw, PR #502)
+
 - `index`: the daemon's filesystem watcher scheduled `observer.schedule(root,
   recursive=True)` on the raw registered root, so on Linux, watchdog's
   per-`ObservedWatch` emitter architecture opened one inotify KERNEL
