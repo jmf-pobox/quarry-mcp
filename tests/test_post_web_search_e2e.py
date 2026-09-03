@@ -94,7 +94,7 @@ def _search_for_capture(
     """Poll the daemon HTTP API for a captured document whose name matches.
 
     Returns the first matching hit dict on success, or ``None`` when the
-    timeout expires with no match.  Uses the ``/search`` endpoint against
+    timeout expires with no match.  Uses the ``/v1/search`` endpoint against
     the ``default-captures`` collection (the hook lands unregistered cwds
     there).
     """

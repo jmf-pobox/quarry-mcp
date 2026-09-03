@@ -37,7 +37,14 @@ else:
 
     def _real_home() -> Path:
         """Return the operator's real home from the password DB, ignoring ``$HOME``."""
-        return Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        try:
+            return Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        except KeyError:
+            # Minimal container images may lack a passwd entry for the UID;
+            # fall back to Path.home() (which reads $HOME — overridden by the
+            # hermetic conftest, but accepting that override beats crashing
+            # fixture setup on a stripped-down CI image).
+            return Path.home()
 
 
 if TYPE_CHECKING:
