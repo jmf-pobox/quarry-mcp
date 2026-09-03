@@ -2879,21 +2879,23 @@ everything else under the path is tracked. There is deliberately no
 `.vendor.yaml`: the copy is produced by `ethos vendor <8 seeds> --apply`
 followed by a prune back to the quarry-team closure, because the tool's
 closure is membership-connected — the 8 seeds belong to `engineering`,
-so an unpruned vendor always plans the full 29-identity org roster
+so an unpruned vendor always plans the full 29-identity
+engineering-connected roster
 regardless of `repositories:` claims (verified empirically; `--team
 quarry` seeding plans the same 29).
 
 **Why.** Identity resolution previously fell back to the global
 `~/.punt-labs/ethos/`, so a bare clone could not resolve identities, and
 SessionStart injected the full 29-identity engineering roster (~155 KB
-of personalities) into every session. The `team: quarry` pin bounds the
+of persona and team context, measured on the injecting hook's output)
+into every session. The `team: quarry` pin bounds the
 injected team context to the specialists quarry actually delegates to;
 the pruned copy makes the repo self-standing and keeps the marketplace
 plugin clone lean.
 
 **Rejected: unpruned `ethos vendor` snapshot (the `../ethos` repo
 shape).** Tool-verifiable via `.vendor.yaml`, but carries the 29-identity
-org roster in every plugin clone — the payload bloat this change exists
+engineering-connected roster in every plugin clone — the payload bloat this change exists
 to avoid — and its `.vendor.yaml` would be a lie the moment the copy is
 pruned, so the manifest is dropped along with the excess identities.
 
