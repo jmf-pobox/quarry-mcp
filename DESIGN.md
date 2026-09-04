@@ -2863,50 +2863,63 @@ follow-on, not a speculative addition here.
 `remember`).** Would require smuggling an identity parameter onto a wire
 shape (C2) that has no field for it on any of the four surfaces.
 
-## DES-054: Vendored, locally-optimized ethos registry — pruned 8-identity copy, quarry team pin
+## DES-054: Vendored, self-contained ethos registry — repo-only, no external dependency
 
-**Decision.** Quarry commits a vendored identity registry at
-`.punt-labs/ethos/` (org standard, the `lux`/`cryptd` pattern): the
-8-member `quarry` team from the CLAUDE.md pairing tables (jfreeman,
-claude, rmh, gvr, kpz, djb, mdm, adb), their personalities, writing
-styles, talents, and roles, and `teams/quarry.yaml` only.
-`.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`, and
-`resolution: repo-only` (identity resolution never falls back to the
-global store; `ethos doctor` verifies the 8 identities resolve
-repo-locally). The canonical registry (`punt-labs/team`) gained `teams/quarry.yaml`
-claiming `punt-labs/quarry`, and `teams/engineering.yaml` stopped
-claiming it, so exactly one team claims the repo. Runtime state
-(`missions/`, `missions.jsonl`, `sessions/`, `.biff`) stays gitignored;
-everything else under the path is tracked. There is deliberately no
-`.vendor.yaml`: the copy is produced by `ethos vendor <8 seeds> --apply`
-followed by a prune back to the quarry-team closure, because the tool's
-closure is membership-connected — the 8 seeds belong to `engineering`,
-so an unpruned vendor always plans the full 29-identity
-engineering-connected roster
-regardless of `repositories:` claims (verified empirically; `--team
-quarry` seeding plans the same 29).
+**Decision.** Quarry commits a complete, self-contained ethos identity
+registry at `.punt-labs/ethos/`: the 8-member `quarry` team (jfreeman,
+claude, rmh, gvr, kpz, djb, mdm, adb — the roster the pairing tables
+use), their personalities, writing styles, talents, roles, and
+`teams/quarry.yaml`, all as plain committed files (the `lux`/`cryptd`
+pattern). `.punt-labs/ethos.yaml` pins `agent: claude`, `team: quarry`,
+`resolution: repo-only`. A fresh clone resolves every identity from
+files inside the repo alone — with no dependency on the developer's
+`~/.punt-labs/ethos/`, on the `..` workspace, or on the `../team`
+registry. `ethos doctor` and `ethos whoami` verify this repo-locally.
 
-**Why.** Identity resolution previously fell back to the global
+The team is defined locally, in the vendored `teams/quarry.yaml`. The
+shared `punt-labs/team` registry is not consulted at resolution time and
+is not a dependency of this repo.
+
+Runtime state (`missions/`, `missions.jsonl`, `sessions/`, `.biff`)
+stays gitignored; everything else under the path is tracked. There is no
+`.vendor.yaml`: the committed copy is produced by `ethos vendor <8 seeds>
+--apply` followed by a prune to the quarry-team closure. (`ethos vendor`
+computes a membership-connected closure — the 8 seeds all belong to
+`engineering`, so an unpruned run plans the full ~29-identity
+engineering-connected roster regardless of `repositories:` claims, and
+`--team quarry` seeding plans the same set; the prune is what bounds the
+committed copy.)
+
+**Why.** Each repo must work for a developer on its own: clone it and it
+works, with no dependency on any machine-global store or sibling repo.
+Before this change, identity resolution fell back to the global
 `~/.punt-labs/ethos/`, so a bare clone could not resolve identities, and
-SessionStart injected the full 29-identity engineering roster (~155 KB
-of persona and team context, measured on the injecting hook's output)
-into every session. The `team: quarry` pin bounds the
-injected team context to the specialists quarry actually delegates to;
-the pruned copy makes the repo self-standing and keeps the marketplace
-plugin clone lean.
+SessionStart injected the full engineering roster (~155 KB of persona and
+team context) into every session. `resolution: repo-only` plus the
+committed, pruned tree makes the repo self-contained and keeps the
+marketplace plugin clone lean.
+
+**Refresh is a maintainer action, not a developer-clone dependency.** To
+update the roster, edit `.punt-labs/ethos/teams/quarry.yaml` in the
+vendored copy and re-run the vendor+prune with the `ethos vendor` seed
+handles matching the team file (adding or dropping a member means
+changing both together, or the run reproduces the old set). Re-vendoring
+reads from a source registry the way any vendored dependency's update
+does; the committed result is what ships and is self-contained. The
+`../team` registry is not in this loop.
 
 **Rejected: unpruned `ethos vendor` snapshot (the `../ethos` repo
-shape).** Tool-verifiable via `.vendor.yaml`, but carries the 29-identity
-engineering-connected roster in every plugin clone — the payload bloat this change exists
-to avoid — and its `.vendor.yaml` would be a lie the moment the copy is
-pruned, so the manifest is dropped along with the excess identities.
+shape).** Tool-verifiable via `.vendor.yaml`, but carries the full
+engineering-connected roster in every plugin clone — the payload bloat
+this change exists to avoid.
 
 **Rejected: `punt-labs/team` submodule.** Claude Code clones plugin
 repos with `--recurse-submodules` (ships the whole roster to consumers),
 and `ethos enable` v4.15.0+ refuses submodule mounts (`ethos-e29s`).
 
-**Rejected: repo-local-only team file (lux's original shape).** A
-`teams/quarry.yaml` existing only in the vendored copy leaves the org
-registry unaware the team exists and leaves `engineering` claiming the
-repo — two sources of truth for repo-to-team mapping. Canonical-first
-matches the org's "edit `punt-labs/team` first, then sync" rule.
+**Rejected: any dependency on the global `~/.punt-labs/ethos/` or on a
+`punt-labs/team` registry edit.** Either breaks repo independence — the
+repo would resolve only on a machine whose global store is populated, or
+require the org registry to hold a particular state. Repo independence is
+the invariant; the vendored copy is the sole source of truth for this
+repo, and no other repo is touched to make quarry's identities resolve.
