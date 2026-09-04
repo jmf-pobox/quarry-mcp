@@ -2901,9 +2901,12 @@ marketplace plugin clone lean.
 
 **Refresh is a maintainer action, not a developer-clone dependency.** To
 update the roster, edit `.punt-labs/ethos/teams/quarry.yaml` in the
-vendored copy and re-run the vendor+prune. Re-vendoring reads a source registry the way any
-vendored dependency's update does; the committed result is what ships and
-is self-contained. The `../team` registry is not in this loop.
+vendored copy and re-run the vendor+prune with the `ethos vendor` seed
+handles matching the team file (adding or dropping a member means
+changing both together, or the run reproduces the old set). Re-vendoring
+reads from a source registry the way any vendored dependency's update
+does; the committed result is what ships and is self-contained. The
+`../team` registry is not in this loop.
 
 **Rejected: unpruned `ethos vendor` snapshot (the `../ethos` repo
 shape).** Tool-verifiable via `.vendor.yaml`, but carries the full
