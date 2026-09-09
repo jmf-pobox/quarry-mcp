@@ -189,3 +189,83 @@ class TestProgressReporting:
         assert "Chunking" in messages
         assert any(m.startswith("Created") for m in messages)
         assert any(m.startswith("Done") for m in messages)
+
+
+class TestDocumentNameRedaction:
+    """A plain (unscrubbed) URL ingest's document_name IS the URL, so the
+    "Done: ..." success line and the zero-chunks warning must never leak a
+    userinfo/query secret from it (CWE-532). document_name itself -- what's
+    actually deleted/stored/returned -- is unaffected either way.
+    """
+
+    def test_url_document_name_redacts_secrets_on_success(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+        )
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert_records",
+            lambda _self, records: len(records),
+        )
+        credentialed_name = "https://user:pass@example.com/page?token=abc123"
+        messages: list[str] = []
+
+        result = _chunk_embed_store(
+            _extracted(), credentialed_name, Progress(messages.append), _context()
+        )
+
+        # document_name itself is untouched -- identity/storage is unaffected.
+        assert result["document_name"] == credentialed_name
+        done = [m for m in messages if m.startswith("Done:")]
+        assert done == ["Done: 1 chunks indexed from https://example.com/page"]
+        assert "user:pass" not in caplog.text
+        assert "token=abc123" not in caplog.text
+
+    def test_url_document_name_redacts_secrets_on_zero_chunks(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [],
+        )
+        credentialed_name = "https://user:pass@example.com/page?token=abc123"
+
+        with caplog.at_level("WARNING"):
+            _chunk_embed_store(_extracted(), credentialed_name, _PROGRESS, _context())
+
+        assert "user:pass" not in caplog.text
+        assert "token=abc123" not in caplog.text
+        # Exact match, not a host substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole log
+        # record rather than a fragment that could also match an unrelated
+        # look-alike string.
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings == [
+            "pipeline: https://example.com/page produced zero chunks — "
+            "keeping any prior document, storing nothing"
+        ]
+
+    def test_plain_document_name_is_unaffected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-URL document_name (inline content's caller-supplied name)
+        must round-trip unchanged through the same redaction call.
+        """
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+        )
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert_records",
+            lambda _self, records: len(records),
+        )
+        messages: list[str] = []
+
+        _chunk_embed_store(
+            _extracted(), "notes.md", Progress(messages.append), _context()
+        )
+
+        done = [m for m in messages if m.startswith("Done:")]
+        assert done == ["Done: 1 chunks indexed from notes.md"]

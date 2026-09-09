@@ -15,6 +15,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, cast, final
 
+from quarry.capture_url import CaptureUrl
 from quarry.ingestion.streaming import DocumentStreamer, progressive_insert
 
 if TYPE_CHECKING:
@@ -97,16 +98,27 @@ class ChunkStoreFunnel:
             inserted,
             time.perf_counter() - t0,
         )
-        progress("Done: %d chunks indexed from %s", inserted, document_name)
+        # document_name IS the URL for a plain (unscrubbed) URL ingest, so a
+        # userinfo/query secret would otherwise reach the log/progress stream
+        # verbatim (CWE-532). CaptureUrl no-ops on a non-URL document_name
+        # (inline content's caller-supplied name) -- it round-trips unchanged
+        # -- so this is safe for every caller of this shared DES-036 funnel,
+        # not just the URL path. The raw document_name is untouched above and
+        # below: it's still what's actually deleted/stored/returned.
+        display_name = CaptureUrl(document_name).redacted(lambda text: text)
+        progress("Done: %d chunks indexed from %s", inserted, display_name)
         return inserted
 
     @staticmethod
     def _skip(document_name: str, progress: Progress) -> int:
         """Log and report that zero chunks were produced; nothing is stored."""
+        # Same redaction as _embed_and_store's success line, for the same
+        # reason (CWE-532); document_name itself is untouched.
+        display_name = CaptureUrl(document_name).redacted(lambda text: text)
         logger.warning(
             "pipeline: %s produced zero chunks — keeping any prior document, "
             "storing nothing",
-            document_name,
+            display_name,
         )
         progress("No text found — nothing to index")
         return 0
