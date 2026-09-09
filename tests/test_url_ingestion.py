@@ -207,6 +207,31 @@ class TestIngestUrl:
         mock_fetch.assert_not_called()
         assert result["chunks"] >= 1
 
+    @patch(_FETCH)
+    def test_delay_sleeps_before_fetching(self, mock_fetch: MagicMock):
+        """A positive delay sleeps (delay + sub-second jitter) before fetching."""
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+            patch("quarry.ingestion.web_ingest.time.sleep") as mock_sleep,
+        ):
+            ingest_url(
+                UrlIngest("https://example.com/page", delay=0.5),
+                Progress(None),
+                IngestContext(db, settings),
+            )
+
+        mock_sleep.assert_called_once()
+        (slept,) = mock_sleep.call_args.args
+        assert 0.5 <= slept < 1.5  # delay plus up to 1s of sub-second jitter
+        mock_fetch.assert_called_once()
+
 
 class TestRememberCollectionRouting:
     """Server-side sentinel: empty ``collection`` routes by ``agent_handle``.

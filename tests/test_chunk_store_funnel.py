@@ -92,12 +92,22 @@ class TestEmptyChunksFailClosed:
             "quarry.db.chunk_store.ChunkStore.delete_document",
             lambda _self, name, **_kw: deleted.append(name),
         )
+        inserted: list[list[dict[str, object]]] = []
+
+        def _record_insert(_self: object, records: list[dict[str, object]]) -> int:
+            inserted.append(records)
+            return len(records)
+
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert_records", _record_insert
+        )
 
         result = _chunk_embed_store(
             _extracted(), "doc.txt", _PROGRESS, _context(overwrite=True)
         )
 
         assert deleted == []
+        assert inserted == []
         assert result["chunks"] == 0
 
 
@@ -110,21 +120,25 @@ class TestNonEmptyChunksStore:
             lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
         )
         _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
+        calls: list[str] = []
+
+        def _record_insert(_self: object, records: list[dict[str, object]]) -> int:
+            calls.append("insert")
+            return len(records)
+
         monkeypatch.setattr(
-            "quarry.db.chunk_store.ChunkStore.insert_records",
-            lambda _self, records: len(records),
+            "quarry.db.chunk_store.ChunkStore.insert_records", _record_insert
         )
-        deleted: list[str] = []
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.delete_document",
-            lambda _self, name, **_kw: deleted.append(name),
+            lambda _self, name, **_kw: calls.append(f"delete:{name}"),
         )
 
         result = _chunk_embed_store(
             _extracted(), "doc.txt", _PROGRESS, _context(overwrite=True)
         )
 
-        assert deleted == ["doc.txt"]
+        assert calls == ["delete:doc.txt", "insert"]
         assert result["chunks"] == 1
 
     def test_no_overwrite_skips_delete(self, monkeypatch: pytest.MonkeyPatch) -> None:

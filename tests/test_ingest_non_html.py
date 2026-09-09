@@ -2,7 +2,7 @@
 
 The capture route re-fetches when the client-side payload is empty by
 building an ``IngestJob(scrub=True)`` and running :meth:`IngestJob._ingest`.
-That path today calls :func:`quarry.ingestion.pipeline.ingest_url`, which
+That path today calls :func:`quarry.ingestion.web_ingest.ingest_url`, which
 delegates to :meth:`quarry.ingestion.web_fetch.WebFetcher.fetch` — and
 ``fetch`` raises ``ValueError: URL returned non-HTML content`` for any
 non-HTML media type.  So a JSON/plain-text/XML URL captured via the

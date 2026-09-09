@@ -238,6 +238,29 @@ class TestBulkIngestRunnerRun:
         assert "bad.example" in errors[0]
         assert "boom" in errors[0]
 
+    def test_forces_overwrite_for_every_url_that_passed_dedup(self) -> None:
+        """run() always replaces chunks for URLs that passed dedup (bulk_ingest.py).
+
+        Pins the ``replace(context, overwrite=True)`` before fan-out: deleting
+        that line fails no OTHER test here, but would duplicate chunks on
+        every sitemap refresh.
+        """
+        seen_contexts: list[IngestContext] = []
+
+        def _stub(
+            request: UrlIngest, _progress: Progress, context: IngestContext
+        ) -> IngestResult:
+            seen_contexts.append(context)
+            return {"document_name": request.url, "collection": "c", "chunks": 1}
+
+        runner = BulkIngestRunner(ingest_one=_stub)
+        to_ingest: list[tuple[str, str | None]] = [("https://a.example", None)]
+
+        runner.run(to_ingest, Progress(None), _context(overwrite=False), BulkOptions())
+
+        assert seen_contexts
+        assert seen_contexts[0].overwrite is True
+
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
         calls: list[UrlIngest] = []
 
