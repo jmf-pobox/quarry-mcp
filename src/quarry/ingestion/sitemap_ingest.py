@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, final
 
+from quarry.capture_url import CaptureUrl
 from quarry.ingest_collection import IngestCollection
 from quarry.ingestion.bulk_ingest import (
     BulkIngestRunner,
@@ -14,6 +15,7 @@ from quarry.ingestion.bulk_ingest import (
 )
 from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 from quarry.results import SitemapResult
+from quarry.scrub import scrub_and_log
 
 if TYPE_CHECKING:
     from quarry.ingestion.ingest_context import IngestContext, Progress
@@ -90,8 +92,9 @@ class SitemapIngest:
             url: Sitemap URL.
             progress: Progress reporter.
             context: Shared database/settings/overwrite/memory-tag knobs.
-                ``context.collection`` defaults to the sitemap URL's domain
-                when empty.
+                ``context.collection`` derives the URL hostname when empty
+                (``""``); any other value -- including the literal
+                ``"default"`` -- is used verbatim (DES-042).
             options: Worker count, delay, timeout, and include/exclude/limit.
 
         Returns:
@@ -99,16 +102,21 @@ class SitemapIngest:
         """
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
-        # IngestContext.collection defaults to "default" (the right default for
-        # ingest_document/content/url, which have no per-URL bucketing). A
-        # sitemap crawl's own "let the pipeline decide" signal is an EMPTY
-        # collection (IngestCollection.resolve's documented contract) -- and
-        # "default" is that resolver's own no-host fallback name -- so an
-        # unspecified context.collection is treated the same way here as a
-        # caller who passed "" explicitly: derive from the URL's hostname.
-        requested = "" if context.collection == "default" else context.collection
+        # The daemon route (daemon/routes/ingestion.py) resolves the queue
+        # key -- the FIFO worker this job serializes on -- through this SAME
+        # resolver BEFORE building the job, so context.collection always
+        # arrives here already resolved: hostname-derived when the caller
+        # omitted --collection, or the caller's exact chosen name otherwise,
+        # including a literal "default" when the caller asked for it
+        # (DES-042 single-writer-per-table). Passing context.collection
+        # through verbatim -- rather than treating the string "default" as a
+        # second "let the pipeline decide" sentinel -- keeps this call's
+        # write target locked to that already-serialized key; re-resolving
+        # an already-resolved name is a no-op. An empty context.collection
+        # (any future caller that genuinely means "unspecified") still
+        # derives the hostname, per IngestCollection.resolve's contract.
         context = replace(
-            context, collection=IngestCollection.resolve(url, requested).name
+            context, collection=IngestCollection.resolve(url, context.collection).name
         )
 
         progress("Fetching sitemap: %s", url)
@@ -141,7 +149,9 @@ class SitemapIngest:
             url: Any HTTP(S) URL on the target site.
             progress: Progress reporter.
             context: Shared database/settings/overwrite/memory-tag knobs.
-                ``context.collection`` defaults to the URL hostname when empty.
+                ``context.collection`` derives the URL hostname when empty
+                (``""``); any other value -- including the literal
+                ``"default"`` -- is used verbatim (DES-042).
             options: Worker count, delay, and timeout for a sitemap crawl.
 
         Returns:
@@ -159,12 +169,12 @@ class SitemapIngest:
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
         parsed = urlparse(url)
-        # See ingest_sitemap's matching comment: "default" is IngestContext's
-        # dataclass default, not a caller's explicit choice, so it is treated
-        # as the resolver's "" (derive from hostname) signal here too.
-        requested = "" if context.collection == "default" else context.collection
+        # See ingest_sitemap's matching comment: context.collection is passed
+        # through verbatim -- the daemon route already resolved it to the
+        # queue key this job serializes on, and re-resolving that name is a
+        # no-op; only a genuinely empty collection derives the hostname here.
         context = replace(
-            context, collection=IngestCollection.resolve(url, requested).name
+            context, collection=IngestCollection.resolve(url, context.collection).name
         )
 
         # If the URL itself is a sitemap, skip discovery and crawl directly.
@@ -194,8 +204,23 @@ class SitemapIngest:
             # genuinely absent or broken, so this still falls back to a
             # single-page ingest below.  Anything else is a programmer error
             # and must propagate, not be swallowed as "no sitemap found."
-            logger.exception("Sitemap discovery failed for %s", url)
-            progress("Sitemap discovery error for %s: %s", url, exc)
+            #
+            # usp's own exception messages embed the raw URL verbatim (e.g.
+            # "URL {url} is not a HTTP(s) URL") -- str(exc) is NOT safe to
+            # log or report, and neither is the raw url: either would carry
+            # ?token= query params or user:pass@ userinfo into the persistent
+            # quarry.log or the caller's progress stream (CWE-532). Redact
+            # through the same CaptureUrl machinery web_ingest.py uses for
+            # capture URLs, and log only the exception CLASS, not its message.
+            # This is an expected fallback, not a bug -- logger.warning, not
+            # .exception, so no stack trace.
+            redacted_url = CaptureUrl(url).redacted(
+                lambda text: scrub_and_log(text, "sitemap-discovery")
+            )
+            logger.warning(
+                "Sitemap discovery failed for %s (%s)", redacted_url, type(exc).__name__
+            )
+            progress("Sitemap discovery error for %s", redacted_url)
             entries = []
 
         if not entries:

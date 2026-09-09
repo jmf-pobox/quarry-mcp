@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
@@ -545,16 +546,20 @@ class TestIngestSitemapIntegration:
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
-    def test_bare_context_default_still_derives_hostname_collection(
+    def test_bare_context_default_collection_stays_default(
         self,
         mock_discover: MagicMock,
         mock_list_docs: MagicMock,
         _mock_ingest: MagicMock,
     ) -> None:
         """A caller who never touches ``collection`` gets IngestContext's own
-        dataclass default ("default"), not an explicit empty string -- this
-        must still derive the hostname collection, matching the pre-
-        decomposition ingest_sitemap's own ``collection: str = ""`` default.
+        dataclass default ("default") -- the SAME resolved name the daemon
+        route already queued the job on (DES-042). Treating "default" as a
+        second "let the pipeline decide" sentinel and re-deriving the
+        hostname here would write to a different table than the queue
+        serialized on -- a routing violation. Only a genuinely empty
+        collection (see test_default_collection_from_domain) derives the
+        hostname.
         """
         from quarry.ingestion.sitemap_ingest import ingest_sitemap
 
@@ -568,7 +573,35 @@ class TestIngestSitemapIntegration:
             BulkOptions(),
         )
 
-        assert result["collection"] == "docs.python.org"
+        assert result["collection"] == "default"
+
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_explicit_default_collection_stays_default(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        _mock_ingest: MagicMock,
+    ) -> None:
+        """A caller who explicitly asks for ``--collection default`` gets
+        exactly that table -- not a hostname-derived one -- so the write
+        target matches the "default" queue key the daemon route already
+        resolved and serialized on (DES-042).
+        """
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        mock_discover.return_value = []
+        mock_list_docs.return_value = []
+
+        result = ingest_sitemap(
+            "https://docs.python.org/sitemap.xml",
+            Progress(None),
+            IngestContext(Database(MagicMock()), MagicMock(), collection="default"),
+            BulkOptions(),
+        )
+
+        assert result["collection"] == "default"
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
@@ -858,6 +891,49 @@ class TestIngestAuto:
         assert "document_name" in result
         mock_ingest_url.assert_called_once()
 
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
+    def test_discovery_error_redacts_url_secrets(
+        self,
+        mock_discover: MagicMock,
+        mock_ingest_url: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A discovery failure must never leak URL secrets into quarry.log or
+        the progress stream (CWE-532).
+
+        usp's own exception messages embed the raw URL verbatim (e.g. "URL
+        {url} is not a HTTP(s) URL") -- a userinfo/query secret on the
+        crawled URL itself must not reach either sink, regardless of what
+        the exception message says.
+        """
+        from usp.exceptions import SitemapException
+
+        from quarry.ingestion.sitemap_ingest import ingest_auto
+
+        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        mock_discover.side_effect = SitemapException(
+            f"URL {credentialed_url} is not a HTTP(s) URL."
+        )
+        mock_ingest_url.return_value = {
+            "document_name": credentialed_url,
+            "collection": "example.com",
+            "chunks": 1,
+        }
+        messages: list[str] = []
+
+        with caplog.at_level(logging.WARNING):
+            ingest_auto(
+                credentialed_url,
+                Progress(messages.append),
+                IngestContext(Database(MagicMock()), MagicMock(), collection=""),
+                BulkOptions(),
+            )
+
+        assert "hunter2" not in caplog.text
+        assert "token=abc123" not in caplog.text
+        assert not any("hunter2" in m or "token=abc123" in m for m in messages)
+
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_unexpected_discovery_error_propagates(
         self, mock_discover: MagicMock
@@ -1087,8 +1163,6 @@ class TestSelectSafe:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A dropped entry is logged with its URL and reason."""
-        import logging
-
         monkeypatch.setattr(_GETADDRINFO, lambda *a, **k: _addrinfo("127.0.0.1"))
         entries = [SitemapEntry(loc="https://loops.example/x", lastmod=None)]
         with caplog.at_level(logging.WARNING, logger="quarry.sitemap"):
