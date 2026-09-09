@@ -191,6 +191,64 @@ class TestPartition:
         assert to_ingest == [("https://example.com/p", None)]
         assert skipped == 0
 
+    def test_naive_lastmod_older_than_stored_is_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A <lastmod> with no UTC offset is a valid, timezone-naive datetime.
+
+        It must compare correctly against the always-aware stored timestamp
+        -- neither raising TypeError nor silently fail-opening to a forced
+        re-ingest (which would look identical to a skip-free dedup pass from
+        the caller's side, since a fail-open here also lands in to_ingest).
+        """
+        _existing_docs(
+            monkeypatch,
+            [
+                {
+                    "document_name": "https://example.com/p",
+                    "ingestion_timestamp": "2025-06-01T00:00:00+00:00",
+                }
+            ],
+        )
+        entries = [
+            SitemapEntry(
+                loc="https://example.com/p",
+                lastmod=datetime(2025, 1, 1, 0, 0, 0),  # naive on purpose
+            )
+        ]
+
+        to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
+
+        assert to_ingest == []
+        assert skipped == 1
+
+    def test_naive_lastmod_newer_than_stored_is_ingested(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same naive-lastmod comparison the other way: still ingests
+        when genuinely stale, not merely because it fell back to fail-open.
+        """
+        _existing_docs(
+            monkeypatch,
+            [
+                {
+                    "document_name": "https://example.com/p",
+                    "ingestion_timestamp": "2025-01-01T00:00:00+00:00",
+                }
+            ],
+        )
+        entries = [
+            SitemapEntry(
+                loc="https://example.com/p",
+                lastmod=datetime(2025, 12, 1, 0, 0, 0),  # naive on purpose
+            )
+        ]
+
+        to_ingest, skipped = SafeEntrySelector().partition(entries, _context())
+
+        assert to_ingest == [("https://example.com/p", None)]
+        assert skipped == 0
+
 
 class TestBulkIngestRunnerRun:
     """run: fan out ingest_one over a thread pool, aggregating outcomes."""

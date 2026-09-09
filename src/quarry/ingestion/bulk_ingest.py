@@ -111,6 +111,16 @@ class SafeEntrySelector:
             return False
         if existing_dt.tzinfo is None:
             existing_dt = existing_dt.replace(tzinfo=UTC)
+        # <lastmod> may omit its UTC offset -- a bare "2026-01-01T00:00:00" is
+        # valid sitemap XML -- so lastmod can be timezone-naive even though
+        # existing_dt (normalized above) never is. Comparing naive against
+        # aware raises TypeError; left uncaught here, that would hit the
+        # SAME except above as an unparseable stored timestamp and silently
+        # fail-open, forcing re-ingest of every current entry and defeating
+        # dedup outright. Assume UTC for a naive lastmod instead, so both
+        # sides are always aware before the comparison runs.
+        if lastmod.tzinfo is None:
+            lastmod = lastmod.replace(tzinfo=UTC)
         return lastmod <= existing_dt
 
 
