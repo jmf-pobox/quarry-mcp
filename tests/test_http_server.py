@@ -1647,7 +1647,9 @@ class TestCapture:
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", return_value=mock_result),
+            patch(
+                "quarry.ingestion.web_ingest.ingest_content", return_value=mock_result
+            ),
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1700,9 +1702,13 @@ class TestCapture:
         scrubbers: list[Callable[[str], str]] = []
         collections: list[object] = []
 
-        def _spy(*_a: object, **kwargs: object) -> dict[str, object]:
-            scrubbers.append(cast("Callable[[str], str]", kwargs["content_scrubber"]))
-            collections.append(kwargs["collection"])
+        def _spy(
+            inline: object, _name: str, _progress: object, context: object
+        ) -> dict[str, object]:
+            scrubbers.append(
+                cast("Callable[[str], str]", inline.content_scrubber)  # type: ignore[attr-defined]
+            )
+            collections.append(context.collection)  # type: ignore[attr-defined]
             return {
                 "document_name": "note",
                 "collection": "default-captures",
@@ -1711,7 +1717,7 @@ class TestCapture:
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _spy),
+            patch("quarry.ingestion.web_ingest.ingest_content", _spy),
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1737,13 +1743,15 @@ class TestCapture:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
+        from quarry.ingestion.streaming import DocumentStreamer
+
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
                 "quarry.scrub.scrub_and_log",
                 side_effect=ValueError("scrub exploded"),
             ),
-            patch("quarry.ingestion.pipeline._chunk_embed_store") as store,
+            patch.object(DocumentStreamer, "build_chunks") as store,
             patch("quarry.db.chunk_store.ChunkStore.delete_document") as delete,
         ):
             resp = tc.post(
@@ -1773,13 +1781,15 @@ class TestCapture:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        url_kwargs: list[dict[str, object]] = []
+        url_calls: list[tuple[object, object]] = []
 
-        def _url(source: str, *_a: object, **kw: object) -> dict[str, object]:
-            url_kwargs.append({"source": source, **kw})
+        def _url(
+            request: object, _progress: object, context: object
+        ) -> dict[str, object]:
+            url_calls.append((request, context))
             return {
-                "document_name": source,
-                "collection": kw["collection"],
+                "document_name": request.url,  # type: ignore[attr-defined]
+                "collection": context.collection,  # type: ignore[attr-defined]
                 "chunks": 1,
             }
 
@@ -1793,8 +1803,8 @@ class TestCapture:
         )
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
-            patch("quarry.ingestion.pipeline.ingest_url", _url),
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
+            patch("quarry.ingestion.web_ingest.ingest_url", _url),
             patch(
                 "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
                 return_value=html_body,
@@ -1814,13 +1824,14 @@ class TestCapture:
 
         assert data["status"] == "completed"
         assert data["results"]["chunks"] == 1  # the re-fetch indexed the page
-        assert len(url_kwargs) == 1
-        assert url_kwargs[0]["source"] == "https://example.com/p"
-        assert url_kwargs[0]["collection"] == "default-captures"
+        assert len(url_calls) == 1
+        request, context = url_calls[0]
+        assert request.url == "https://example.com/p"  # type: ignore[attr-defined]
+        assert context.collection == "default-captures"  # type: ignore[attr-defined]
         # The caller forwards the raw summary plus a content_scrubber; ingest_url
         # (the choke point) redacts summary+name — see test_pipeline's
         # ingest_url metadata-scrub test.  Here we assert the scrubber is wired.
-        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        scrub = cast("Callable[[str], str]", request.content_scrubber)  # type: ignore[attr-defined]
         assert "[REDACTED:email]" in scrub("reach jdoe@example.com")
 
     def test_refetch_non_html_captures_body_as_text(self, tmp_path: Path) -> None:
@@ -1835,7 +1846,7 @@ class TestCapture:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        content_kwargs: list[dict[str, object]] = []
+        content_calls: list[tuple[object, str, object]] = []
         empty: dict[str, object] = {
             "document_name": "p",
             "collection": "default-captures",
@@ -1843,19 +1854,19 @@ class TestCapture:
         }
 
         def _content(
-            content: str,
+            inline: object,
             name: str,
-            *_a: object,
-            **kw: object,
+            _progress: object,
+            context: object,
         ) -> dict[str, object]:
-            content_kwargs.append({"content": content, "name": name, **kw})
+            content_calls.append((inline, name, context))
             # First invocation is the inline empty extraction; every later
             # one is the refetch-as-text landing.
-            if len(content_kwargs) == 1:
+            if len(content_calls) == 1:
                 return empty
             return {
                 "document_name": name,
-                "collection": kw["collection"],
+                "collection": context.collection,  # type: ignore[attr-defined]
                 "chunks": 1,
             }
 
@@ -1865,8 +1876,8 @@ class TestCapture:
         )
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _content),
-            patch("quarry.ingestion.pipeline.ingest_url") as url,
+            patch("quarry.ingestion.web_ingest.ingest_content", _content),
+            patch("quarry.ingestion.web_ingest.ingest_url") as url,
             patch(
                 "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
                 return_value=json_body,
@@ -1888,9 +1899,9 @@ class TestCapture:
         url.assert_not_called()  # non-HTML did NOT go through ingest_url
         # The refetch call carried the body prefixed with the mime marker AND
         # ran through the scrub choke point (parity with the HTML branch).
-        refetch_call = content_kwargs[-1]
-        assert "<!-- media_type: application/json -->" in str(refetch_call["content"])
-        scrub = cast("Callable[[str], str]", refetch_call["content_scrubber"])
+        inline, _name, _context = content_calls[-1]
+        assert "<!-- media_type: application/json -->" in str(inline.content)  # type: ignore[attr-defined]
+        scrub = cast("Callable[[str], str]", inline.content_scrubber)  # type: ignore[attr-defined]
         assert "[REDACTED:email]" in scrub("reach user@example.com")
 
     def test_refetch_fetch_body_failure_returns_zero_chunks_no_traceback(
@@ -1912,7 +1923,7 @@ class TestCapture:
         raw_url = "https://user:pass@example.com/p?api_key=secret123"
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", return_value=empty),
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=empty),
             patch(
                 "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
                 side_effect=OSError(f"boom fetching {raw_url}"),
@@ -1946,8 +1957,8 @@ class TestCapture:
         stored = {"document_name": "p", "collection": "default-captures", "chunks": 3}
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", return_value=stored),
-            patch("quarry.ingestion.pipeline.ingest_url") as url,
+            patch("quarry.ingestion.web_ingest.ingest_content", return_value=stored),
+            patch("quarry.ingestion.web_ingest.ingest_url") as url,
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -1992,9 +2003,9 @@ class TestCapture:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content", return_value=empty
+                "quarry.ingestion.web_ingest.ingest_content", return_value=empty
             ) as content,
-            patch("quarry.ingestion.pipeline.ingest_url") as url,
+            patch("quarry.ingestion.web_ingest.ingest_url") as url,
         ):
             resp = tc.post(
                 "/v1/capture",
@@ -2038,7 +2049,9 @@ class TestRemember:
         app = build_app(ctx)
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", return_value=mock_result),
+            patch(
+                "quarry.ingestion.web_ingest.ingest_content", return_value=mock_result
+            ),
         ):
             resp = tc.post(
                 "/v1/remember",
@@ -2086,22 +2099,23 @@ class TestRemember:
         patches the store boundary and asserts the REAL scrub ran end-to-end —
         the chunker copies name+summary onto every chunk, so content-only
         scrubbing would leak."""
+        from quarry.ingestion.streaming import DocumentStreamer
+
         settings = _mock_settings(tmp_path)
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
         seen: dict[str, object] = {}
 
-        def _store(
-            _pages: object, document_name: str, *_a: object, **kw: object
-        ) -> dict[str, object]:
-            seen["name"] = document_name
-            seen["summary"] = kw["summary"]
-            return {"document_name": document_name, "collection": "c", "chunks": 0}
+        def _capture_build_chunks(
+            _self: DocumentStreamer, pages: list[object], **kwargs: object
+        ) -> list[object]:
+            seen.update(kwargs)
+            return []
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline._chunk_embed_store", _store),
+            patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
         ):
             resp = tc.post(
                 "/v1/remember",
@@ -2111,10 +2125,10 @@ class TestRemember:
                     "summary": "contact jdoe@example.com",
                 },
             )
-            _poll_task_done(tc, resp.json()["task_id"])
+            data = _poll_task_done(tc, resp.json()["task_id"])
 
-        assert "jdoe@example.com" not in str(seen["name"])
-        assert "[REDACTED:email]" in str(seen["name"])
+        assert "jdoe@example.com" not in str(data["results"]["document_name"])
+        assert "[REDACTED:email]" in str(data["results"]["document_name"])
         assert "jdoe@example.com" not in str(seen["summary"])
         assert "[REDACTED:email]" in str(seen["summary"])
 
@@ -2135,7 +2149,7 @@ class TestRemember:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 side_effect=ValueError("bad content encoding"),
             ),
         ):
@@ -2158,7 +2172,7 @@ class TestRemember:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 side_effect=OSError("disk full"),
             ),
         ):
@@ -2195,7 +2209,7 @@ class TestRemember:
         app = build_app(ctx)
         with (
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 return_value={"document_name": "n", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -2216,16 +2230,17 @@ class TestRemember:
             _poll_task_done(tc, resp.json()["task_id"])
 
         assert mock_ingest.call_count == 1
-        args, kwargs = mock_ingest.call_args
-        # Positional: content, name, db, settings
-        assert args[0] == "body"
-        assert args[1] == "n.md"
-        assert kwargs["collection"] == "notes"
-        assert kwargs["format_hint"] == "markdown"
-        assert kwargs["overwrite"] is False
-        assert kwargs["agent_handle"] == "rmh"
-        assert kwargs["memory_type"] == "fact"
-        assert kwargs["summary"] == "one line"
+        args, _kwargs = mock_ingest.call_args
+        # Positional: InlineIngest, document_name, progress, context.
+        inline, name, _progress, context = args
+        assert inline.content == "body"
+        assert name == "n.md"
+        assert inline.format_hint == "markdown"
+        assert context.collection == "notes"
+        assert context.overwrite is False
+        assert context.agent_handle == "rmh"
+        assert context.memory_type == "fact"
+        assert context.summary == "one line"
 
     def test_overwrite_defaults_true(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path)
@@ -2234,7 +2249,7 @@ class TestRemember:
         app = build_app(ctx)
         with (
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 return_value={"document_name": "n", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -2245,7 +2260,8 @@ class TestRemember:
             )
             _poll_task_done(tc, resp.json()["task_id"])
             assert mock_ingest.call_args is not None
-            assert mock_ingest.call_args.kwargs["overwrite"] is True
+            context = mock_ingest.call_args.args[3]
+            assert context.overwrite is True
 
     def test_rejects_non_bool_overwrite(self, client: TestClient) -> None:
         """Strings like 'false' or '0' must not be silently coerced to True."""
@@ -2303,7 +2319,9 @@ class TestIngest:
                 "quarry.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
+            patch(
+                "quarry.ingestion.sitemap_ingest.ingest_auto", return_value=mock_result
+            ),
         ):
             resp = tc.post("/v1/ingest", json={"source": "https://example.com/docs"})
             assert resp.status_code == 202
@@ -2327,11 +2345,17 @@ class TestIngest:
         ctx = DaemonContext(settings)
         _inject_mocks(ctx)
         app = build_app(ctx)
-        url_kwargs: list[dict[str, object]] = []
+        url_calls: list[tuple[object, object]] = []
 
-        def _url(*_a: object, **kw: object) -> dict[str, object]:
-            url_kwargs.append(kw)
-            return {"document_name": "u", "collection": kw["collection"], "chunks": 1}
+        def _url(
+            request: object, _progress: object, context: object
+        ) -> dict[str, object]:
+            url_calls.append((request, context))
+            return {
+                "document_name": "u",
+                "collection": context.collection,  # type: ignore[attr-defined]
+                "chunks": 1,
+            }
 
         # scrub=True flows through IngestJob._ingest → WebFetcher.fetch_body →
         # ingest_captured_body → ingest_url; patch fetch_body so no real HTTP fires.
@@ -2350,8 +2374,8 @@ class TestIngest:
                 "quarry.ingestion.web_fetch.WebFetcher.fetch_body",
                 return_value=body,
             ),
-            patch("quarry.ingestion.pipeline.ingest_url", _url),
-            patch("quarry.ingestion.pipeline.ingest_auto") as auto,
+            patch("quarry.ingestion.web_ingest.ingest_url", _url),
+            patch("quarry.ingestion.sitemap_ingest.ingest_auto") as auto,
         ):
             resp = tc.post(
                 "/v1/ingest",
@@ -2365,9 +2389,10 @@ class TestIngest:
             _poll_task_done(tc, resp.json()["task_id"])
 
         auto.assert_not_called()  # never the unscrubbed sitemap branch
-        assert url_kwargs
-        assert url_kwargs[0]["collection"] == "default-captures"
-        scrub = cast("Callable[[str], str]", url_kwargs[0]["content_scrubber"])
+        assert url_calls
+        request, context = url_calls[0]
+        assert context.collection == "default-captures"  # type: ignore[attr-defined]
+        scrub = cast("Callable[[str], str]", request.content_scrubber)  # type: ignore[attr-defined]
         assert "[REDACTED:email]" in scrub("reach me at jdoe@example.com")
 
     def test_missing_source_returns_400(self, client: TestClient) -> None:
@@ -2403,7 +2428,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 return_value={"document_name": "d", "collection": "c", "chunks": 1},
             ) as mock_ingest,
             TestClient(app, raise_server_exceptions=False) as tc,
@@ -2423,13 +2448,14 @@ class TestIngest:
 
         assert resp.status_code == 202
         assert mock_ingest.call_count == 1
-        args, kwargs = mock_ingest.call_args
-        assert args[0] == "https://example.com/docs"
-        assert kwargs["overwrite"] is True
-        assert kwargs["collection"] == "mycol"
-        assert kwargs["agent_handle"] == "rmh"
-        assert kwargs["memory_type"] == "fact"
-        assert kwargs["summary"] == "one line"
+        args, _kwargs = mock_ingest.call_args
+        source, _progress, context, _options = args
+        assert source == "https://example.com/docs"
+        assert context.overwrite is True
+        assert context.collection == "mycol"
+        assert context.agent_handle == "rmh"
+        assert context.memory_type == "fact"
+        assert context.summary == "one line"
 
     def test_rejects_private_ip(self, client: TestClient) -> None:
         """URLs whose host resolves to RFC 1918 space must be blocked."""
@@ -2519,7 +2545,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 side_effect=ValueError("unsupported URL"),
             ),
         ):
@@ -2543,7 +2569,7 @@ class TestIngest:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 side_effect=OSError("upstream refused connection"),
             ),
         ):
@@ -2597,7 +2623,9 @@ class TestIngest:
                 "quarry.url_safety.socket_module.getaddrinfo",
                 side_effect=_fake_public_addrinfo,
             ),
-            patch("quarry.ingestion.pipeline.ingest_auto", return_value=mock_result),
+            patch(
+                "quarry.ingestion.sitemap_ingest.ingest_auto", return_value=mock_result
+            ),
         ):
             resp = tc.post("/v1/ingest", json={"source": "HTTPS://example.com/docs"})
             assert resp.status_code == 202
@@ -2651,7 +2679,7 @@ class TestLearn:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 return_value={"document_name": "n", "collection": "c", "chunks": 1},
             ),
         ):
@@ -2684,17 +2712,17 @@ class TestLearn:
         seen: dict[str, object] = {}
 
         def _ingest_content(
-            _content: str, name: str, *_a: object, **kw: object
+            _inline: object, name: str, _progress: object, context: object
         ) -> dict[str, object]:
             seen["name"] = name
-            seen["summary"] = kw["summary"]
-            seen["memory_type"] = kw["memory_type"]
-            seen["agent_handle"] = kw["agent_handle"]
+            seen["summary"] = context.summary  # type: ignore[attr-defined]
+            seen["memory_type"] = context.memory_type  # type: ignore[attr-defined]
+            seen["agent_handle"] = context.agent_handle  # type: ignore[attr-defined]
             return {"document_name": name, "collection": "c", "chunks": 1}
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+            patch("quarry.ingestion.web_ingest.ingest_content", _ingest_content),
         ):
             resp = tc.post(
                 "/v1/learn",
@@ -2729,7 +2757,7 @@ class TestLearn:
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+            patch("quarry.ingestion.web_ingest.ingest_content", _ingest_content),
         ):
             for _ in range(2):
                 resp = tc.post(
@@ -2749,14 +2777,18 @@ class TestLearn:
         seen: dict[str, object] = {}
 
         def _ingest_content(
-            _content: str, _name: str, *_a: object, **kw: object
+            _inline: object, _name: str, _progress: object, context: object
         ) -> dict[str, object]:
-            seen["collection"] = kw["collection"]
-            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+            seen["collection"] = context.collection  # type: ignore[attr-defined]
+            return {
+                "document_name": "n",
+                "collection": context.collection,  # type: ignore[attr-defined]
+                "chunks": 1,
+            }
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+            patch("quarry.ingestion.web_ingest.ingest_content", _ingest_content),
         ):
             resp = tc.post("/v1/learn", json={"lesson": "a lesson"})
             _poll_task_done(tc, resp.json()["task_id"])
@@ -2782,14 +2814,18 @@ class TestLearn:
         seen: dict[str, object] = {}
 
         def _ingest_content(
-            _content: str, _name: str, *_a: object, **kw: object
+            _inline: object, _name: str, _progress: object, context: object
         ) -> dict[str, object]:
-            seen["collection"] = kw["collection"]
-            return {"document_name": "n", "collection": kw["collection"], "chunks": 1}
+            seen["collection"] = context.collection  # type: ignore[attr-defined]
+            return {
+                "document_name": "n",
+                "collection": context.collection,  # type: ignore[attr-defined]
+                "chunks": 1,
+            }
 
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
-            patch("quarry.ingestion.pipeline.ingest_content", _ingest_content),
+            patch("quarry.ingestion.web_ingest.ingest_content", _ingest_content),
         ):
             resp = tc.post(
                 "/v1/learn",
@@ -3748,7 +3784,7 @@ class TestSyncGenericFailure:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 side_effect=RuntimeError("embedder crashed"),
             ),
         ):
@@ -3774,7 +3810,7 @@ class TestSyncGenericFailure:
                 side_effect=_fake_public_addrinfo,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 side_effect=RuntimeError("embedder crashed"),
             ),
         ):
@@ -3883,7 +3919,7 @@ class TestTaskGC:
         with (
             TestClient(app, raise_server_exceptions=False) as tc,
             patch(
-                "quarry.ingestion.pipeline.ingest_content",
+                "quarry.ingestion.web_ingest.ingest_content",
                 return_value={"chunks": 1},
             ),
         ):
@@ -3965,19 +4001,12 @@ class TestMaintenance:
         app = build_app(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(
-            _settings: object,
-            *,
-            dry_run: bool,
-            collection_override: str,
-            project_filter: str,
-            limit: int,
-        ) -> BackfillStats:
+        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
             captured.update(
-                dry_run=dry_run,
-                collection=collection_override,
-                project=project_filter,
-                limit=limit,
+                dry_run=config.dry_run,  # type: ignore[attr-defined]
+                collection=config.collection_override,  # type: ignore[attr-defined]
+                project=config.project_filter,  # type: ignore[attr-defined]
+                limit=config.limit,  # type: ignore[attr-defined]
             )
             return BackfillStats(ingested=3, skipped_existing=1)
 
@@ -4052,15 +4081,8 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(
-            _settings: object,
-            *,
-            dry_run: bool,
-            collection_override: str,
-            project_filter: str,
-            limit: int,
-        ) -> BackfillStats:
-            captured["limit"] = limit
+        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
+            captured["limit"] = config.limit  # type: ignore[attr-defined]
             return BackfillStats()
 
         with (
@@ -4098,19 +4120,12 @@ class TestMaintenance:
         _inject_mocks(ctx)
         captured: dict[str, object] = {}
 
-        def _fake_backfill(
-            _settings: object,
-            *,
-            dry_run: bool,
-            collection_override: str,
-            project_filter: str,
-            limit: int,
-        ) -> BackfillStats:
+        def _fake_backfill(_settings: object, config: object) -> BackfillStats:
             captured.update(
-                dry_run=dry_run,
-                collection_override=collection_override,
-                project_filter=project_filter,
-                limit=limit,
+                dry_run=config.dry_run,  # type: ignore[attr-defined]
+                collection_override=config.collection_override,  # type: ignore[attr-defined]
+                project_filter=config.project_filter,  # type: ignore[attr-defined]
+                limit=config.limit,  # type: ignore[attr-defined]
             )
             return BackfillStats()
 

@@ -437,7 +437,7 @@ class TestIngest:
                 return_value=None,
             ),
             patch(
-                "quarry.ingestion.pipeline.ingest_auto",
+                "quarry.ingestion.sitemap_ingest.ingest_auto",
                 return_value={"document_name": "x", "collection": "c", "chunks": 1},
             ),
         ):

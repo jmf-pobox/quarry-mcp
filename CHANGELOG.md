@@ -23,6 +23,19 @@ across `transform`, `index`, and `connector`).
   global-store fallback. Runtime state (`missions/`, `missions.jsonl`,
   `sessions/`, `.biff`) stays gitignored. (quarry-teuk)
 
+### Changed
+
+- infra: decomposed the ingestion god module `ingestion/pipeline.py`
+  (1,133 → ~140 lines) into focused modules — `ingest_context.py`
+  (`IngestContext`/`Progress`), `extracted_document.py`,
+  `format_strategies.py` (a `FormatStrategy` protocol + per-format
+  strategies), `chunk_store_funnel.py` (the single DES-036 embed/store
+  convergence point), and `web_ingest.py`/`bulk_ingest.py`/`sitemap_ingest.py`.
+  Ingest entry-point signatures now take value objects (`IngestContext`,
+  `ExtractedDocument`, `InlineIngest`, `BulkOptions`) instead of ~10-15
+  positional parameters. No behavior change on any surface; the fail-closed
+  overwrite-delete gate is preserved. (quarry-hb9u)
+
 ## [3.2.1] - 2026-09-03
 
 ### Fixed

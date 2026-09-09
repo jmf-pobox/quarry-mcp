@@ -2,7 +2,7 @@
 
 The capture route re-fetches when the client-side payload is empty by
 building an ``IngestJob(scrub=True)`` and running :meth:`IngestJob._ingest`.
-That path today calls :func:`quarry.ingestion.pipeline.ingest_url`, which
+That path today calls :func:`quarry.ingestion.web_ingest.ingest_url`, which
 delegates to :meth:`quarry.ingestion.web_fetch.WebFetcher.fetch` — and
 ``fetch`` raises ``ValueError: URL returned non-HTML content`` for any
 non-HTML media type.  So a JSON/plain-text/XML URL captured via the
@@ -91,11 +91,11 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
         patch(
-            "quarry.ingestion.pipeline.ingest_url",
+            "quarry.ingestion.web_ingest.ingest_url",
             return_value={"chunks": 1, "sections": 1},
         ),
     ):
@@ -139,7 +139,7 @@ def _assert_document_name_omits(url: str, leak: str) -> None:
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
     ):
@@ -262,7 +262,7 @@ def test_ingest_captured_body_sanitizes_media_type_in_marker() -> None:
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
     ):

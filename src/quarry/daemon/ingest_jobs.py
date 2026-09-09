@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from starlette.concurrency import run_in_threadpool
 
@@ -22,9 +22,12 @@ from quarry.ingestion.web_fetch import WebFetcher
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+    from quarry.ingestion.ingest_context import MemoryType
     from quarry.ingestion.web_fetch import FetchedBody
+    from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
+
 
 # The Content-Type header is server-controlled and lands verbatim in the
 # ``<!-- media_type: X -->`` marker written to the stored capture.  A header
@@ -102,21 +105,38 @@ class ScrubbedIngestJob:
 
     def scrub_and_ingest(self, ctx: DaemonContext) -> dict[str, object]:
         """Ingest with a scrubber; the pipeline redacts content AND metadata."""
-        from quarry.ingestion.pipeline import ingest_content  # noqa: PLC0415
+        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
+            IngestContext,
+            Progress,
+        )
+        from quarry.ingestion.web_ingest import (  # noqa: PLC0415
+            InlineIngest,
+            ingest_content,
+        )
 
         return dict(
             ingest_content(
-                self.content,
+                InlineIngest(
+                    self.content,
+                    # self.format_hint is a plain str from the CLI/HTTP boundary;
+                    # InlineIngest's field is the tightened FormatHint Literal.
+                    format_hint=cast("FormatHint", self.format_hint),
+                    content_scrubber=self._scrubbed,
+                ),
                 self.name,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.overwrite,
-                collection=self.collection,
-                format_hint=self.format_hint,
-                content_scrubber=self._scrubbed,
-                agent_handle=self.agent_handle,
-                memory_type=self.memory_type,
-                summary=self.summary,
+                Progress(None),
+                IngestContext(
+                    ctx.database,
+                    ctx.settings,
+                    overwrite=self.overwrite,
+                    collection=self.collection,
+                    agent_handle=self.agent_handle,
+                    # self.memory_type is a plain str carried from the daemon's
+                    # HTTP boundary (unvalidated beyond the reserved-value
+                    # reject); IngestContext's field is the tightened Literal.
+                    memory_type=cast("MemoryType", self.memory_type),
+                    summary=self.summary,
+                ),
             )
         )
 
@@ -186,18 +206,30 @@ class IngestJob:
         if self.scrub:
             return self.fetch_and_route(ctx)
 
-        from quarry.ingestion.pipeline import ingest_auto  # noqa: PLC0415
+        from quarry.ingestion.bulk_ingest import BulkOptions  # noqa: PLC0415
+        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
+            IngestContext,
+            Progress,
+        )
+        from quarry.ingestion.sitemap_ingest import ingest_auto  # noqa: PLC0415
 
         return dict(
             ingest_auto(
                 self.source,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.overwrite,
-                collection=self.collection,
-                agent_handle=self.agent_handle,
-                memory_type=self.memory_type,
-                summary=self.summary,
+                Progress(None),
+                IngestContext(
+                    ctx.database,
+                    ctx.settings,
+                    overwrite=self.overwrite,
+                    collection=self.collection,
+                    agent_handle=self.agent_handle,
+                    # self.memory_type is a plain str carried from the daemon's
+                    # HTTP boundary (unvalidated beyond the reserved-value
+                    # reject); IngestContext's field is the tightened Literal.
+                    memory_type=cast("MemoryType", self.memory_type),
+                    summary=self.summary,
+                ),
+                BulkOptions(),
             )
         )
 
@@ -304,7 +336,13 @@ class IngestJob:
         derivation internally, so the two branches now match.
         """
         from quarry.capture_url import CaptureUrl  # noqa: PLC0415
-        from quarry.ingestion.pipeline import (  # noqa: PLC0415
+        from quarry.ingestion.ingest_context import (  # noqa: PLC0415
+            IngestContext,
+            Progress,
+        )
+        from quarry.ingestion.web_ingest import (  # noqa: PLC0415
+            InlineIngest,
+            UrlIngest,
             ingest_content,
             ingest_url,
         )
@@ -313,40 +351,27 @@ class IngestJob:
         def scrub(text: str) -> str:
             return scrub_and_log(text, "web-fetch")
 
+        context = IngestContext(
+            ctx.database,
+            ctx.settings,
+            overwrite=self.overwrite,
+            collection=self.collection,
+            agent_handle=self.agent_handle,
+            memory_type=cast("MemoryType", self.memory_type),
+            summary=self.summary,
+        )
+
         if body.is_html:
-            return dict(
-                ingest_url(
-                    self.source,
-                    ctx.database,
-                    ctx.settings,
-                    overwrite=self.overwrite,
-                    collection=self.collection,
-                    content_scrubber=scrub,
-                    agent_handle=self.agent_handle,
-                    memory_type=self.memory_type,
-                    summary=self.summary,
-                    prefetched_html=body.text,
-                )
+            request = UrlIngest(
+                self.source, content_scrubber=scrub, prefetched_html=body.text
             )
+            return dict(ingest_url(request, Progress(None), context))
 
         media_type = self.sanitize_media_type(body.media_type)
         content = f"<!-- media_type: {media_type} -->\n{body.text}"
         name = self.document_name_override or CaptureUrl(self.source).redacted(scrub)
-        return dict(
-            ingest_content(
-                content,
-                name,
-                ctx.database,
-                ctx.settings,
-                overwrite=self.overwrite,
-                collection=self.collection,
-                format_hint="markdown",
-                content_scrubber=scrub,
-                agent_handle=self.agent_handle,
-                memory_type=self.memory_type,
-                summary=self.summary,
-            )
-        )
+        inline = InlineIngest(content, format_hint="markdown", content_scrubber=scrub)
+        return dict(ingest_content(inline, name, Progress(None), context))
 
 
 @dataclass(frozen=True, slots=True)

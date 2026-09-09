@@ -83,12 +83,13 @@ def test_html_refetch_fetches_the_source_url_exactly_once() -> None:
             "quarry.ingestion.web_fetch.WebFetcher.fetch_body", return_value=body
         ) as mock_fetch_body,
         patch(
-            "quarry.ingestion.pipeline.ingest_url", return_value={"chunks": 1}
+            "quarry.ingestion.web_ingest.ingest_url", return_value={"chunks": 1}
         ) as mock_ingest_url,
     ):
         result = job._refetch(ctx)
 
     mock_fetch_body.assert_called_once_with("https://x.test/page")
     mock_ingest_url.assert_called_once()
-    assert mock_ingest_url.call_args.kwargs["prefetched_html"] == body.text
+    request = mock_ingest_url.call_args.args[0]
+    assert request.prefetched_html == body.text
     assert result == {"chunks": 1}

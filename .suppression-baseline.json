@@ -1,10 +1,10 @@
 {
-  "total": 215,
+  "total": 218,
   "by_category": {
-    "noqa": 179,
+    "noqa": 181,
     "type_ignore": 7,
     "pylint_disable": 0,
-    "pyright_ignore": 0,
+    "pyright_ignore": 1,
     "per_file_ignores": 29
   },
   "by_file": {
@@ -14,6 +14,9 @@
     },
     "src/quarry/_hook_entry.py": {
       "noqa": 8
+    },
+    "src/quarry/_hook_trace.py": {
+      "noqa": 3
     },
     "src/quarry/backfill.py": {
       "noqa": 1
@@ -34,7 +37,7 @@
       "type_ignore": 1
     },
     "src/quarry/daemon/ingest_jobs.py": {
-      "noqa": 8
+      "noqa": 11
     },
     "src/quarry/daemon/routes/captures.py": {
       "noqa": 1
@@ -102,10 +105,16 @@
       "noqa": 9
     },
     "src/quarry/hooks_agent.py": {
-      "noqa": 5
+      "noqa": 2
     },
     "src/quarry/ingestion/backends.py": {
       "noqa": 3
+    },
+    "src/quarry/ingestion/bulk_ingest.py": {
+      "noqa": 2
+    },
+    "src/quarry/ingestion/chunk_store_funnel.py": {
+      "pyright_ignore": 1
     },
     "src/quarry/ingestion/image_prep.py": {
       "noqa": 2
@@ -116,13 +125,16 @@
     "src/quarry/ingestion/ocr_engine.py": {
       "noqa": 1
     },
-    "src/quarry/ingestion/pipeline.py": {
-      "noqa": 6
-    },
     "src/quarry/ingestion/provider.py": {
       "noqa": 2
     },
+    "src/quarry/ingestion/sitemap_ingest.py": {
+      "noqa": 3
+    },
     "src/quarry/ingestion/web_fetch.py": {
+      "noqa": 1
+    },
+    "src/quarry/lesson.py": {
       "noqa": 1
     },
     "src/quarry/mcp_server.py": {
@@ -167,10 +179,7 @@
     },
     "src/quarry/web_fetch_loop_closer.py": {
       "noqa": 2
-    },
-    "src/quarry/lesson.py": {
-      "noqa": 1
     }
   },
-  "updated_at": "2026-09-01T15:23:06Z"
+  "updated_at": "2026-09-09T15:20:00Z"
 }
