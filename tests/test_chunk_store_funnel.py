@@ -212,9 +212,14 @@ class TestDocumentNameRedaction:
         credentialed_name = "https://user:pass@example.com/page?token=abc123"
         messages: list[str] = []
 
-        result = _chunk_embed_store(
-            _extracted(), credentialed_name, Progress(messages.append), _context()
-        )
+        # The "Done: ..." line is emitted via Progress.__call__'s own
+        # logger.info -- under quarry.ingestion.ingest_context, NOT this
+        # module's logger -- so caplog must be raised at that logger or its
+        # capture stays empty and the assertions below would pass vacuously.
+        with caplog.at_level("INFO", logger="quarry.ingestion.ingest_context"):
+            result = _chunk_embed_store(
+                _extracted(), credentialed_name, Progress(messages.append), _context()
+            )
 
         # document_name itself is untouched -- identity/storage is unaffected.
         assert result["document_name"] == credentialed_name
@@ -222,6 +227,12 @@ class TestDocumentNameRedaction:
         assert done == ["Done: 1 chunks indexed from https://example.com/page"]
         assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
+        # Exact match, not a host substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole log
+        # record rather than a fragment that could also match an unrelated
+        # look-alike string.
+        info_records = [r.getMessage() for r in caplog.records]
+        assert "Done: 1 chunks indexed from https://example.com/page" in info_records
 
     def test_url_document_name_redacts_secrets_on_zero_chunks(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -269,3 +280,54 @@ class TestDocumentNameRedaction:
 
         done = [m for m in messages if m.startswith("Done:")]
         assert done == ["Done: 1 chunks indexed from notes.md"]
+
+    def test_non_url_name_with_url_syntax_chars_is_not_truncated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """'#' and '?' are valid characters in a plain document name (a
+        ``remember`` title, a filename) but are urlsplit's fragment/query
+        delimiters -- CaptureUrl.redacted silently drops everything from the
+        first one onward. The http(s):// prefix guard must keep a non-URL
+        name whole, not hand it to CaptureUrl at all.
+        """
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+        )
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert_records",
+            lambda _self, records: len(records),
+        )
+        name = "notes #3 (draft)?.md"
+        messages: list[str] = []
+
+        _chunk_embed_store(_extracted(), name, Progress(messages.append), _context())
+
+        done = [m for m in messages if m.startswith("Done:")]
+        assert done == [f"Done: 1 chunks indexed from {name}"]
+
+    def test_name_that_would_make_captureurl_raise_appears_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A string resembling a broken URL authority makes ``urlsplit``
+        raise ``ValueError`` from inside ``CaptureUrl.redacted`` -- after
+        chunks are already stored, so the guard's http(s):// prefix check
+        (which excludes this name; it has no scheme at all) and the
+        try/except fallback inside ``_display_name`` must both hold: this
+        must never raise, and the display value is the name unchanged.
+        """
+        monkeypatch.setattr(
+            "quarry.ingestion.streaming.chunk_pages",
+            lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
+        )
+        monkeypatch.setattr(
+            "quarry.db.chunk_store.ChunkStore.insert_records",
+            lambda _self, records: len(records),
+        )
+        name = "a://[::1"
+        messages: list[str] = []
+
+        _chunk_embed_store(_extracted(), name, Progress(messages.append), _context())
+
+        done = [m for m in messages if m.startswith("Done:")]
+        assert done == [f"Done: 1 chunks indexed from {name}"]

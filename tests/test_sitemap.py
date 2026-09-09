@@ -970,6 +970,17 @@ class TestIngestAuto:
         assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
         assert not any("user:pass" in m or "token=abc123" in m for m in messages)
+        # Exact match, not a host substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole log
+        # record rather than a fragment that could also match an unrelated
+        # look-alike string.
+        warning_records = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert (
+            "Sitemap discovery failed for https://example.com/page "
+            "(SitemapException)" in warning_records
+        )
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_discovering_progress_redacts_netloc_userinfo(

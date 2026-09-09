@@ -98,30 +98,48 @@ class ChunkStoreFunnel:
             inserted,
             time.perf_counter() - t0,
         )
-        # document_name IS the URL for a plain (unscrubbed) URL ingest, so a
-        # userinfo/query secret would otherwise reach the log/progress stream
-        # verbatim (CWE-532). CaptureUrl no-ops on a non-URL document_name
-        # (inline content's caller-supplied name) -- it round-trips unchanged
-        # -- so this is safe for every caller of this shared DES-036 funnel,
-        # not just the URL path. The raw document_name is untouched above and
-        # below: it's still what's actually deleted/stored/returned.
-        display_name = CaptureUrl(document_name).redacted(lambda text: text)
-        progress("Done: %d chunks indexed from %s", inserted, display_name)
+        progress(
+            "Done: %d chunks indexed from %s",
+            inserted,
+            ChunkStoreFunnel._display_name(document_name),
+        )
         return inserted
 
     @staticmethod
     def _skip(document_name: str, progress: Progress) -> int:
         """Log and report that zero chunks were produced; nothing is stored."""
-        # Same redaction as _embed_and_store's success line, for the same
-        # reason (CWE-532); document_name itself is untouched.
-        display_name = CaptureUrl(document_name).redacted(lambda text: text)
         logger.warning(
             "pipeline: %s produced zero chunks — keeping any prior document, "
             "storing nothing",
-            display_name,
+            ChunkStoreFunnel._display_name(document_name),
         )
         progress("No text found — nothing to index")
         return 0
+
+    @staticmethod
+    def _display_name(document_name: str) -> str:
+        """Return *document_name* redacted for a log/progress line, never stored.
+
+        document_name IS the URL for a plain (unscrubbed) URL ingest, so a
+        userinfo/query secret would otherwise reach the log/progress stream
+        verbatim (CWE-532). But this funnel is also reached by ingest_content
+        with an arbitrary caller-supplied name that is never a URL -- and
+        CaptureUrl is unsafe on non-URL input: it silently truncates at the
+        first ``#``/``?`` (urlsplit treats them as fragment/query delimiters,
+        both valid characters in a plain document name), and some malformed
+        strings resembling a URL authority raise ``ValueError`` straight out
+        of ``urlsplit``. Gate on the same ``http(s)://`` prefix check
+        ``WebFetcher``/``cli_ingest`` already use to recognize a real URL, and
+        fall back to *document_name* verbatim -- untruncated, never raising --
+        for anything else or for a redaction that still fails despite the
+        prefix match.
+        """
+        if not document_name.lower().startswith(("http://", "https://")):
+            return document_name
+        try:
+            return CaptureUrl(document_name).redacted(lambda text: text)
+        except ValueError:
+            return document_name
 
     @staticmethod
     def _build_result(
