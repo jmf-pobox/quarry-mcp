@@ -168,7 +168,19 @@ class WebIngest:
                 jitter = time.monotonic_ns() % 1_000_000_000 / 1_000_000_000
                 time.sleep(request.delay + jitter)
 
-            progress("Fetching: %s", meta_url)
+            # meta_url is deliberately the RAW url for a plain (unscrubbed)
+            # ingest -- it doubles as document_name/document_path, and a
+            # user-initiated `quarry ingest <url>` keeps its full identity
+            # (see the comment above). But that same unscrubbed meta_url is
+            # also what a sitemap/bulk-crawl worker builds for a
+            # program-discovered URL it never reviewed, and logging it
+            # verbatim here would leak a userinfo/query secret into
+            # quarry.log regardless of scrub status (CWE-532). The log line
+            # gets its own always-redacted form; metadata persistence
+            # (meta_url, document_name, document_path below) is unaffected.
+            progress(
+                "Fetching: %s", CaptureUrl(request.url).redacted(lambda text: text)
+            )
             html = WebFetcher(request.timeout).fetch(request.url)
             progress("Fetched %d characters", len(html))
 

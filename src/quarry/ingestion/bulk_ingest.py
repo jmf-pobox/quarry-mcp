@@ -175,27 +175,33 @@ class BulkIngestRunner:
                 }
                 for future in as_completed(futures):
                     page_url = futures[future]
+                    # page_url is only for the actual submit() call above and the
+                    # futures dict key; every progress/log/errors sink below --
+                    # success or failure -- must see the redacted form, not the
+                    # raw URL, since a userinfo/query secret on a program-
+                    # discovered sitemap URL would otherwise leak into
+                    # quarry.log or the progress stream (CWE-532).
+                    redacted_url = CaptureUrl(page_url).redacted(lambda text: text)
                     try:
                         future.result()
                         ingested += 1
                         progress(
-                            "Ingested %s (%d/%d)", page_url, ingested, len(to_ingest)
+                            "Ingested %s (%d/%d)",
+                            redacted_url,
+                            ingested,
+                            len(to_ingest),
                         )
                     except Exception as exc:  # noqa: BLE001
                         # Broad except is correct here: this is the per-task
                         # outcome boundary for the parallel fan-out (PY-EH-6),
                         # not internal code -- one worker's failure must not
                         # abort the others. But WebFetcher and its callees
-                        # embed the raw URL verbatim in their exception
-                        # messages ("Cannot reach {url}: ..."), so neither
-                        # page_url nor str(exc) is safe to put in errors[],
-                        # the progress stream, or the log -- a userinfo/query
-                        # secret on the URL would leak into all three
-                        # (CWE-532). Redact the URL the same way the
-                        # sitemap-discovery failure path does, and report
-                        # only the exception CLASS, never its message.
+                        # also embed the raw URL verbatim in their exception
+                        # messages ("Cannot reach {url}: ..."), so str(exc) is
+                        # never safe to put in errors[], the progress stream,
+                        # or the log either -- report only the exception
+                        # CLASS, never its message.
                         failed += 1
-                        redacted_url = CaptureUrl(page_url).redacted(lambda text: text)
                         errors.append(f"{redacted_url}: {type(exc).__name__}")
                         logger.warning(
                             "Failed to ingest %s (%s)", redacted_url, type(exc).__name__

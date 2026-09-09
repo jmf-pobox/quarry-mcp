@@ -272,6 +272,34 @@ class TestBulkIngestRunnerRun:
 
         assert (ingested, failed, errors) == (2, 0, [])
 
+    def test_success_progress_redacts_url_secrets(self) -> None:
+        """The success-path progress line must never leak URL secrets either
+        (CWE-532) -- only the failure path was fixed first; the success path
+        (`Ingested %s (%d/%d)`) carries the same page_url and needs the same
+        redaction.
+        """
+
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            return {"document_name": request.url, "collection": "c", "chunks": 1}
+
+        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        runner = BulkIngestRunner(ingest_one=_stub)
+        to_ingest: list[tuple[str, str | None]] = [(credentialed_url, None)]
+        messages: list[str] = []
+
+        ingested, failed, _errors = runner.run(
+            to_ingest, Progress(messages.append), _context(), BulkOptions()
+        )
+
+        assert (ingested, failed) == (1, 0)
+        assert messages
+        for message in messages:
+            assert "pass" not in message
+            assert "token=abc123" not in message
+        assert any("example.com/page" in message for message in messages)
+
     def test_one_failure_is_isolated_and_its_message_captured(self) -> None:
         def _stub(
             request: UrlIngest, _progress: Progress, _context: IngestContext

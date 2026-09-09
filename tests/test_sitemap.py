@@ -606,6 +606,38 @@ class TestIngestSitemapIntegration:
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_fetching_progress_redacts_url_secrets(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        _mock_ingest: MagicMock,
+    ) -> None:
+        """ingest_sitemap's own "Fetching sitemap: %s" progress line must not
+        leak URL secrets either (CWE-532) -- it fires before any failure path.
+        """
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        mock_discover.return_value = []
+        mock_list_docs.return_value = []
+        credentialed_url = "https://user:pass@docs.python.org/sitemap.xml?token=abc123"
+        messages: list[str] = []
+
+        ingest_sitemap(
+            credentialed_url,
+            Progress(messages.append),
+            IngestContext(Database(MagicMock()), MagicMock(), collection="test"),
+            BulkOptions(),
+        )
+
+        assert messages
+        for message in messages:
+            assert "pass" not in message
+            assert "token=abc123" not in message
+        assert any("docs.python.org/sitemap.xml" in message for message in messages)
+
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_handles_ingest_failure(
         self,
         mock_discover: MagicMock,
@@ -930,9 +962,43 @@ class TestIngestAuto:
                 BulkOptions(),
             )
 
-        assert "hunter2" not in caplog.text
+        assert "user:pass" not in caplog.text
         assert "token=abc123" not in caplog.text
-        assert not any("hunter2" in m or "token=abc123" in m for m in messages)
+        assert not any("user:pass" in m or "token=abc123" in m for m in messages)
+
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
+    def test_discovering_progress_redacts_netloc_userinfo(
+        self, mock_discover: MagicMock
+    ) -> None:
+        """The "Discovering sitemaps for %s://%s" progress line derives its
+        netloc from urlparse, which -- unlike CaptureUrl -- keeps userinfo
+        ("user:pass@host"); it must be redacted before reaching progress
+        (CWE-532). discover_pages returns no entries so the single-page
+        fallback below never runs a real fetch.
+        """
+        from quarry.ingestion.sitemap_ingest import ingest_auto
+
+        mock_discover.return_value = []
+        credentialed_url = "https://user:pass@example.com/page"
+        messages: list[str] = []
+
+        with patch("quarry.ingestion.sitemap_ingest.ingest_url") as mock_ingest_url:
+            mock_ingest_url.return_value = {
+                "document_name": credentialed_url,
+                "collection": "example.com",
+                "chunks": 1,
+            }
+            ingest_auto(
+                credentialed_url,
+                Progress(messages.append),
+                IngestContext(Database(MagicMock()), MagicMock(), collection=""),
+                BulkOptions(),
+            )
+
+        discovering = [m for m in messages if m.startswith("Discovering sitemaps for")]
+        assert discovering
+        assert "user:pass" not in discovering[0]
+        assert "example.com" in discovering[0]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_unexpected_discovery_error_propagates(

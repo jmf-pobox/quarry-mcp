@@ -119,7 +119,12 @@ class SitemapIngest:
             context, collection=IngestCollection.resolve(url, context.collection).name
         )
 
-        progress("Fetching sitemap: %s", url)
+        # url itself is only for the discover_urls/IngestCollection.resolve
+        # calls above and below (the actual fetch/routing inputs) and for
+        # SitemapCrawl.source_url (returned data, not a log sink); the
+        # progress line gets the redacted form so a userinfo/query secret on
+        # the sitemap URL never reaches quarry.log (CWE-532).
+        progress("Fetching sitemap: %s", CaptureUrl(url).redacted(lambda text: text))
         entries = SitemapDiscovery.discover_urls(url)
         progress("Discovered %d URLs", len(entries))
 
@@ -190,7 +195,12 @@ class SitemapIngest:
             progress("URL is a sitemap, crawling directly")
             return SitemapIngest.ingest_sitemap(url, progress, context, options)
 
-        progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
+        # parsed.netloc can carry userinfo ("user:pass@host") -- re-derive the
+        # netloc from the redacted URL so a credential on the origin never
+        # reaches the progress stream or the log (CWE-532); scheme alone is
+        # never sensitive.
+        safe_netloc = urlparse(CaptureUrl(url).redacted(lambda text: text)).netloc
+        progress("Discovering sitemaps for %s://%s", parsed.scheme, safe_netloc)
         try:
             entries = SitemapDiscovery.discover_pages(url)
         except (

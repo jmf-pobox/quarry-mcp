@@ -178,6 +178,48 @@ class TestIngestUrl:
         assert result["document_name"] == url
 
     @patch(_FETCH)
+    def test_plain_ingest_progress_redacts_fetch_url(self, mock_fetch: MagicMock):
+        """The "Fetching: %s" progress line must redact the URL even for a
+        plain (unscrubbed) ingest -- meta_url is deliberately the raw URL for
+        document_name/document_path persistence (test_plain_ingest_keeps_full_url,
+        above), but a sitemap/bulk-crawl worker builds that same unscrubbed
+        UrlIngest for a program-discovered URL it never reviewed, and logging
+        it verbatim would leak a userinfo/query secret into quarry.log
+        (CWE-532) regardless of scrub status.
+
+        Checks only the "Fetching:" message: ChunkStoreFunnel._embed_and_store's
+        own "Done: %d chunks indexed from %s" progress line further downstream
+        still echoes document_name unredacted for a plain ingest -- that shared,
+        non-URL-aware choke point (used identically by ingest_content, which has
+        no URL at all) has no way to know a given document_name is a URL, so it
+        cannot redact one safely; reshaping it is separate work.
+        """
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
+
+        mock_fetch.return_value = "<html><body><p>Content.</p></body></html>"
+        settings = _fake_settings()
+        db = _fake_db()
+
+        url = "https://user:pass@x.test/reset?email=user@example.com&token=abc123secret"
+        messages: list[str] = []
+        with (
+            patch("quarry.db.chunk_store.ChunkStore.insert_records", return_value=1),
+        ):
+            result = ingest_url(
+                UrlIngest(url), Progress(messages.append), IngestContext(db, settings)
+            )
+
+        # Metadata persistence is untouched: the plain-ingest policy still
+        # keeps the full URL as the document's identity.
+        assert result["document_name"] == url
+        fetching = [m for m in messages if m.startswith("Fetching:")]
+        assert fetching
+        assert "user:pass" not in fetching[0]
+        assert "token=abc123secret" not in fetching[0]
+        assert "x.test/reset" in fetching[0]
+
+    @patch(_FETCH)
     def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):
         """A caller that already fetched the body must not pay for a second fetch.
 
