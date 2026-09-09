@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
 from quarry.ingestion.format_strategies import SUPPORTED_EXTENSIONS, resolve_strategy
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from quarry.config import Settings
     from quarry.db import Database
+    from quarry.ingestion.ingest_context import MemoryType
     from quarry.models import Chunk, PageContent
     from quarry.results import IngestResult
 
@@ -75,7 +76,11 @@ def ingest_document(
         overwrite=overwrite,
         collection=collection,
         agent_handle=agent_handle,
-        memory_type=memory_type,
+        # ingest_document's own memory_type stays a plain str (unvalidated public
+        # API param); IngestContext's field is the tightened Literal, so the
+        # cast marks this specific boundary crossing rather than widening the
+        # dataclass field back to str.
+        memory_type=cast("MemoryType", memory_type),
         summary=summary,
     )
     strategy = resolve_strategy(file_path.suffix.lower(), settings)

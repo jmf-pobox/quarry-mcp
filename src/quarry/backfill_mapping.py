@@ -20,7 +20,11 @@ class ProjectMapping:
     encoded_dir: str
     project_path: str
     collection: str
-    captures_collection: str
+
+    @property
+    def captures_collection(self) -> str:
+        """The sibling collection this project's web-fetch captures write."""
+        return f"{self.collection}-captures"
 
     def transcript_files(self) -> list[Path]:
         """Return all JSONL transcript files for this project, sorted."""
@@ -63,7 +67,6 @@ class ProjectMappingResolver:
                         encoded_dir=encoded,
                         project_path=reg.directory,
                         collection=reg.collection,
-                        captures_collection=f"{reg.collection}-captures",
                     )
                 )
         return mappings

@@ -138,7 +138,7 @@ class TestListTranscriptFiles:
         (project / "not-jsonl.txt").write_text("ignore")
 
         with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
-            mapping = ProjectMapping("my-project", "", "", "")
+            mapping = ProjectMapping("my-project", "", "")
             files = mapping.transcript_files()
 
         assert len(files) == 2
@@ -150,7 +150,7 @@ class TestListTranscriptFiles:
         project.mkdir(parents=True)
 
         with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
-            mapping = ProjectMapping("empty", "", "", "")
+            mapping = ProjectMapping("empty", "", "")
             files = mapping.transcript_files()
 
         assert files == []
@@ -160,7 +160,7 @@ class TestListTranscriptFiles:
         projects_dir.mkdir(parents=True)
 
         with patch("quarry.backfill_mapping.CLAUDE_PROJECTS_DIR", projects_dir):
-            mapping = ProjectMapping("nonexistent", "", "", "")
+            mapping = ProjectMapping("nonexistent", "", "")
             files = mapping.transcript_files()
 
         assert files == []

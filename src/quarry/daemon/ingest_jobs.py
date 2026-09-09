@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from starlette.concurrency import run_in_threadpool
 
@@ -22,7 +22,9 @@ from quarry.ingestion.web_fetch import WebFetcher
 if TYPE_CHECKING:
     from quarry.daemon.context import DaemonContext
     from quarry.daemon.tasks import TaskState
+    from quarry.ingestion.ingest_context import MemoryType
     from quarry.ingestion.web_fetch import FetchedBody
+    from quarry.ingestion.web_ingest import FormatHint
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,9 @@ class ScrubbedIngestJob:
             ingest_content(
                 InlineIngest(
                     self.content,
-                    format_hint=self.format_hint,
+                    # self.format_hint is a plain str from the CLI/HTTP boundary;
+                    # InlineIngest's field is the tightened FormatHint Literal.
+                    format_hint=cast("FormatHint", self.format_hint),
                     content_scrubber=self._scrubbed,
                 ),
                 self.name,
@@ -127,7 +131,10 @@ class ScrubbedIngestJob:
                     overwrite=self.overwrite,
                     collection=self.collection,
                     agent_handle=self.agent_handle,
-                    memory_type=self.memory_type,
+                    # self.memory_type is a plain str carried from the daemon's
+                    # HTTP boundary (unvalidated beyond the reserved-value
+                    # reject); IngestContext's field is the tightened Literal.
+                    memory_type=cast("MemoryType", self.memory_type),
                     summary=self.summary,
                 ),
             )
@@ -216,7 +223,10 @@ class IngestJob:
                     overwrite=self.overwrite,
                     collection=self.collection,
                     agent_handle=self.agent_handle,
-                    memory_type=self.memory_type,
+                    # self.memory_type is a plain str carried from the daemon's
+                    # HTTP boundary (unvalidated beyond the reserved-value
+                    # reject); IngestContext's field is the tightened Literal.
+                    memory_type=cast("MemoryType", self.memory_type),
                     summary=self.summary,
                 ),
                 BulkOptions(),
@@ -347,7 +357,7 @@ class IngestJob:
             overwrite=self.overwrite,
             collection=self.collection,
             agent_handle=self.agent_handle,
-            memory_type=self.memory_type,
+            memory_type=cast("MemoryType", self.memory_type),
             summary=self.summary,
         )
 

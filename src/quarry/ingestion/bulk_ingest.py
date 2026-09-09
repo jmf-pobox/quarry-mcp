@@ -32,6 +32,17 @@ class BulkOptions:
     exclude: list[str] | None = None
     limit: int = 0
 
+    def __post_init__(self) -> None:
+        """Clamp workers to at least 1 — a thread pool needs at least one worker.
+
+        Frozen dataclasses need ``object.__setattr__`` to fix up a field after
+        construction; this is the one write that bypasses immutability, and
+        only to enforce the invariant, not to change caller-visible state
+        after the fact.
+        """
+        if self.workers < 1:
+            object.__setattr__(self, "workers", 1)
+
 
 @final
 @dataclass(frozen=True, slots=True)
@@ -91,6 +102,11 @@ class SafeEntrySelector:
                 str(existing_ts).replace("Z", "+00:00")
             )
         except (ValueError, TypeError):
+            logger.warning(
+                "sitemap dedup: unparseable stored ingestion_timestamp %r — "
+                "forcing re-ingest",
+                existing_ts,
+            )
             return False
         if existing_dt.tzinfo is None:
             existing_dt = existing_dt.replace(tzinfo=UTC)
@@ -113,7 +129,6 @@ class BulkIngestRunner:
         options: BulkOptions,
     ) -> tuple[int, int, list[str]]:
         """Return ``(ingested_count, failed_count, error_messages)``."""
-        workers = max(1, self.workers)
         ingested = 0
         failed = 0
         errors: list[str] = []
@@ -123,7 +138,7 @@ class BulkIngestRunner:
             # dedup already skipped unchanged URLs, so every submitted entry is
             # a genuine (re)ingest.
             bulk_context = replace(context, overwrite=True)
-            with ThreadPoolExecutor(max_workers=workers) as executor:
+            with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
                     executor.submit(
                         self.ingest_one,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Literal, final
 
 from quarry.capture_url import CaptureUrl
 from quarry.extractors.html_extractor import HtmlExtractor
@@ -21,6 +21,12 @@ if TYPE_CHECKING:
     from quarry.models import PageContent
     from quarry.results import IngestResult
 
+# "auto" self-detects via TextExtractor; "html" is the one hint _extract_inline_pages
+# (below) intercepts before TextExtractor ever sees it, routing raw markup through
+# HtmlExtractor instead. The rest pass straight through to
+# TextExtractor.extract_raw's own closed set.
+type FormatHint = Literal["auto", "plain", "markdown", "latex", "html"]
+
 
 @dataclass(frozen=True, slots=True)
 class InlineIngest:
@@ -35,7 +41,7 @@ class InlineIngest:
     """
 
     content: str
-    format_hint: str = "auto"
+    format_hint: FormatHint = "auto"
     content_scrubber: Callable[[str], str] | None = None
 
 

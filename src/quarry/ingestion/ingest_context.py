@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Self, final
+from typing import TYPE_CHECKING, Literal, Self, final
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from quarry.db import Database
 
 logger = logging.getLogger(__name__)
+
+# "" is unset; "lesson" is written only by the daemon's learn route
+# (RESERVED_MEMORY_TYPE) and rejected at every other boundary — see
+# daemon/routes/base.py's reject_reserved_memory_type and the domain
+# documented in mcp_server.py's remember() docstring.
+type MemoryType = Literal["", "fact", "observation", "opinion", "procedure", "lesson"]
 
 
 @final
@@ -58,5 +64,5 @@ class IngestContext:
     overwrite: bool = False
     collection: str = "default"
     agent_handle: str = ""
-    memory_type: str = ""
+    memory_type: MemoryType = ""
     summary: str = ""
