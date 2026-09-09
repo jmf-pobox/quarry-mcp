@@ -324,6 +324,19 @@
     "public_attr_violations": 0.0,
     "future_annotations": 1.0
   },
+  "src/quarry/backfill_mapping.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 0.83,
+    "max_complexity": 4.0,
+    "avg_complexity": 2.67,
+    "module_size": 74.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/capture.py": {
     "avg_complexity": 2.0,
     "avg_params": 0.75,
@@ -1962,6 +1975,32 @@
     "module_size": 35.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/ingestion/bulk_ingest.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 2.25,
+    "max_complexity": 7.0,
+    "avg_complexity": 4.0,
+    "module_size": 131.0,
+    "classes_per_module": 3.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
+  "src/quarry/ingestion/chunk_store_funnel.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 3.5,
+    "max_complexity": 2.0,
+    "avg_complexity": 1.5,
+    "module_size": 121.0,
+    "classes_per_module": 1.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/ingestion/chunker.py": {
     "avg_complexity": 6.0,
     "avg_params": 5.5,
@@ -2235,6 +2274,19 @@
     "module_size": 59.0,
     "public_attr_violations": 0.0
   },
+  "src/quarry/ingestion/sitemap_ingest.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 4.0,
+    "max_complexity": 8.0,
+    "avg_complexity": 3.33,
+    "module_size": 169.0,
+    "classes_per_module": 2.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
+  },
   "src/quarry/ingestion/ssrf_redirect.py": {
     "avg_complexity": 2.0,
     "avg_params": 3.0,
@@ -2299,6 +2351,19 @@
     "method_ratio": 1.0,
     "module_size": 162.0,
     "public_attr_violations": 0.0
+  },
+  "src/quarry/ingestion/web_ingest.py": {
+    "method_ratio": 1.0,
+    "encapsulation_ratio": 1.0,
+    "avg_params": 3.25,
+    "max_complexity": 6.0,
+    "avg_complexity": 3.25,
+    "module_size": 197.0,
+    "classes_per_module": 3.0,
+    "class_to_func_ratio": 1.0,
+    "init_violations": 0.0,
+    "public_attr_violations": 0.0,
+    "future_annotations": 1.0
   },
   "src/quarry/latex_utils.py": {
     "avg_complexity": 3.5,
