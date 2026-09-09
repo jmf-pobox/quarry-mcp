@@ -294,11 +294,14 @@ class TestBulkIngestRunnerRun:
         )
 
         assert (ingested, failed) == (1, 0)
-        assert messages
         for message in messages:
             assert "pass" not in message
             assert "token=abc123" not in message
-        assert any("example.com/page" in message for message in messages)
+        # Exact match, not a host/path substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole
+        # redacted message rather than a fragment that could also match an
+        # unrelated look-alike string.
+        assert messages == ["Ingested https://example.com/page (1/1)"]
 
     def test_one_failure_is_isolated_and_its_message_captured(self) -> None:
         def _stub(

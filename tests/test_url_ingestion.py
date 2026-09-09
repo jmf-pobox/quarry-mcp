@@ -217,7 +217,11 @@ class TestIngestUrl:
         assert fetching
         assert "user:pass" not in fetching[0]
         assert "token=abc123secret" not in fetching[0]
-        assert "x.test/reset" in fetching[0]
+        # Exact match, not a host/path substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole
+        # redacted message rather than a fragment that could also match an
+        # unrelated look-alike string.
+        assert fetching == ["Fetching: https://x.test/reset"]
 
     @patch(_FETCH)
     def test_prefetched_html_skips_the_network_fetch(self, mock_fetch: MagicMock):

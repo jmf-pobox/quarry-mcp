@@ -633,7 +633,12 @@ class TestIngestSitemapIntegration:
         for message in messages:
             assert "pass" not in message
             assert "token=abc123" not in message
-        assert any("docs.python.org/sitemap.xml" in message for message in messages)
+        # Exact match, not a host/path substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole
+        # redacted message rather than a fragment that could also match an
+        # unrelated look-alike string.
+        fetching = [m for m in messages if m.startswith("Fetching sitemap:")]
+        assert fetching == ["Fetching sitemap: https://docs.python.org/sitemap.xml"]
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
@@ -998,7 +1003,11 @@ class TestIngestAuto:
         discovering = [m for m in messages if m.startswith("Discovering sitemaps for")]
         assert discovering
         assert "user:pass" not in discovering[0]
-        assert "example.com" in discovering[0]
+        # Exact match, not a host substring check (CodeQL
+        # py/incomplete-url-substring-sanitization): pins the whole
+        # message rather than a fragment that could also match an
+        # unrelated look-alike host.
+        assert discovering == ["Discovering sitemaps for https://example.com"]
 
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
     def test_unexpected_discovery_error_propagates(
