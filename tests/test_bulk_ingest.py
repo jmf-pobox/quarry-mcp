@@ -261,6 +261,37 @@ class TestBulkIngestRunnerRun:
         assert seen_contexts
         assert seen_contexts[0].overwrite is True
 
+    def test_workers_do_not_receive_the_caller_callback(self) -> None:
+        """Worker threads get a callback-less Progress, matching the
+        pre-decomposition _bulk_ingest_entries, which never forwarded its
+        progress_callback into the parallel ingest_url calls -- only this
+        method's own aggregation messages used it. Sharing one
+        callback-bearing Progress across threads would be a concurrency
+        hazard for a stateful callback (Progress.__call__ has no lock).
+        """
+        seen_progress: list[Progress] = []
+
+        def _stub(
+            request: UrlIngest, progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            seen_progress.append(progress)
+            return {"document_name": request.url, "collection": "c", "chunks": 1}
+
+        caller_messages: list[str] = []
+        caller_progress = Progress(caller_messages.append, log=False)
+        runner = BulkIngestRunner(ingest_one=_stub)
+        to_ingest: list[tuple[str, str | None]] = [("https://a.example", None)]
+
+        runner.run(to_ingest, caller_progress, _context(), BulkOptions())
+
+        assert seen_progress
+        assert seen_progress[0] is not caller_progress
+        # run()'s own aggregation messages ("Ingested ...") legitimately reach
+        # the caller's callback; a message sent through the WORKER's Progress
+        # must not -- that would mean it can still reach caller_messages.
+        seen_progress[0]("worker-only message")
+        assert "worker-only message" not in caller_messages
+
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
         calls: list[UrlIngest] = []
 

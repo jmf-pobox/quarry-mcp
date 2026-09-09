@@ -545,6 +545,34 @@ class TestIngestSitemapIntegration:
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
     @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
+    def test_bare_context_default_still_derives_hostname_collection(
+        self,
+        mock_discover: MagicMock,
+        mock_list_docs: MagicMock,
+        _mock_ingest: MagicMock,
+    ) -> None:
+        """A caller who never touches ``collection`` gets IngestContext's own
+        dataclass default ("default"), not an explicit empty string -- this
+        must still derive the hostname collection, matching the pre-
+        decomposition ingest_sitemap's own ``collection: str = ""`` default.
+        """
+        from quarry.ingestion.sitemap_ingest import ingest_sitemap
+
+        mock_discover.return_value = []
+        mock_list_docs.return_value = []
+
+        result = ingest_sitemap(
+            "https://docs.python.org/sitemap.xml",
+            Progress(None),
+            IngestContext(Database(MagicMock()), MagicMock()),
+            BulkOptions(),
+        )
+
+        assert result["collection"] == "docs.python.org"
+
+    @patch("quarry.ingestion.sitemap_ingest.ingest_url")
+    @patch("quarry.db.chunk_catalog.ChunkCatalog.list_documents")
+    @patch("quarry.sitemap.SitemapDiscovery.discover_urls")
     def test_handles_ingest_failure(
         self,
         mock_discover: MagicMock,
@@ -801,9 +829,19 @@ class TestIngestAuto:
         mock_discover: MagicMock,
         mock_ingest_url: MagicMock,
     ) -> None:
+        """USP's own documented failure modes fall back to a single-page ingest.
+
+        GatedSitemapWebClient never lets a network error escape as an
+        exception (it reports a non-retryable WebClientErrorResponse so USP
+        skips the URL instead) -- so the "expected" exceptions this fallback
+        catches are USP's own discovery/parse failures, not raw network
+        errors.
+        """
+        from usp.exceptions import SitemapException
+
         from quarry.ingestion.sitemap_ingest import ingest_auto
 
-        mock_discover.side_effect = ConnectionError("network error")
+        mock_discover.side_effect = SitemapException("malformed homepage URL")
         mock_ingest_url.return_value = {
             "document_name": "https://example.com/page",
             "collection": "example.com",
@@ -819,6 +857,25 @@ class TestIngestAuto:
 
         assert "document_name" in result
         mock_ingest_url.assert_called_once()
+
+    @patch("quarry.sitemap.SitemapDiscovery.discover_pages")
+    def test_unexpected_discovery_error_propagates(
+        self, mock_discover: MagicMock
+    ) -> None:
+        """A programmer error during discovery must not be swallowed as
+        "no sitemap found" -- only USP's own documented exception types are
+        caught."""
+        from quarry.ingestion.sitemap_ingest import ingest_auto
+
+        mock_discover.side_effect = TypeError("boom")
+
+        with pytest.raises(TypeError, match="boom"):
+            ingest_auto(
+                "https://example.com/page",
+                Progress(None),
+                IngestContext(Database(MagicMock()), MagicMock(), collection=""),
+                BulkOptions(),
+            )
 
     @patch("quarry.ingestion.sitemap_ingest.ingest_url")
     @patch("quarry.sitemap.SitemapDiscovery.discover_pages")

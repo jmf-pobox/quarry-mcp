@@ -162,7 +162,7 @@ class WebIngest:
             html = request.prefetched_html
             progress("Reusing pre-fetched body (%d characters)", len(html))
         else:
-            if request.delay:
+            if request.delay > 0:
                 # Sub-second jitter from the monotonic clock (non-security-critical)
                 # to desync parallel fetchers without importing random.
                 jitter = time.monotonic_ns() % 1_000_000_000 / 1_000_000_000

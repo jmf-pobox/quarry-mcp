@@ -8,12 +8,13 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.web_ingest import UrlIngest
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from quarry.ingestion.ingest_context import IngestContext, Progress
+    from quarry.ingestion.ingest_context import IngestContext
     from quarry.results import IngestResult
     from quarry.sitemap import SitemapEntry
 
@@ -138,6 +139,14 @@ class BulkIngestRunner:
             # dedup already skipped unchanged URLs, so every submitted entry is
             # a genuine (re)ingest.
             bulk_context = replace(context, overwrite=True)
+            # Workers report through a callback-less Progress: the pre-decomposition
+            # _bulk_ingest_entries never forwarded progress_callback into the
+            # parallel ingest_url calls (only this method's own aggregation
+            # messages below used the caller's callback), and Progress.__call__
+            # invokes that callback with no lock — sharing one callback-bearing
+            # Progress across threads would be a new concurrency hazard for a
+            # stateful callback. Every worker message still reaches the logger.
+            worker_progress = Progress(None)
             with ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
                     executor.submit(
@@ -148,7 +157,7 @@ class BulkIngestRunner:
                             timeout=options.timeout,
                             delay=options.delay,
                         ),
-                        progress,
+                        worker_progress,
                         bulk_context,
                     ): page_url
                     for page_url, doc_name in to_ingest

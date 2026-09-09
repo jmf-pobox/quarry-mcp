@@ -11,8 +11,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-import numpy as np
-
 from quarry.config import Settings
 from quarry.db import Database
 from quarry.ingestion.chunk_store_funnel import _chunk_embed_store
@@ -68,17 +66,6 @@ def _context(*, overwrite: bool = False) -> IngestContext:
     return IngestContext(Database(MagicMock()), _settings(), overwrite=overwrite)
 
 
-def _mock_embedding_backend(
-    monkeypatch: pytest.MonkeyPatch, vectors: np.ndarray
-) -> None:
-    backend = MagicMock()
-    backend.embed_texts.return_value = vectors
-    backend.model_name = "test-model"
-    monkeypatch.setattr(
-        "quarry.ingestion.streaming.get_embedding_backend", lambda _settings: backend
-    )
-
-
 class TestEmptyChunksFailClosed:
     def test_zero_chunks_skips_delete_and_store(
         self, monkeypatch: pytest.MonkeyPatch
@@ -119,7 +106,6 @@ class TestNonEmptyChunksStore:
             "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
         )
-        _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         calls: list[str] = []
 
         def _record_insert(_self: object, records: list[dict[str, object]]) -> int:
@@ -146,7 +132,6 @@ class TestNonEmptyChunksStore:
             "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
         )
-        _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
             lambda _self, records: len(records),
@@ -192,7 +177,6 @@ class TestProgressReporting:
             "quarry.ingestion.streaming.chunk_pages",
             lambda _pages, max_chars, overlap_chars, **_kw: [_chunk()],
         )
-        _mock_embedding_backend(monkeypatch, np.zeros((1, 768), dtype=np.float32))
         monkeypatch.setattr(
             "quarry.db.chunk_store.ChunkStore.insert_records",
             lambda _self, records: len(records),

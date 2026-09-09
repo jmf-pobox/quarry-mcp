@@ -99,8 +99,16 @@ class SitemapIngest:
         """
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
+        # IngestContext.collection defaults to "default" (the right default for
+        # ingest_document/content/url, which have no per-URL bucketing). A
+        # sitemap crawl's own "let the pipeline decide" signal is an EMPTY
+        # collection (IngestCollection.resolve's documented contract) -- and
+        # "default" is that resolver's own no-host fallback name -- so an
+        # unspecified context.collection is treated the same way here as a
+        # caller who passed "" explicitly: derive from the URL's hostname.
+        requested = "" if context.collection == "default" else context.collection
         context = replace(
-            context, collection=IngestCollection.resolve(url, context.collection).name
+            context, collection=IngestCollection.resolve(url, requested).name
         )
 
         progress("Fetching sitemap: %s", url)
@@ -141,11 +149,22 @@ class SitemapIngest:
         """
         from urllib.parse import urlparse  # noqa: PLC0415
 
+        from usp.exceptions import (  # noqa: PLC0415
+            GunzipException,
+            SitemapException,
+            SitemapXMLParsingException,
+            StripURLToHomepageException,
+        )
+
         from quarry.sitemap import SitemapDiscovery  # noqa: PLC0415
 
         parsed = urlparse(url)
+        # See ingest_sitemap's matching comment: "default" is IngestContext's
+        # dataclass default, not a caller's explicit choice, so it is treated
+        # as the resolver's "" (derive from hostname) signal here too.
+        requested = "" if context.collection == "default" else context.collection
         context = replace(
-            context, collection=IngestCollection.resolve(url, context.collection).name
+            context, collection=IngestCollection.resolve(url, requested).name
         )
 
         # If the URL itself is a sitemap, skip discovery and crawl directly.
@@ -164,8 +183,19 @@ class SitemapIngest:
         progress("Discovering sitemaps for %s://%s", parsed.scheme, parsed.netloc)
         try:
             entries = SitemapDiscovery.discover_pages(url)
-        except Exception:
+        except (
+            SitemapException,
+            SitemapXMLParsingException,
+            GunzipException,
+            StripURLToHomepageException,
+        ) as exc:
+            # USP's own documented failure modes -- a malformed homepage URL,
+            # unparseable XML, a corrupt gzip body -- are the sitemap being
+            # genuinely absent or broken, so this still falls back to a
+            # single-page ingest below.  Anything else is a programmer error
+            # and must propagate, not be swallowed as "no sitemap found."
             logger.exception("Sitemap discovery failed for %s", url)
+            progress("Sitemap discovery error for %s: %s", url, exc)
             entries = []
 
         if not entries:
