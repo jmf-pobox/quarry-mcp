@@ -1421,7 +1421,9 @@ class TestWithinFileResume:
         Image.new("RGB", (64, 64), "white").save(img)
         ocr = _FakeOcr(_SENTENCE * 12)
 
-        with patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr):
+        with patch(
+            "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+        ):
             chunks, deterministic = plan_file_chunks(
                 img, settings, collection="col", document_name="scan.png"
             )
@@ -1446,7 +1448,9 @@ class TestWithinFileResume:
         )
         embedder = FakeEmbeddingBackend()
         with (
-            patch("quarry.ingestion.pipeline.get_ocr_backend", return_value=ocr),
+            patch(
+                "quarry.ingestion.format_strategies.get_ocr_backend", return_value=ocr
+            ),
             patched_embedder(embedder),
         ):
             sync_collection(d, "col", db, settings, conn, max_workers=1)

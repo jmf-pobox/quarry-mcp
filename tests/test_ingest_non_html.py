@@ -91,11 +91,11 @@ def test_ingest_captures_non_html_as_text(media_type: str, body_text: str) -> No
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
         patch(
-            "quarry.ingestion.pipeline.ingest_url",
+            "quarry.ingestion.web_ingest.ingest_url",
             return_value={"chunks": 1, "sections": 1},
         ),
     ):
@@ -139,7 +139,7 @@ def _assert_document_name_omits(url: str, leak: str) -> None:
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
     ):
@@ -262,7 +262,7 @@ def test_ingest_captured_body_sanitizes_media_type_in_marker() -> None:
             return_value=body,
         ),
         patch(
-            "quarry.ingestion.pipeline.ingest_content",
+            "quarry.ingestion.web_ingest.ingest_content",
             return_value={"chunks": 1, "sections": 1},
         ) as mock_ingest_content,
     ):

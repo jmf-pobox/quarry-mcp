@@ -732,39 +732,45 @@ class TestPreCompactEthosTagging:
 
 class TestIngestUrlThreadsAgentHandle:
     def test_ingest_url_passes_agent_handle(self) -> None:
-        """ingest_url threads agent_handle/memory_type/summary to _chunk_embed_store."""
+        """ingest_url threads agent_handle/memory_type/summary to the chunker."""
         from unittest.mock import MagicMock
 
-        from quarry.ingestion.pipeline import ingest_url
+        from quarry.ingestion.ingest_context import IngestContext, Progress
+        from quarry.ingestion.streaming import DocumentStreamer
+        from quarry.ingestion.web_ingest import UrlIngest, ingest_url
 
         html = "<html><body>hi</body></html>"
-        result = {
-            "document_name": "x",
-            "collection": "c",
-            "chunks": 0,
-        }
+        seen: dict[str, object] = {}
+
+        def _capture_build_chunks(
+            _self: DocumentStreamer, pages: list[object], **kwargs: object
+        ) -> list[object]:
+            seen.update(kwargs)
+            return []
+
         with (
             patch("quarry.ingestion.web_fetch.WebFetcher.fetch", return_value=html),
             patch(
                 "quarry.extractors.html_extractor.HtmlExtractor.extract_from_html",
                 return_value=[],
             ),
-            patch("quarry.ingestion.pipeline._chunk_embed_store") as mock_ces,
+            patch.object(DocumentStreamer, "build_chunks", _capture_build_chunks),
             patch("quarry.db.chunk_store.ChunkStore.delete_document"),
         ):
-            mock_ces.return_value = result
             ingest_url(
-                "https://example.com",
-                Database(MagicMock()),
-                MagicMock(),
-                agent_handle="rmh",
-                memory_type="fact",
-                summary="test summary",
+                UrlIngest("https://example.com"),
+                Progress(None),
+                IngestContext(
+                    Database(MagicMock()),
+                    MagicMock(),
+                    agent_handle="rmh",
+                    memory_type="fact",
+                    summary="test summary",
+                ),
             )
-            _, kwargs = mock_ces.call_args
-            assert kwargs["agent_handle"] == "rmh"
-            assert kwargs["memory_type"] == "fact"
-            assert kwargs["summary"] == "test summary"
+            assert seen["agent_handle"] == "rmh"
+            assert seen["memory_type"] == "fact"
+            assert seen["summary"] == "test summary"
 
 
 class TestTemporalWeightEdgeCases:

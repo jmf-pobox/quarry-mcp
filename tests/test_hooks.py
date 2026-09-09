@@ -946,7 +946,7 @@ class TestHandlePostWebFetch:
             "cwd": str(project),
             "tool_input": {"url": "https://example.com/page"},
         }
-        with patch("quarry.ingestion.pipeline.ingest_content") as mock_ingest:
+        with patch("quarry.ingestion.web_ingest.ingest_content") as mock_ingest:
             result = handle_post_web_fetch(payload)
         assert result == {}
         mock_ingest.assert_not_called()
