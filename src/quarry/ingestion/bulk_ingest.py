@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final
 
+from quarry.capture_url import CaptureUrl
 from quarry.ingestion.ingest_context import Progress
 from quarry.ingestion.web_ingest import UrlIngest
 
@@ -180,10 +181,25 @@ class BulkIngestRunner:
                         progress(
                             "Ingested %s (%d/%d)", page_url, ingested, len(to_ingest)
                         )
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001
+                        # Broad except is correct here: this is the per-task
+                        # outcome boundary for the parallel fan-out (PY-EH-6),
+                        # not internal code -- one worker's failure must not
+                        # abort the others. But WebFetcher and its callees
+                        # embed the raw URL verbatim in their exception
+                        # messages ("Cannot reach {url}: ..."), so neither
+                        # page_url nor str(exc) is safe to put in errors[],
+                        # the progress stream, or the log -- a userinfo/query
+                        # secret on the URL would leak into all three
+                        # (CWE-532). Redact the URL the same way the
+                        # sitemap-discovery failure path does, and report
+                        # only the exception CLASS, never its message.
                         failed += 1
-                        errors.append(f"{page_url}: {exc}")
-                        logger.exception("Failed to ingest %s", page_url)
-                        progress("Failed %s: %s", page_url, exc)
+                        redacted_url = CaptureUrl(page_url).redacted(lambda text: text)
+                        errors.append(f"{redacted_url}: {type(exc).__name__}")
+                        logger.warning(
+                            "Failed to ingest %s (%s)", redacted_url, type(exc).__name__
+                        )
+                        progress("Failed %s: %s", redacted_url, type(exc).__name__)
 
         return ingested, failed, errors

@@ -1,7 +1,7 @@
 {
-  "total": 217,
+  "total": 218,
   "by_category": {
-    "noqa": 180,
+    "noqa": 181,
     "type_ignore": 7,
     "pylint_disable": 0,
     "pyright_ignore": 1,
@@ -111,7 +111,7 @@
       "noqa": 3
     },
     "src/quarry/ingestion/bulk_ingest.py": {
-      "noqa": 1
+      "noqa": 2
     },
     "src/quarry/ingestion/chunk_store_funnel.py": {
       "pyright_ignore": 1
@@ -181,5 +181,5 @@
       "noqa": 2
     }
   },
-  "updated_at": "2026-09-09T09:17:13Z"
+  "updated_at": "2026-09-09T15:20:00Z"
 }

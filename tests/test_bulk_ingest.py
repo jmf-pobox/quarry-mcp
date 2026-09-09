@@ -7,6 +7,7 @@ gap where they were previously only reached transitively through
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -294,7 +295,10 @@ class TestBulkIngestRunnerRun:
         assert failed == 1
         assert len(errors) == 1
         assert "bad.example" in errors[0]
-        assert "boom" in errors[0]
+        # The exception CLASS is reported, never its message (CWE-532: a
+        # WebFetcher failure message embeds the raw URL verbatim).
+        assert "ValueError" in errors[0]
+        assert "boom" not in errors[0]
 
     def test_forces_overwrite_for_every_url_that_passed_dedup(self) -> None:
         """run() always replaces chunks for URLs that passed dedup (bulk_ingest.py).
@@ -349,6 +353,39 @@ class TestBulkIngestRunnerRun:
         # must not -- that would mean it can still reach caller_messages.
         seen_progress[0]("worker-only message")
         assert "worker-only message" not in caller_messages
+
+    def test_failure_redacts_url_secrets_and_omits_exception_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A per-URL failure must never leak URL secrets or the raw exception
+        message into errors[], the progress stream, or the log (CWE-532) --
+        WebFetcher and its callees embed the raw URL verbatim in their
+        exception messages (e.g. "Cannot reach {url}: ...").
+        """
+
+        def _stub(
+            request: UrlIngest, _progress: Progress, _context: IngestContext
+        ) -> IngestResult:
+            msg = f"Cannot reach {request.url}: connection refused"
+            raise ValueError(msg)
+
+        credentialed_url = "https://user:pass@example.com/page?token=abc123"
+        runner = BulkIngestRunner(ingest_one=_stub)
+        to_ingest: list[tuple[str, str | None]] = [(credentialed_url, None)]
+        messages: list[str] = []
+
+        with caplog.at_level(logging.WARNING):
+            ingested, failed, errors = runner.run(
+                to_ingest, Progress(messages.append), _context(), BulkOptions()
+            )
+
+        assert (ingested, failed) == (0, 1)
+        assert len(errors) == 1
+        for haystack in (errors[0], caplog.text, *messages):
+            assert "pass" not in haystack
+            assert "token=abc123" not in haystack
+            assert "connection refused" not in haystack
+            assert "ValueError" in haystack
 
     def test_empty_to_ingest_short_circuits_without_calling_ingest_one(self) -> None:
         calls: list[UrlIngest] = []
